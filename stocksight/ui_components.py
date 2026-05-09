@@ -21,13 +21,6 @@ BASE_CSS = """
     --app-text: #111827;
     --button-bg: linear-gradient(135deg,#25d366,#1aa34b);
 }
-@media (prefers-color-scheme: dark) {
-    :root {
-        color-scheme: dark;
-        --app-bg: #0d1f18;
-        --app-text: #e8f7ef;
-    }
-}
 
 html, body, [class*="css"] {
     font-family: 'IBM Plex Sans', sans-serif;
