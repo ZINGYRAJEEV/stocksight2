@@ -1,6 +1,6 @@
 """
 Overview — StockSight Home / Strategy Dashboard
-Run with: streamlit run Overview.py
+Run with: streamlit run app.py
 """
 
 import streamlit as st
