@@ -350,34 +350,136 @@ else:
         st.markdown("""
         <div class='chart-card'>
             <div class='chart-title'>📋 Stock List with Composite Score & Indicators</div>
-            <div class='chart-subtitle'>This table shows right-now PE, volume spike, RSI, composite score, and direct research links.</div>
+            <div class='chart-subtitle'>This view shows PE, volume spike, RSI, composite score, and direct research links.</div>
         </div>
         """, unsafe_allow_html=True)
 
-        display_cols = [
-            "Ticker", "Price", "PE Ratio", "Volume Ratio", "RSI", "Score", "Action",
-            "Yahoo Finance", "Moneycontrol", "BusinessLine"
-        ]
-        visible_cols = [col for col in display_cols if col in df.columns]
-
-        col_cfg = {
-            "Price": st.column_config.NumberColumn("Price", format="%.2f"),
-            "PE Ratio": st.column_config.NumberColumn("PE Ratio", format="%.2f"),
-            "Volume Ratio": st.column_config.NumberColumn("Volume Ratio", format="%.2f"),
-            "RSI": st.column_config.NumberColumn("RSI", format="%.2f"),
-            "Score": st.column_config.NumberColumn("Score", format="%.1f"),
-            "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
-            "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="Open ↗"),
-            "BusinessLine": st.column_config.LinkColumn("BusinessLine", display_text="Open ↗"),
-        }
-
-        st.dataframe(
-            df[visible_cols],
-            use_container_width=True,
-            column_config=col_cfg,
-            hide_index=False,
-            height=min(600, 60 + len(df) * 38),
+        view = st.radio(
+            "View",
+            ["Table", "Cards"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="bha_view",
         )
+
+        def _confidence_label(score: float):
+            if score >= 80:
+                return "HIGH CONFIDENCE", "#25d366"
+            if score >= 60:
+                return "MEDIUM CONFIDENCE", "#f0b429"
+            if score >= 40:
+                return "LOW CONFIDENCE", "#f2cf6b"
+            return "AVOID", "#e05252"
+
+        def _action_note(action: str):
+            return {
+                "Strong Buy": "Strong composite signal. Momentum and valuation are aligned.",
+                "Buy / Watch": "Watch for confirmation before entering. Setup is constructive.",
+                "Neutral / Wait": "Wait for a cleaner setup or pullback before committing.",
+                "Avoid": "Avoid until indicators improve and the trend shows strength.",
+            }.get(action, "Review the indicator scores before taking action.")
+
+        if view == "Cards":
+            for _, row in df.iterrows():
+                label, color = _confidence_label(row["Score"])
+                note = _action_note(row["Action"])
+                links_html = " &nbsp;".join([
+                    f'<a href="{row[col]}" target="_blank" style="color:#4db8ff; font-size:0.72rem; text-decoration:none; border:1px solid #4db8ff33; border-radius:4px; padding:2px 8px;">{col.replace("BusinessLine", "BusinessLine").replace("Yahoo Finance", "Yahoo Finance").replace("Moneycontrol", "Moneycontrol")} ↗</a>'
+                    for col in ["Yahoo Finance", "Moneycontrol", "BusinessLine"]
+                    if col in row and pd.notna(row[col]) and row[col]
+                ])
+                st.markdown(f"""
+                <div style='background:#122f25; border:1px solid #1a3b31;
+                            border-left:4px solid {color};
+                            border-radius:8px; padding:16px 18px; margin-bottom:14px;'>
+
+                    <div style='display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:8px;'>
+                        <div>
+                            <span style='font-family:"IBM Plex Mono",monospace; font-size:1.2rem;
+                                          font-weight:700; color:#e8f7ef;'>{row["Ticker"]}</span>
+                            <span style='font-family:"IBM Plex Mono",monospace; font-size:1.1rem;
+                                          color:#a3d8b8; margin-left:12px;'>{row["Price"]:.2f}</span>
+                        </div>
+                        <div style='display:flex; gap:8px; align-items:center; flex-wrap:wrap;'>
+                            <span style='font-size:9px; background:{color}22; border:1px solid {color}55;
+                                          color:{color}; border-radius:12px; padding:2px 10px;
+                                          font-weight:700; letter-spacing:1px;'>
+                                {label}
+                            </span>
+                            <span style='font-size:9px; color:#a3d8b8; font-family:"IBM Plex Mono",monospace;'>
+                                {row["Action"]}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style='display:flex; gap:20px; margin-top:10px; flex-wrap:wrap;
+                                font-family:"IBM Plex Mono",monospace; font-size:0.78rem;'>
+                        <span><span style='color:#a3d8b8;'>PE  </span>{row["PE Ratio"]:.1f}×</span>
+                        <span><span style='color:#a3d8b8;'>VOL </span>{row["Volume Ratio"]:.2f}×&nbsp;avg</span>
+                        <span><span style='color:#a3d8b8;'>RSI </span>{row["RSI"]:.1f}</span>
+                    </div>
+
+                    <div style='margin-top:8px;'><span style="color:#25d366; font-size:0.72rem;">● Composite score</span> &nbsp;
+                        <span style="color:#4db8ff; font-size:0.72rem;">Score {row["Score"]:.1f}</span>
+                    </div>
+
+                    <div style='display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;'>
+                        <div style='flex:1; min-width:90px; background:#16352c; border-radius:5px;
+                                    padding:8px 10px; border:1px solid #1c3020;'>
+                            <div style='font-size:9px; color:#a3d8b8; letter-spacing:1px;
+                                        text-transform:uppercase;'>PE</div>
+                            <div style='font-family:"IBM Plex Mono",monospace; font-size:1rem;
+                                        color:#e8f7ef; font-weight:700;'>{row["PE Ratio"]:.1f}×</div>
+                        </div>
+                        <div style='flex:1; min-width:90px; background:#16352c; border-radius:5px;
+                                    padding:8px 10px; border:1px solid #1c3020;'>
+                            <div style='font-size:9px; color:#a3d8b8; letter-spacing:1px;
+                                        text-transform:uppercase;'>Volume</div>
+                            <div style='font-family:"IBM Plex Mono",monospace; font-size:1rem;
+                                        color:#e8f7ef; font-weight:700;'>{row["Volume Ratio"]:.2f}×</div>
+                        </div>
+                        <div style='flex:1; min-width:90px; background:#16352c; border-radius:5px;
+                                    padding:8px 10px; border:1px solid #1c3020;'>
+                            <div style='font-size:9px; color:#a3d8b8; letter-spacing:1px;
+                                        text-transform:uppercase;'>RSI</div>
+                            <div style='font-family:"IBM Plex Mono",monospace; font-size:1rem;
+                                        color:#e8f7ef; font-weight:700;'>{row["RSI"]:.1f}</div>
+                        </div>
+                    </div>
+
+                    <div style='margin-top:12px; font-size:0.75rem; color:#7abeac;
+                                border-top:1px solid #1a3b31; padding-top:8px;'>
+                        💡 {note}
+                    </div>
+
+                    <div style='margin-top:10px;'>{links_html}</div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            display_cols = [
+                "Ticker", "Price", "PE Ratio", "Volume Ratio", "RSI", "Score", "Action",
+                "Yahoo Finance", "Moneycontrol", "BusinessLine"
+            ]
+            visible_cols = [col for col in display_cols if col in df.columns]
+
+            col_cfg = {
+                "Price": st.column_config.NumberColumn("Price", format="%.2f"),
+                "PE Ratio": st.column_config.NumberColumn("PE Ratio", format="%.2f"),
+                "Volume Ratio": st.column_config.NumberColumn("Volume Ratio", format="%.2f"),
+                "RSI": st.column_config.NumberColumn("RSI", format="%.2f"),
+                "Score": st.column_config.NumberColumn("Score", format="%.1f"),
+                "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
+                "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="Open ↗"),
+                "BusinessLine": st.column_config.LinkColumn("BusinessLine", display_text="Open ↗"),
+            }
+
+            st.dataframe(
+                df[visible_cols],
+                use_container_width=True,
+                column_config=col_cfg,
+                hide_index=False,
+                height=min(600, 60 + len(df) * 38),
+            )
 
         selected_ticker = st.selectbox(
             "Preview news links for",
