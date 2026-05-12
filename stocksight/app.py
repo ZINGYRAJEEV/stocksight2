@@ -4,7 +4,7 @@ Run with: streamlit run app.py
 """
 
 import streamlit as st
-from screener import UNIVERSES
+from .screener import UNIVERSES
 
 st.set_page_config(
     page_title="Overview | StockSight",
