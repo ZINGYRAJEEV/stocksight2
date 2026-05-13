@@ -4,7 +4,7 @@ Run with: streamlit run app.py
 """
 
 import streamlit as st
-from screener import UNIVERSES
+from .screener import UNIVERSES
 
 st.set_page_config(
     page_title="Overview | StockSight",
@@ -39,6 +39,21 @@ html, body, [class*="css"] {
 hr { border-color:#d4d4d4 !important; }
 </style>
 """, unsafe_allow_html=True)
+
+with st.sidebar:
+    st.markdown("### 📈 StockSight")
+    st.caption(
+        "This overview explains each strategy. Open a **page** in the menu "
+        "above to run filters and scans."
+    )
+    st.markdown("---")
+    st.markdown(
+        "<div style='font-size:0.72rem; color:#4a7a9b; line-height:1.6;'>"
+        "<b>Tip</b><br>If the page list is hidden, click the "
+        "<b>«</b> control in the top-left corner of the app to expand the sidebar."
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown("""
