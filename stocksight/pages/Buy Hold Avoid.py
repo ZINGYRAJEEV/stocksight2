@@ -1,4 +1,5 @@
 """Page: Buy / Hold / Avoid Decision Chart — Composite Score Guidance"""
+import html
 import streamlit as st
 import pandas as pd
 from urllib.parse import quote_plus
@@ -121,23 +122,280 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-with st.sidebar:
-    st.markdown("### ⚙️ Stock list filter")
-    universe = st.selectbox("Stock Universe", list(UNIVERSES.keys()), index=0)
-    action_zone = st.selectbox(
-        "Composite Action Zone",
-        ["All", "Strong Buy", "Buy / Watch", "Neutral / Wait", "Avoid"],
-        index=0,
-    )
-    ticker_filter = st.text_input("Ticker contains", value="")
-    st.markdown("---")
-    st.markdown("""
-    <div style='font-size:0.82rem; color:#a3d8b8; line-height:1.6;'>
-    Run the universe scan to build a stock list showing PE, volume ratio, RSI, composite score, and instant research links.
+st.markdown("## 📊 Buy / Hold / Avoid Decision Guide", unsafe_allow_html=True)
+st.markdown("---")
+
+with st.container(border=True):
+    c1, c2, c3 = st.columns([1.0, 1.05, 1.15])
+    with c1:
+        st.markdown("#### Settings")
+        universe = st.selectbox("Stock Universe", list(UNIVERSES.keys()), index=0, key="bha_universe")
+    with c2:
+        st.markdown("#### Criteria")
+        st.markdown(
+            """
+<div style='font-size:0.82rem; color:#4a5568; line-height:1.6;'>
+Run the universe fetch to build a list with PE, volume ratio, RSI, composite score, and research links.
+Use the filters column to narrow the table after the list loads.
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown("#### Filters")
+        action_zone = st.selectbox(
+            "Composite Action Zone",
+            ["All", "Strong Buy", "Buy / Watch", "Neutral / Wait", "Avoid"],
+            index=0,
+            key="bha_action",
+        )
+        ticker_filter = st.text_input("Ticker contains", value="", key="bha_ticker")
+
+bha_fetch_progress = st.empty()
+bha_fetch_status = st.empty()
+fetch_btn = st.button("▶  FETCH STOCK LIST", use_container_width=True, key="bha_fetch")
+st.caption(
+    "Loads the full universe from Yahoo Finance (can take a while). Progress and status show in the slots above the button; then narrow rows with filters."
+)
+
+st.markdown("---")
+
+# Stock list filter + news links
+if "bha_results" not in st.session_state:
+    st.session_state.bha_results = pd.DataFrame()
+
+if fetch_btn:
+    progress_bar = bha_fetch_progress.progress(0, text="Scanning universe…")
+    status = bha_fetch_status
+
+    def progress_cb(count, total, ticker):
+        pct = int(count / total * 100)
+        progress_bar.progress(pct, text=f"Scanning {ticker}… ({count}/{total})")
+        status.markdown(f"<div style='color:#a3d8b8;'>Loaded {count}/{total} tickers</div>", unsafe_allow_html=True)
+
+    with st.spinner("Fetching stock metrics from Yahoo Finance…"):
+        df = screen_stocks(
+            universe_name=universe,
+            pe_threshold=400.0,
+            vol_multiplier=0.0,
+            rsi_min=0.0,
+            progress_callback=progress_cb,
+        )
+
+    bha_fetch_progress.empty()
+    bha_fetch_status.empty()
+    st.session_state.bha_results = df
+else:
+    df = st.session_state.bha_results
+
+if df is None or df.empty:
+    st.html("""
+    <div class='chart-card'>
+        <div class='chart-title'>📌 Stock List Not Loaded</div>
+        <div class='chart-subtitle'>Click <strong>FETCH STOCK LIST</strong> above to load current PE, volume, RSI, composite score, and research links for your chosen universe.</div>
     </div>
-    """, unsafe_allow_html=True)
-    st.markdown("---")
-    fetch_btn = st.button("▶  FETCH STOCK LIST", use_container_width=True)
+    """)
+else:
+    df = df.copy()
+    df["Action"] = df["Score"].apply(
+        lambda score: "Strong Buy" if score >= 80 else
+                      "Buy / Watch" if score >= 60 else
+                      "Neutral / Wait" if score >= 40 else
+                      "Avoid"
+    )
+    df["BusinessLine"] = df["Ticker"].apply(
+        lambda ticker: f"https://www.thehindubusinessline.com/search/?q={quote_plus(ticker.replace('.NS', '').replace('.BO', ''))}"
+    )
+
+    if ticker_filter:
+        df = df[df["Ticker"].str.contains(ticker_filter.upper(), na=False)]
+
+    if action_zone != "All":
+        df = df[df["Action"] == action_zone]
+
+    if df.empty:
+        st.html("""
+        <div class='chart-card'>
+            <div class='chart-title'>⚠️ No matching stocks</div>
+            <div class='chart-subtitle'>No stocks matched the current filter combination. Try a broader action zone or remove the ticker filter.</div>
+        </div>
+        """)
+    else:
+        st.html("""
+        <div class='chart-card'>
+            <div class='chart-title'>📋 Stock List with Composite Score & Indicators</div>
+            <div class='chart-subtitle'>This view shows PE, volume spike, RSI, composite score, and direct research links.</div>
+        </div>
+        """)
+
+        view = st.radio(
+            "View",
+            ["Table", "Cards"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="bha_view",
+        )
+
+        def _confidence_label(score: float):
+            if score >= 80:
+                return "HIGH CONFIDENCE", "#25d366"
+            if score >= 60:
+                return "MEDIUM CONFIDENCE", "#f0b429"
+            if score >= 40:
+                return "LOW CONFIDENCE", "#f2cf6b"
+            return "AVOID", "#e05252"
+
+        def _action_note(action: str):
+            return {
+                "Strong Buy": "Strong composite signal. Momentum and valuation are aligned.",
+                "Buy / Watch": "Watch for confirmation before entering. Setup is constructive.",
+                "Neutral / Wait": "Wait for a cleaner setup or pullback before committing.",
+                "Avoid": "Avoid until indicators improve and the trend shows strength.",
+            }.get(action, "Review the indicator scores before taking action.")
+
+        if view == "Cards":
+            for _, row in df.iterrows():
+                label, color = _confidence_label(row["Score"])
+                note = _action_note(row["Action"])
+                links_html = " &nbsp;".join([
+                    f'<a href="{html.escape(str(row[col]), quote=True)}" target="_blank" '
+                    f'style="color:#4db8ff; font-size:0.72rem; text-decoration:none; border:1px solid #4db8ff33; '
+                    f'border-radius:4px; padding:2px 8px;">{html.escape(col)} ↗</a>'
+                    for col in ["Yahoo Finance", "Moneycontrol", "BusinessLine"]
+                    if col in row and pd.notna(row[col]) and row[col]
+                ])
+                safe_ticker = html.escape(str(row["Ticker"]))
+                safe_action = html.escape(str(row["Action"]))
+                safe_label = html.escape(label)
+                safe_note = html.escape(note)
+                st.html(f"""
+                <div style='background:#122f25; border:1px solid #1a3b31;
+                            border-left:4px solid {color};
+                            border-radius:8px; padding:16px 18px; margin-bottom:14px;'>
+
+                    <div style='display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:8px;'>
+                        <div>
+                            <span style='font-family:"IBM Plex Mono",monospace; font-size:1.2rem;
+                                          font-weight:700; color:#e8f7ef;'>{safe_ticker}</span>
+                            <span style='font-family:"IBM Plex Mono",monospace; font-size:1.1rem;
+                                          color:#a3d8b8; margin-left:12px;'>{row["Price"]:.2f}</span>
+                        </div>
+                        <div style='display:flex; gap:8px; align-items:center; flex-wrap:wrap;'>
+                            <span style='font-size:9px; background:{color}22; border:1px solid {color}55;
+                                          color:{color}; border-radius:12px; padding:2px 10px;
+                                          font-weight:700; letter-spacing:1px;'>
+                                {safe_label}
+                            </span>
+                            <span style='font-size:9px; color:#a3d8b8; font-family:"IBM Plex Mono",monospace;'>
+                                {safe_action}
+                            </span>
+                        </div>
+                    </div>
+
+                    <div style='display:flex; gap:20px; margin-top:10px; flex-wrap:wrap;
+                                font-family:"IBM Plex Mono",monospace; font-size:0.78rem;'>
+                        <span><span style='color:#a3d8b8;'>PE  </span>{row["PE Ratio"]:.1f}×</span>
+                        <span><span style='color:#a3d8b8;'>VOL </span>{row["Volume Ratio"]:.2f}×&nbsp;avg</span>
+                        <span><span style='color:#a3d8b8;'>RSI </span>{row["RSI"]:.1f}</span>
+                    </div>
+
+                    <div style='margin-top:8px;'><span style="color:#25d366; font-size:0.72rem;">● Composite score</span> &nbsp;
+                        <span style="color:#4db8ff; font-size:0.72rem;">Score {row["Score"]:.1f}</span>
+                    </div>
+
+                    <div style='display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;'>
+                        <div style='flex:1; min-width:90px; background:#16352c; border-radius:5px;
+                                    padding:8px 10px; border:1px solid #1c3020;'>
+                            <div style='font-size:9px; color:#a3d8b8; letter-spacing:1px;
+                                        text-transform:uppercase;'>PE</div>
+                            <div style='font-family:"IBM Plex Mono",monospace; font-size:1rem;
+                                        color:#e8f7ef; font-weight:700;'>{row["PE Ratio"]:.1f}×</div>
+                        </div>
+                        <div style='flex:1; min-width:90px; background:#16352c; border-radius:5px;
+                                    padding:8px 10px; border:1px solid #1c3020;'>
+                            <div style='font-size:9px; color:#a3d8b8; letter-spacing:1px;
+                                        text-transform:uppercase;'>Volume</div>
+                            <div style='font-family:"IBM Plex Mono",monospace; font-size:1rem;
+                                        color:#e8f7ef; font-weight:700;'>{row["Volume Ratio"]:.2f}×</div>
+                        </div>
+                        <div style='flex:1; min-width:90px; background:#16352c; border-radius:5px;
+                                    padding:8px 10px; border:1px solid #1c3020;'>
+                            <div style='font-size:9px; color:#a3d8b8; letter-spacing:1px;
+                                        text-transform:uppercase;'>RSI</div>
+                            <div style='font-family:"IBM Plex Mono",monospace; font-size:1rem;
+                                        color:#e8f7ef; font-weight:700;'>{row["RSI"]:.1f}</div>
+                        </div>
+                    </div>
+
+                    <div style='margin-top:12px; font-size:0.75rem; color:#7abeac;
+                                border-top:1px solid #1a3b31; padding-top:8px;'>
+                        💡 {safe_note}
+                    </div>
+
+                    <div style='margin-top:10px;'>{links_html}</div>
+                </div>
+                """)
+        else:
+            df_table = df.copy()
+            df_table["Confidence"] = df_table["Score"].apply(
+                lambda sc: _confidence_label(float(sc))[0] if pd.notna(sc) else "—"
+            )
+
+            display_cols = [
+                "Ticker", "Price", "PE Ratio", "Volume Ratio", "RSI", "Score",
+                "Confidence", "Action",
+                "Yahoo Finance", "Moneycontrol", "BusinessLine",
+            ]
+            visible_cols = [col for col in display_cols if col in df_table.columns]
+
+            col_cfg = {
+                "Price": st.column_config.NumberColumn("Price", format="%.2f"),
+                "PE Ratio": st.column_config.NumberColumn("PE Ratio", format="%.2f"),
+                "Volume Ratio": st.column_config.NumberColumn("Volume Ratio", format="%.2f"),
+                "RSI": st.column_config.NumberColumn("RSI", format="%.2f"),
+                "Score": st.column_config.NumberColumn("Score", format="%.1f"),
+                "Confidence": st.column_config.TextColumn("Confidence", width="medium"),
+                "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
+                "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="Open ↗"),
+                "BusinessLine": st.column_config.LinkColumn("BusinessLine", display_text="Open ↗"),
+            }
+
+            st.dataframe(
+                df_table[visible_cols],
+                use_container_width=True,
+                column_config=col_cfg,
+                hide_index=False,
+                height=min(600, 60 + len(df_table) * 38),
+            )
+
+        selected_ticker = st.selectbox(
+            "Preview news links for",
+            options=df["Ticker"].tolist(),
+            index=0,
+            help="Pick a ticker to open Yahoo Finance news, Moneycontrol search, or BusinessLine headlines.",
+        )
+
+        if selected_ticker:
+            clean_ticker = selected_ticker.replace(".NS", "").replace(".BO", "")
+            news_links = {
+                "Yahoo Finance News": f"https://finance.yahoo.com/quote/{clean_ticker}/news",
+                "Moneycontrol Search": f"https://www.moneycontrol.com/india/stockpricequote/search?q={quote_plus(clean_ticker)}",
+                "BusinessLine Search": f"https://www.thehindubusinessline.com/search/?q={quote_plus(clean_ticker)}",
+            }
+            news_anchor_html = "".join(
+                f"<a class='news-link' href='{html.escape(url, quote=True)}' target='_blank'>"
+                f"{html.escape(label)} ↗</a>"
+                for label, url in news_links.items()
+            )
+            st.html(f"""
+            <div class='chart-card'>
+                <div class='chart-title'>📰 Quick News Links</div>
+                <div class='chart-subtitle'>Open the latest newsroom for the selected ticker.</div>
+                <div class='news-links'>{news_anchor_html}</div>
+            </div>
+            """)
+
+st.markdown("---")
 
 st.markdown("""
 <div class='chart-card'>
@@ -286,226 +544,3 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Stock list filter + news links
-if "bha_results" not in st.session_state:
-    st.session_state.bha_results = pd.DataFrame()
-
-if fetch_btn:
-    progress_bar = st.progress(0, text="Scanning universe…")
-    status = st.empty()
-
-    def progress_cb(count, total, ticker):
-        pct = int(count / total * 100)
-        progress_bar.progress(pct, text=f"Scanning {ticker}… ({count}/{total})")
-        status.markdown(f"<div style='color:#a3d8b8;'>Loaded {count}/{total} tickers</div>", unsafe_allow_html=True)
-
-    with st.spinner("Fetching stock metrics from Yahoo Finance…"):
-        df = screen_stocks(
-            universe_name=universe,
-            pe_threshold=400.0,
-            vol_multiplier=0.0,
-            rsi_min=0.0,
-            progress_callback=progress_cb,
-        )
-
-    progress_bar.empty()
-    status.empty()
-    st.session_state.bha_results = df
-else:
-    df = st.session_state.bha_results
-
-if df is None or df.empty:
-    st.markdown("""
-    <div class='chart-card'>
-        <div class='chart-title'>📌 Stock List Not Loaded</div>
-        <div class='chart-subtitle'>Click <strong>FETCH STOCK LIST</strong> in the sidebar to load current PE, volume, RSI, composite score, and research links for your chosen universe.</div>
-    </div>
-    """, unsafe_allow_html=True)
-else:
-    df = df.copy()
-    df["Action"] = df["Score"].apply(
-        lambda score: "Strong Buy" if score >= 80 else
-                      "Buy / Watch" if score >= 60 else
-                      "Neutral / Wait" if score >= 40 else
-                      "Avoid"
-    )
-    df["BusinessLine"] = df["Ticker"].apply(
-        lambda ticker: f"https://www.thehindubusinessline.com/search/?q={quote_plus(ticker.replace('.NS', '').replace('.BO', ''))}"
-    )
-
-    if ticker_filter:
-        df = df[df["Ticker"].str.contains(ticker_filter.upper(), na=False)]
-
-    if action_zone != "All":
-        df = df[df["Action"] == action_zone]
-
-    if df.empty:
-        st.markdown("""
-        <div class='chart-card'>
-            <div class='chart-title'>⚠️ No matching stocks</div>
-            <div class='chart-subtitle'>No stocks matched the current filter combination. Try a broader action zone or remove the ticker filter.</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div class='chart-card'>
-            <div class='chart-title'>📋 Stock List with Composite Score & Indicators</div>
-            <div class='chart-subtitle'>This view shows PE, volume spike, RSI, composite score, and direct research links.</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        view = st.radio(
-            "View",
-            ["Table", "Cards"],
-            horizontal=True,
-            label_visibility="collapsed",
-            key="bha_view",
-        )
-
-        def _confidence_label(score: float):
-            if score >= 80:
-                return "HIGH CONFIDENCE", "#25d366"
-            if score >= 60:
-                return "MEDIUM CONFIDENCE", "#f0b429"
-            if score >= 40:
-                return "LOW CONFIDENCE", "#f2cf6b"
-            return "AVOID", "#e05252"
-
-        def _action_note(action: str):
-            return {
-                "Strong Buy": "Strong composite signal. Momentum and valuation are aligned.",
-                "Buy / Watch": "Watch for confirmation before entering. Setup is constructive.",
-                "Neutral / Wait": "Wait for a cleaner setup or pullback before committing.",
-                "Avoid": "Avoid until indicators improve and the trend shows strength.",
-            }.get(action, "Review the indicator scores before taking action.")
-
-        if view == "Cards":
-            for _, row in df.iterrows():
-                label, color = _confidence_label(row["Score"])
-                note = _action_note(row["Action"])
-                links_html = " &nbsp;".join([
-                    f'<a href="{row[col]}" target="_blank" style="color:#4db8ff; font-size:0.72rem; text-decoration:none; border:1px solid #4db8ff33; border-radius:4px; padding:2px 8px;">{col.replace("BusinessLine", "BusinessLine").replace("Yahoo Finance", "Yahoo Finance").replace("Moneycontrol", "Moneycontrol")} ↗</a>'
-                    for col in ["Yahoo Finance", "Moneycontrol", "BusinessLine"]
-                    if col in row and pd.notna(row[col]) and row[col]
-                ])
-                st.markdown(f"""
-                <div style='background:#122f25; border:1px solid #1a3b31;
-                            border-left:4px solid {color};
-                            border-radius:8px; padding:16px 18px; margin-bottom:14px;'>
-
-                    <div style='display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:8px;'>
-                        <div>
-                            <span style='font-family:"IBM Plex Mono",monospace; font-size:1.2rem;
-                                          font-weight:700; color:#e8f7ef;'>{row["Ticker"]}</span>
-                            <span style='font-family:"IBM Plex Mono",monospace; font-size:1.1rem;
-                                          color:#a3d8b8; margin-left:12px;'>{row["Price"]:.2f}</span>
-                        </div>
-                        <div style='display:flex; gap:8px; align-items:center; flex-wrap:wrap;'>
-                            <span style='font-size:9px; background:{color}22; border:1px solid {color}55;
-                                          color:{color}; border-radius:12px; padding:2px 10px;
-                                          font-weight:700; letter-spacing:1px;'>
-                                {label}
-                            </span>
-                            <span style='font-size:9px; color:#a3d8b8; font-family:"IBM Plex Mono",monospace;'>
-                                {row["Action"]}
-                            </span>
-                        </div>
-                    </div>
-
-                    <div style='display:flex; gap:20px; margin-top:10px; flex-wrap:wrap;
-                                font-family:"IBM Plex Mono",monospace; font-size:0.78rem;'>
-                        <span><span style='color:#a3d8b8;'>PE  </span>{row["PE Ratio"]:.1f}×</span>
-                        <span><span style='color:#a3d8b8;'>VOL </span>{row["Volume Ratio"]:.2f}×&nbsp;avg</span>
-                        <span><span style='color:#a3d8b8;'>RSI </span>{row["RSI"]:.1f}</span>
-                    </div>
-
-                    <div style='margin-top:8px;'><span style="color:#25d366; font-size:0.72rem;">● Composite score</span> &nbsp;
-                        <span style="color:#4db8ff; font-size:0.72rem;">Score {row["Score"]:.1f}</span>
-                    </div>
-
-                    <div style='display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;'>
-                        <div style='flex:1; min-width:90px; background:#16352c; border-radius:5px;
-                                    padding:8px 10px; border:1px solid #1c3020;'>
-                            <div style='font-size:9px; color:#a3d8b8; letter-spacing:1px;
-                                        text-transform:uppercase;'>PE</div>
-                            <div style='font-family:"IBM Plex Mono",monospace; font-size:1rem;
-                                        color:#e8f7ef; font-weight:700;'>{row["PE Ratio"]:.1f}×</div>
-                        </div>
-                        <div style='flex:1; min-width:90px; background:#16352c; border-radius:5px;
-                                    padding:8px 10px; border:1px solid #1c3020;'>
-                            <div style='font-size:9px; color:#a3d8b8; letter-spacing:1px;
-                                        text-transform:uppercase;'>Volume</div>
-                            <div style='font-family:"IBM Plex Mono",monospace; font-size:1rem;
-                                        color:#e8f7ef; font-weight:700;'>{row["Volume Ratio"]:.2f}×</div>
-                        </div>
-                        <div style='flex:1; min-width:90px; background:#16352c; border-radius:5px;
-                                    padding:8px 10px; border:1px solid #1c3020;'>
-                            <div style='font-size:9px; color:#a3d8b8; letter-spacing:1px;
-                                        text-transform:uppercase;'>RSI</div>
-                            <div style='font-family:"IBM Plex Mono",monospace; font-size:1rem;
-                                        color:#e8f7ef; font-weight:700;'>{row["RSI"]:.1f}</div>
-                        </div>
-                    </div>
-
-                    <div style='margin-top:12px; font-size:0.75rem; color:#7abeac;
-                                border-top:1px solid #1a3b31; padding-top:8px;'>
-                        💡 {note}
-                    </div>
-
-                    <div style='margin-top:10px;'>{links_html}</div>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            display_cols = [
-                "Ticker", "Price", "PE Ratio", "Volume Ratio", "RSI", "Score", "Action",
-                "Yahoo Finance", "Moneycontrol", "BusinessLine"
-            ]
-            visible_cols = [col for col in display_cols if col in df.columns]
-
-            col_cfg = {
-                "Price": st.column_config.NumberColumn("Price", format="%.2f"),
-                "PE Ratio": st.column_config.NumberColumn("PE Ratio", format="%.2f"),
-                "Volume Ratio": st.column_config.NumberColumn("Volume Ratio", format="%.2f"),
-                "RSI": st.column_config.NumberColumn("RSI", format="%.2f"),
-                "Score": st.column_config.NumberColumn("Score", format="%.1f"),
-                "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
-                "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="Open ↗"),
-                "BusinessLine": st.column_config.LinkColumn("BusinessLine", display_text="Open ↗"),
-            }
-
-            st.dataframe(
-                df[visible_cols],
-                use_container_width=True,
-                column_config=col_cfg,
-                hide_index=False,
-                height=min(600, 60 + len(df) * 38),
-            )
-
-        selected_ticker = st.selectbox(
-            "Preview news links for",
-            options=df["Ticker"].tolist(),
-            index=0,
-            help="Pick a ticker to open Yahoo Finance news, Moneycontrol search, or BusinessLine headlines.",
-        )
-
-        if selected_ticker:
-            clean_ticker = selected_ticker.replace(".NS", "").replace(".BO", "")
-            news_links = {
-                "Yahoo Finance News": f"https://finance.yahoo.com/quote/{clean_ticker}/news",
-                "Moneycontrol Search": f"https://www.moneycontrol.com/india/stockpricequote/search?q={quote_plus(clean_ticker)}",
-                "BusinessLine Search": f"https://www.thehindubusinessline.com/search/?q={quote_plus(clean_ticker)}",
-            }
-            st.markdown("""
-            <div class='chart-card'>
-                <div class='chart-title'>📰 Quick News Links</div>
-                <div class='chart-subtitle'>Open the latest newsroom for the selected ticker.</div>
-                <div class='news-links'>
-            """, unsafe_allow_html=True)
-
-            for label, url in news_links.items():
-                st.markdown(f"<a class='news-link' href='{url}' target='_blank'>{label} ↗</a>", unsafe_allow_html=True)
-
-            st.markdown("""
-                </div>
-            </div>
-            """, unsafe_allow_html=True)

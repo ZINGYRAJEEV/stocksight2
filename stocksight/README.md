@@ -39,15 +39,15 @@ cd stocksight2
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the application
-streamlit run app.py
+# Run the application (from repo root)
+streamlit run Overview.py
 ```
 
 ### Deploy to Streamlit Cloud
 
 1. **Push to GitHub**: Ensure your code is in a GitHub repository
 2. **Connect Streamlit Cloud**: Go to [share.streamlit.io](https://share.streamlit.io)
-3. **Deploy**: Select your repo → Set main file to `app.py` → Deploy
+3. **Deploy**: Select your repo → Set main file to `Overview.py` → Deploy
 4. **Access**: Your app will be live at `https://your-app-name.streamlit.app`
 
 ## 📋 How to Use
@@ -100,23 +100,27 @@ Each result includes:
 ## 📁 Project Structure
 
 ```
-stocksight/
-├── app.py                      # Main Streamlit application
-├── screener.py                 # Core screening logic & stock universes
-├── signals.py                  # Trading strategy implementations
-├── ui_components.py            # Shared UI components & styling
-├── requirements.txt            # Python dependencies
-├── pages/                      # Individual strategy pages
-│   ├── StockSight.py          # Main screener page
-│   ├── Breakout Momentum.py   # Momentum strategy
-│   ├── Buy Hold Avoid.py      # Decision guidance
-│   ├── Oversold Bounce.py     # Reversal strategy
-│   ├── Overbought Exit.py     # Exit signals
-│   ├── Extreme Oversold.py    # High-risk entries
-│   └── Volume No Confirm.py   # Noise filter
-├── .streamlit/
-│   └── config.toml            # Streamlit configuration
-└── README.md                  # This file
+repo root/
+├── Overview.py                 # Primary entry: streamlit run Overview.py
+├── pages/                      # Numbered proxies → stocksight/pages
+├── stocksight_page_loader.py
+└── stocksight/
+    ├── app.py                  # Overview / strategy map UI
+    ├── screener.py             # Core screening logic & stock universes
+    ├── signals.py              # Trading strategy implementations
+    ├── ui_components.py        # Shared UI components & styling
+    ├── requirements.txt        # Python dependencies
+    ├── pages/                  # Real Streamlit pages
+    │   ├── StockSight.py       # Main screener page
+    │   ├── Breakout Momentum.py
+    │   ├── Buy Hold Avoid.py   # Decision guidance
+    │   ├── Oversold Bounce.py
+    │   ├── Overbought Exit.py
+    │   ├── Extreme Oversold.py
+    │   └── Volume No Confirm.py
+    ├── .streamlit/
+    │   └── config.toml
+    └── README.md               # This file
 ```
 
 ## 🔧 Configuration

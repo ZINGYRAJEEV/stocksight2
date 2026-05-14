@@ -5,7 +5,6 @@ This page provides the main StockSight screener with a top-of-page Scan Now butt
 
 import streamlit as st
 import pandas as pd
-import time
 from datetime import datetime
 from screener import screen_stocks, UNIVERSES
 
@@ -118,39 +117,6 @@ if "app1_last_run" not in st.session_state:
 if "app1_is_running" not in st.session_state:
     st.session_state.app1_is_running = False
 
-with st.sidebar:
-    st.markdown("### ⚙️ Stockmarket setting")
-    universe = st.selectbox("Stock Universe", list(UNIVERSES.keys()))
-    st.markdown("---")
-    st.markdown("**Filters**")
-    pe_max = st.slider("Max PE Ratio", min_value=5.0, max_value=50.0, value=30.0, step=0.5)
-    vol_mult = st.slider("Min Volume Spike (×avg)", min_value=1.0, max_value=10.0, value=1.5, step=0.1)
-    rsi_min = st.slider("Min RSI (14)", min_value=30.0, max_value=80.0, value=50.0, step=1.0)
-    st.markdown("---")
-    auto_refresh = st.checkbox("Auto-refresh (60s)", value=False)
-    st.markdown("---")
-    st.markdown(
-        """
-        <div style='font-size:0.72rem; color:#2e5070; line-height:1.6;'>
-        <b style='color:#a3d8b8;'>Data source</b><br>
-        Yahoo Finance via yfinance<br><br>
-        <b style='color:#a3d8b8;'>Scoring formula</b><br>
-        PE (40pts) + Vol (30pts) + RSI (30pts)<br><br>
-        <b style='color:#a3d8b8;'>Indicators</b><br>
-        RSI-14 · 20-day avg volume · Trailing PE
-        </div>
-        """, unsafe_allow_html=True,
-    )
-    st.markdown("---")
-    st.markdown("**Quick Links**")
-    st.markdown("""
-    <div style='font-size:0.72rem; color:#7abeac; line-height:1.8;'>
-    <a href='https://finance.yahoo.com/' target='_blank' style='color:#00e5a0; text-decoration:none;'>📊 Yahoo Finance</a><br>
-    <a href='https://www.moneycontrol.com/' target='_blank' style='color:#00e5a0; text-decoration:none;'>📈 Moneycontrol</a><br>
-    <a href='https://www.tradingview.com/' target='_blank' style='color:#00e5a0; text-decoration:none;'>📉 TradingView</a>
-    </div>
-    """, unsafe_allow_html=True)
-
 col_h1, col_h2 = st.columns([3, 1])
 with col_h1:
     st.markdown('<div class="main-title">📈 StockSight</div>', unsafe_allow_html=True)
@@ -162,12 +128,45 @@ with col_h2:
 
 st.markdown("---")
 
-run_app1 = st.button("▶  SCAN NOW", use_container_width=True, key="app1_scan_now")
+with st.container(border=True):
+    c1, c2, c3 = st.columns([1.0, 1.05, 1.2])
+    with c1:
+        st.markdown("#### Settings")
+        universe = st.selectbox("Stock Universe", list(UNIVERSES.keys()), key="app1_universe")
+        auto_refresh = st.checkbox("Auto-refresh (60s)", value=False, key="app1_autorefresh")
+    with c2:
+        st.markdown("#### Criteria")
+        st.markdown(
+            """
+<div style='font-size:0.72rem; color:#2e5070; line-height:1.6;'>
+<b style='color:#a3d8b8;">Data source</b><br>
+Yahoo Finance via yfinance<br><br>
+<b style='color:#a3d8b8;">Scoring</b><br>
+PE (40pts) + Vol (30pts) + RSI (30pts)<br><br>
+<b style='color:#a3d8b8;">Indicators</b><br>
+RSI-14 · 20-day avg volume · Trailing PE
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown("#### Filters")
+        pe_max = st.slider("Max PE Ratio", min_value=5.0, max_value=50.0, value=30.0, step=0.5, key="app1_pe")
+        vol_mult = st.slider("Min Volume Spike (×avg)", min_value=1.0, max_value=10.0, value=1.5, step=0.1, key="app1_vol")
+        rsi_min = st.slider("Min RSI (14)", min_value=30.0, max_value=80.0, value=50.0, step=1.0, key="app1_rsi")
 
-def run_stock_scan():
+scan_progress_ph = st.empty()
+scan_status_ph = st.empty()
+run_app1 = st.button("▶  SCAN NOW", use_container_width=True, key="app1_scan_now")
+st.caption(
+    "Runs the full universe with your thresholds. Larger universes take longer; progress and status show in the slots above."
+)
+
+
+def run_stock_scan(progress_ph, status_ph):
     st.session_state.app1_is_running = True
-    progress_bar = st.progress(0, text="Initialising…")
-    status_text = st.empty()
+    progress_bar = progress_ph.progress(0, text="Initialising…")
+    status_text = status_ph
 
     def on_progress(current, total, ticker):
         pct = int(current / total * 100)
@@ -182,24 +181,20 @@ def run_stock_scan():
         progress_callback=on_progress,
     )
 
-    progress_bar.empty()
-    status_text.empty()
+    progress_ph.empty()
+    status_ph.empty()
     st.session_state.app1_results_df = df
     st.session_state.app1_last_run = datetime.now()
     st.session_state.app1_is_running = False
 
-if run_app1:
-    run_stock_scan()
 
-if st.session_state.app1_results_df.empty and st.session_state.app1_last_run is None:
-    if not st.session_state.get("app1_auto_scan_done", False):
-        st.session_state.app1_auto_scan_done = True
-        run_stock_scan()
+if run_app1:
+    run_stock_scan(scan_progress_ph, scan_status_ph)
 
 if auto_refresh and st.session_state.app1_last_run:
     elapsed = (datetime.now() - st.session_state.app1_last_run).total_seconds()
     if elapsed >= 60:
-        st.experimental_rerun()
+        st.rerun()
     else:
         remaining = int(60 - elapsed)
         st.caption(f"⏱ Auto-refresh in {remaining}s")
@@ -208,20 +203,7 @@ st.markdown("---")
 
 df = st.session_state.app1_results_df
 if df.empty and st.session_state.app1_last_run is None:
-    st.markdown(
-        """
-        <div style='background: #122f25; border: 1px dashed #1a3b31; border-radius: 12px;
-                    padding: 60px 40px; text-align: center; margin-top: 40px;'>
-            <div style='font-size:3rem; margin-bottom:16px;'>🔍</div>
-            <div style='font-family: "IBM Plex Mono", monospace; color: #7abeac; font-size:1.1rem;'>
-                Configure your filters and click <b style='color:#00c87e;'>SCAN NOW</b>
-            </div>
-            <div style='color:#6a9d8a; font-size:0.8rem; margin-top:10px;'>
-                Scanning NSE/NYSE stocks against PE · Volume · RSI criteria
-            </div>
-        </div>
-        """, unsafe_allow_html=True,
-    )
+    st.info("👆 Adjust filters if needed, then click **SCAN NOW** to populate the results table here.")
 elif df.empty and st.session_state.app1_last_run is not None:
     st.warning("⚠️ No stocks passed the current filter combination. Try relaxing the thresholds.")
 else:
@@ -251,6 +233,27 @@ else:
     st.dataframe(df, use_container_width=True, hide_index=False, height=min(620, 60 + len(df) * 40))
     csv = df.to_csv(index=False)
     st.download_button(label="⬇ Download Results as CSV", data=csv, file_name=f"stocksight_app1_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", mime="text/csv")
+
+st.markdown("---")
+st.markdown(
+    """
+<div style='background:#122f25; border:1px solid #1a3b31; border-radius:8px; padding:18px 20px; margin-bottom:8px;'>
+    <div style='font-size:1rem; font-weight:600; color:#e8f7ef;'>About this screener</div>
+    <div style='margin-top:10px; color:#a3d8b8; font-size:0.9rem; line-height:1.55;'>
+        StockSight ranks stocks that pass PE, relative volume, and RSI gates. Use <b>SCAN NOW</b> after tuning filters.
+        Links open in a new tab.
+    </div>
+    <div style='margin-top:14px; font-size:0.72rem; color:#7abeac; line-height:1.9;'>
+    <a href='https://finance.yahoo.com/' target='_blank' style='color:#00e5a0; text-decoration:none;'>📊 Yahoo Finance</a>
+    &nbsp;·&nbsp;
+    <a href='https://www.moneycontrol.com/' target='_blank' style='color:#00e5a0; text-decoration:none;'>📈 Moneycontrol</a>
+    &nbsp;·&nbsp;
+    <a href='https://www.tradingview.com/' target='_blank' style='color:#00e5a0; text-decoration:none;'>📉 TradingView</a>
+    </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 st.markdown("""
 <div style='margin-top: 40px; padding-top: 16px; border-top: 1px solid #1a3b31;

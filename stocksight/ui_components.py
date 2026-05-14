@@ -2,6 +2,7 @@
 ui_components.py — Shared UI helpers for all signal pages.
 """
 
+import html
 import streamlit as st
 import pandas as pd
 from signals import SignalResult, SCENARIOS
@@ -62,7 +63,8 @@ def scenario_header(scenario_id: str):
     sig   = s["signal"]
     fc, bc = signal_colors.get(sig, ("#ffffff", "#1a1a1a"))
 
-    st.markdown(f"""
+    # Use st.html so indented markup is not parsed as a Markdown code block.
+    st.html(f"""
     <div style='background:#122f25; border:1px solid #1a3b31;
                 border-left:4px solid {s["color"]};
                 border-radius:8px; padding:20px 24px; margin-bottom:20px;'>
@@ -70,9 +72,9 @@ def scenario_header(scenario_id: str):
             <span style='font-size:2rem;'>{s["emoji"]}</span>
             <div>
                 <div style='font-family:"IBM Plex Mono",monospace; font-size:1.3rem;
-                            font-weight:700; color:#e8f7ef;'>{s["title"]}</div>
+                            font-weight:700; color:#e8f7ef;'>{html.escape(s["title"])}</div>
                 <div style='font-size:0.82rem; color:#a3d8b8; margin-top:3px;'>
-                    {s["description"]}
+                    {html.escape(s["description"])}
                 </div>
             </div>
             <div style='margin-left:auto;
@@ -81,7 +83,7 @@ def scenario_header(scenario_id: str):
                         font-family:"IBM Plex Mono",monospace;
                         font-size:0.78rem; font-weight:700; color:{fc};
                         white-space:nowrap;'>
-                {sig}
+                {html.escape(sig)}
             </div>
         </div>
         <div style='display:flex; gap:24px; margin-top:14px; flex-wrap:wrap;'>
@@ -89,23 +91,23 @@ def scenario_header(scenario_id: str):
                         border:1px solid #1a3b31; border-radius:6px; padding:10px 14px;'>
                 <div style='font-size:9px; color:#a3d8b8; text-transform:uppercase;
                             letter-spacing:1.5px; margin-bottom:5px;'>Entry Trigger</div>
-                <div style='font-size:0.78rem; color:#e8f7ef;'>{s["entry_note"]}</div>
+                <div style='font-size:0.78rem; color:#e8f7ef;'>{html.escape(s["entry_note"])}</div>
             </div>
             <div style='flex:1; min-width:180px; background:#16352c;
                         border:1px solid #1a3b31; border-radius:6px; padding:10px 14px;'>
                 <div style='font-size:9px; color:#a3d8b8; text-transform:uppercase;
                             letter-spacing:1.5px; margin-bottom:5px;'>Stop Loss</div>
-                <div style='font-size:0.78rem; color:#e8f7ef;'>{s["sl_note"]}</div>
+                <div style='font-size:0.78rem; color:#e8f7ef;'>{html.escape(s["sl_note"])}</div>
             </div>
             <div style='flex:1; min-width:180px; background:#16352c;
                         border:1px solid #1a3b31; border-radius:6px; padding:10px 14px;'>
                 <div style='font-size:9px; color:#a3d8b8; text-transform:uppercase;
                             letter-spacing:1.5px; margin-bottom:5px;'>Targets</div>
-                <div style='font-size:0.78rem; color:#e8f7ef;'>{s["target_note"]}</div>
+                <div style='font-size:0.78rem; color:#e8f7ef;'>{html.escape(s["target_note"])}</div>
             </div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
 
 # ─────────────────────────────────────────────
@@ -221,15 +223,19 @@ def trade_plan_card(r: SignalResult, scenario_id: str):
         </div>
         """
 
-    # Links
+    # Links — escape URLs (e.g. M&M.NS → & in query/path breaks raw HTML href attributes)
     links_html = " &nbsp;".join([
-        f'<a href="{url}" target="_blank" style="color:{color}; font-size:0.72rem; '
+        f'<a href="{html.escape(url, quote=True)}" target="_blank" style="color:{color}; font-size:0.72rem; '
         f'text-decoration:none; border:1px solid {color}33; border-radius:4px; '
-        f'padding:2px 8px;">{name} ↗</a>'
+        f'padding:2px 8px;">{html.escape(name)} ↗</a>'
         for name, url in r.links.items()
     ])
 
-    st.markdown(f"""
+    safe_ticker = html.escape(r.ticker)
+    safe_note = html.escape(r.note, quote=False)
+
+    # st.html: indented lines are not interpreted as Markdown code fences (unlike st.markdown).
+    st.html(f"""
     <div style='background:#122f25; border:1px solid #1a3b31;
                 border-left:4px solid {color};
                 border-radius:8px; padding:16px 18px; margin-bottom:14px;'>
@@ -237,18 +243,18 @@ def trade_plan_card(r: SignalResult, scenario_id: str):
         <div style='display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:8px;'>
             <div>
                 <span style='font-family:"IBM Plex Mono",monospace; font-size:1.2rem;
-                              font-weight:700; color:#e8f7ef;'>{r.ticker}</span>
+                              font-weight:700; color:#e8f7ef;'>{safe_ticker}</span>
                 <span style='font-family:"IBM Plex Mono",monospace; font-size:1.1rem;
-                              color:#a3d8b8; margin-left:12px;'>{r.currency}{r.price:,.2f}</span>
+                              color:#a3d8b8; margin-left:12px;'>{html.escape(r.currency)}{r.price:,.2f}</span>
             </div>
             <div style='display:flex; gap:8px; align-items:center; flex-wrap:wrap;'>
                 <span style='font-size:9px; background:{conf_color}22; border:1px solid {conf_color}55;
                               color:{conf_color}; border-radius:12px; padding:2px 10px;
                               font-weight:700; letter-spacing:1px;'>
-                    {r.confidence} CONFIDENCE
+                    {html.escape(r.confidence)} CONFIDENCE
                 </span>
                 <span style='font-size:9px; color:#a3d8b8; font-family:"IBM Plex Mono",monospace;'>
-                    ⏱ {r.timeframe}
+                    ⏱ {html.escape(r.timeframe)}
                 </span>
             </div>
         </div>
@@ -266,12 +272,12 @@ def trade_plan_card(r: SignalResult, scenario_id: str):
 
         <div style='margin-top:12px; font-size:0.75rem; color:#7abeac;
                     border-top:1px solid #1a3b31; padding-top:8px;'>
-            💡 {r.note}
+            💡 {safe_note}
         </div>
 
         <div style='margin-top:10px;'>{links_html}</div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
 
 # ─────────────────────────────────────────────
@@ -336,15 +342,15 @@ def results_table(results: list[SignalResult], scenario_id: str):
 
 def no_results_state(scenario_id: str):
     s = SCENARIOS[scenario_id]
-    st.markdown(f"""
+    st.html(f"""
     <div style='background:#122f25; border:1px dashed #1a3b31;
                 border-radius:12px; padding:50px 40px; text-align:center;'>
-        <div style='font-size:2.5rem; margin-bottom:14px;'>{s["emoji"]}</div>
+        <div style='font-size:2.5rem; margin-bottom:14px;'>{html.escape(s["emoji"])}</div>
         <div style='font-family:"IBM Plex Mono",monospace; color:#7abeac; font-size:1rem;'>
-            No stocks currently match the <b style='color:{s["color"]};'>{s["title"]}</b> criteria.
+            No stocks currently match the <b style='color:{s["color"]};'>{html.escape(s["title"])}</b> criteria.
         </div>
         <div style='color:#6a9d8a; font-size:0.8rem; margin-top:8px;'>
             Markets may not have triggered this pattern today — check again at market open or close.
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)

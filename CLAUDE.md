@@ -8,7 +8,7 @@ Python **Streamlit** multipage app under `stocksight/`: scenario screeners for N
 
 ```bash
 pip install -r stocksight/requirements.txt
-streamlit run app.py
+streamlit run Overview.py
 ```
 
 Alternate entry (uses `stocksight/pages/` only; no root `pages/` proxies):
@@ -19,25 +19,28 @@ streamlit run stocksight/app.py
 
 | Path | Role |
 |------|------|
-| `app.py` (repo root) | `from stocksight.app import *` — primary Streamlit entry. |
-| `pages/` (repo root) | Proxies: prepend `stocksight/` to `sys.path`, `runpy.run_path` real pages under `stocksight/pages/`. **Do not remove** if root `app.py` stays the documented launcher. |
+| `Overview.py` (repo root) | `from stocksight.app import *` — primary Streamlit entry (sidebar label **Overview**). |
+| `pages/` (repo root) | Thin proxies: `from stocksight_page_loader import exec_stocksight_page` then `exec_stocksight_page("….py")`. Loader re-`exec_module`s the real file each run so pages are not blank. |
+| `stocksight_page_loader.py` (repo root) | Resolves `stocksight/pages/*.py` and runs them with `stocksight/` on `sys.path`. |
 | `stocksight/app.py` | Overview / strategy map; `st.set_page_config`, styles, sidebar. |
-| `stocksight/pages/*.py` | Real Streamlit pages. |
+| `stocksight/pages/*.py` | Real Streamlit pages (strategy screeners, StockSight, Buy/Hold/Avoid, etc.). |
 | `stocksight/screener.py` | Universes, `screen_stocks()`, `get_pe()`, RSI/volume/score helpers. |
 | `stocksight/signals.py` | Scenario scan logic. |
 | `stocksight/ui_components.py` | Shared CSS/widgets. |
 
-**Imports:** Pages use `from screener import ...` (flat) when `stocksight/` is on `sys.path`. `stocksight/app.py` uses `from .screener import ...` when loaded as package via root `app.py`.
+**Imports:** Pages use `from screener import ...` (flat) when `stocksight/` is on `sys.path`. `stocksight/app.py` uses `from .screener import ...` when loaded as package via root `Overview.py`.
 
 **Conventions:** Match existing Streamlit patterns; small focused diffs; requirements in `stocksight/requirements.txt`.
 
-**Streamlit Cloud:** Main file `app.py` at repo root; theme may live under `stocksight/.streamlit/`.
+**Streamlit Cloud:** Main file `Overview.py` at repo root; theme may live under `stocksight/.streamlit/`.
 
 ---
 
 ## Next development — Stock Screener (product spec)
 
 Standalone **real-time stock screener** for Indian NSE (Nifty 500-style universe) and US NYSE names: fundamental + technical filters, ranked by a **composite score**. The section below is the **target** design to implement or port; it is **not** the current repo layout unless those files exist.
+
+The phased batch-download + normalized-score flow described here is **not** implemented as a separate Streamlit page right now; it remains a reference for future work alongside the Flask line below.
 
 ### Target architecture (to build)
 

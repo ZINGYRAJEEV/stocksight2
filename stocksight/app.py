@@ -1,6 +1,6 @@
 """
-Overview — StockSight Home / Strategy Dashboard
-Run with: streamlit run app.py
+Overview — StockSight home / strategy dashboard (imported by repo-root `Overview.py`).
+Run locally: `streamlit run Overview.py` from the repo root (or `streamlit run stocksight/app.py`).
 """
 
 import streamlit as st
@@ -41,9 +41,9 @@ hr { border-color:#d4d4d4 !important; }
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.markdown("### 📈 StockSight")
+    st.markdown("### Overview")
     st.caption(
-        "This overview explains each strategy. Open a **page** in the menu "
+        "📈 StockSight — strategy map and how to use each page. Open a **page** in the menu "
         "above to run filters and scans."
     )
     st.markdown("---")
@@ -64,7 +64,7 @@ st.markdown("""
     </div>
     <div style='font-family:"IBM Plex Mono",monospace; font-size:0.82rem;
                 color:#4a7a9b; letter-spacing:2.5px; text-transform:uppercase; margin-top:3px;'>
-        Real-time Signal Screener — Know Exactly When to Buy & Sell
+        Overview · Real-time Signal Screener — Know Exactly When to Buy & Sell
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -73,7 +73,10 @@ st.markdown("---")
 
 # ── Strategy Map ──────────────────────────────────────────────────────────────
 st.markdown("### 🗺️ Signal Strategy Map")
-st.caption("Six scenarios covering the full market cycle. Click a page in the sidebar to run any screen.")
+st.caption(
+    "Six scenarios covering the full market cycle, plus the **StockSight** screener page and the "
+    "**Buy / Hold / Avoid** decision guide. Open any page from the sidebar to run a screen."
+)
 
 STRATEGY_CARDS = [
     {
@@ -206,11 +209,18 @@ st.markdown("---")
 # ── Quick-start ───────────────────────────────────────────────────────────────
 st.markdown("### 🚀 Quick Start")
 st.markdown("""
-Use the **sidebar** to navigate to any of the 6 signal pages. There is also a new **Buy / Hold / Avoid Decision Guide** page in the Streamlit page menu with indicator zones, composite score heatmap, and action rules.
-- Lets you choose your stock universe (Nifty 50, Nifty 500, or S&P 500)
-- Has a one-click **SCAN NOW** button
-- Shows results as **Cards** (full trade plan per stock) or **Table** (compact overview)
-- Every matched stock has live links to Yahoo Finance, Moneycontrol/MarketWatch, and TradingView
+Use the **sidebar** to open **Overview** (this page), the **StockSight** screener, the six scenario pages, or **Buy / Hold / Avoid**.
+
+On most scan pages you choose a universe (Nifty 50, Nifty 500, or S&P 500), tune filters, run **SCAN NOW** (or the page’s fetch button), and read results as **Cards** or **Table**, with links to Yahoo Finance, Moneycontrol / MarketWatch, and TradingView where applicable.
+""")
+
+st.markdown("### 🆕 Update — Buy / Hold / Avoid")
+st.markdown("""
+The **Buy / Hold / Avoid** page is laid out for a faster workflow: **Settings**, **Criteria**, and **Filters** sit at the top; a **progress bar and status line** appear **above** **Fetch Stock List** while the full universe loads from Yahoo Finance.
+
+After the list loads you can narrow rows by **Composite Action Zone** (Strong Buy through Avoid) and a **ticker** substring filter, then switch between **Table** and **Cards**. Cards include confidence styling, PE / volume / RSI blocks, and research links (Yahoo Finance, Moneycontrol, **The Hindu BusinessLine**). Use **Preview news links for** to jump straight to news and search pages for a selected symbol.
+
+The educational blocks (**indicator zones**, **composite score heatmap**, **decision matrix**, example score bar) stay **below** the interactive results so you can scan first and read the reference material when you need it.
 """)
 
 st.markdown("""

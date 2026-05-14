@@ -1,10 +1,4 @@
-"""Proxy page — real script lives in stocksight/pages."""
-import runpy
-import sys
-from pathlib import Path
+"""Proxy — loads stocksight Streamlit page (see stocksight_page_loader.py)."""
+from stocksight_page_loader import exec_stocksight_page
 
-_STOCKSIGHT = Path(__file__).resolve().parent.parent / "stocksight"
-if str(_STOCKSIGHT) not in sys.path:
-    sys.path.insert(0, str(_STOCKSIGHT))
-
-runpy.run_path(str(_STOCKSIGHT / "pages" / "Oversold Bounce.py"), run_name="__main__")
+exec_stocksight_page("Oversold Bounce.py")
