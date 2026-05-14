@@ -19,7 +19,7 @@ streamlit run stocksight/app.py
 
 | Path | Role |
 |------|------|
-| `Overview.py` (repo root) | `from stocksight.app import *` — primary Streamlit entry (sidebar label **Overview**). |
+| `Overview.py` (repo root) | Imports `render_overview` from `stocksight.app` and calls it each run — primary Streamlit entry (sidebar **Overview**). |
 | `pages/` (repo root) | Thin proxies: `from stocksight_page_loader import exec_stocksight_page` then `exec_stocksight_page("….py")`. Loader re-`exec_module`s the real file each run so pages are not blank. |
 | `stocksight_page_loader.py` (repo root) | Resolves `stocksight/pages/*.py` and runs them with `stocksight/` on `sys.path`. |
 | `stocksight/app.py` | Overview / strategy map; `st.set_page_config`, styles, sidebar. |
@@ -28,7 +28,7 @@ streamlit run stocksight/app.py
 | `stocksight/signals.py` | Scenario scan logic. |
 | `stocksight/ui_components.py` | Shared CSS/widgets. |
 
-**Imports:** Pages use `from screener import ...` (flat) when `stocksight/` is on `sys.path`. `stocksight/app.py` uses `from .screener import ...` when loaded as package via root `Overview.py`.
+**Imports:** Pages use `from screener import ...` (flat) when `stocksight/` is on `sys.path`. `stocksight/app.py` defines `render_overview()` for the home page (no screener import).
 
 **Conventions:** Match existing Streamlit patterns; small focused diffs; requirements in `stocksight/requirements.txt`.
 

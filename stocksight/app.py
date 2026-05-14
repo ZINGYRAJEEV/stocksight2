@@ -1,82 +1,15 @@
 """
-Overview — StockSight home / strategy dashboard (imported by repo-root `Overview.py`).
-Run locally: `streamlit run Overview.py` from the repo root (or `streamlit run stocksight/app.py`).
+Overview — StockSight home / strategy dashboard.
+
+Imported by repo-root `Overview.py`, which must call `render_overview()` on every
+Streamlit run (a bare `import *` would cache this module and skip reruns → blank page).
+
+Run: `streamlit run Overview.py` from repo root, or `streamlit run stocksight/app.py`.
 """
 
+from __future__ import annotations
+
 import streamlit as st
-from .screener import UNIVERSES
-
-st.set_page_config(
-    page_title="Overview | StockSight",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
-:root {
-    color-scheme: light;
-    --app-bg: #f8fafc;
-    --app-text: #111827;
-    --button-bg: linear-gradient(135deg,#25d366,#1aa34b);
-}
-html, body, [class*="css"] {
-    font-family: 'IBM Plex Sans', sans-serif;
-    background-color: var(--app-bg);
-    color: var(--app-text);
-}
-.stButton > button {
-    background: var(--button-bg);
-    color: #000; font-family:'IBM Plex Mono',monospace;
-    font-weight:700; font-size:0.82rem; border:none;
-    border-radius:6px; padding:10px 24px; letter-spacing:1px;
-    text-transform:uppercase; cursor:pointer; width:100%;
-}
-[data-testid="stSidebar"] { background:#ffffff; border-right:1px solid #d4d4d4; color:#111827; }
-[data-testid="stSidebar"] label { color:#111827 !important; font-size:0.8rem; }
-hr { border-color:#d4d4d4 !important; }
-</style>
-""", unsafe_allow_html=True)
-
-with st.sidebar:
-    st.markdown("### Overview")
-    st.caption(
-        "📈 StockSight — strategy map and how to use each page. Open a **page** in the menu "
-        "above to run filters and scans."
-    )
-    st.markdown("---")
-    st.markdown(
-        "<div style='font-size:0.72rem; color:#4a7a9b; line-height:1.6;'>"
-        "<b>Tip</b><br>If the page list is hidden, click the "
-        "<b>«</b> control in the top-left corner of the app to expand the sidebar."
-        "</div>",
-        unsafe_allow_html=True,
-    )
-
-# ── Header ────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div style='margin-bottom:24px;'>
-    <div style='font-family:"IBM Plex Mono",monospace; font-size:2.4rem;
-                font-weight:700; color:#00e5a0; letter-spacing:-0.5px;'>
-        📈 StockSight
-    </div>
-    <div style='font-family:"IBM Plex Mono",monospace; font-size:0.82rem;
-                color:#4a7a9b; letter-spacing:2.5px; text-transform:uppercase; margin-top:3px;'>
-        Overview · Real-time Signal Screener — Know Exactly When to Buy & Sell
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown("---")
-
-# ── Strategy Map ──────────────────────────────────────────────────────────────
-st.markdown("### 🗺️ Signal Strategy Map")
-st.caption(
-    "Six scenarios covering the full market cycle, plus the **StockSight** screener page and the "
-    "**Buy / Hold / Avoid** decision guide. Open any page from the sidebar to run a screen."
-)
 
 STRATEGY_CARDS = [
     {
@@ -129,93 +62,171 @@ STRATEGY_CARDS = [
     },
 ]
 
-col_pairs = [STRATEGY_CARDS[i:i+3] for i in range(0, 6, 3)]
-for trio in col_pairs:
-    cols = st.columns(3)
-    for col, card in zip(cols, trio):
+
+def render_overview() -> None:
+    try:
+        st.set_page_config(
+            page_title="Overview | StockSight",
+            page_icon="📈",
+            layout="wide",
+            initial_sidebar_state="expanded",
+        )
+    except st.errors.StreamlitAPIException:
+        # Already configured when returning to Overview from another page this session.
+        pass
+
+    st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
+:root {
+    color-scheme: light;
+    --app-bg: #f8fafc;
+    --app-text: #111827;
+    --button-bg: linear-gradient(135deg,#25d366,#1aa34b);
+}
+html, body, [class*="css"] {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background-color: var(--app-bg);
+    color: var(--app-text);
+}
+.stButton > button {
+    background: var(--button-bg);
+    color: #000; font-family:'IBM Plex Mono',monospace;
+    font-weight:700; font-size:0.82rem; border:none;
+    border-radius:6px; padding:10px 24px; letter-spacing:1px;
+    text-transform:uppercase; cursor:pointer; width:100%;
+}
+[data-testid="stSidebar"] { background:#ffffff; border-right:1px solid #d4d4d4; color:#111827; }
+[data-testid="stSidebar"] label { color:#111827 !important; font-size:0.8rem; }
+hr { border-color:#d4d4d4 !important; }
+</style>
+""", unsafe_allow_html=True)
+
+    with st.sidebar:
+        st.markdown("### Overview")
+        st.caption(
+            "📈 StockSight — strategy map and how to use each page. Open a **page** in the menu "
+            "above to run filters and scans."
+        )
+        st.markdown("---")
+        st.markdown(
+            "<div style='font-size:0.72rem; color:#4a7a9b; line-height:1.6;'>"
+            "<b>Tip</b><br>If the page list is hidden, click the "
+            "<b>«</b> control in the top-left corner of the app to expand the sidebar."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Header ────────────────────────────────────────────────────────────
+    st.markdown("""
+<div style='margin-bottom:24px;'>
+    <div style='font-family:"IBM Plex Mono",monospace; font-size:2.4rem;
+                font-weight:700; color:#00e5a0; letter-spacing:-0.5px;'>
+        📈 StockSight
+    </div>
+    <div style='font-family:"IBM Plex Mono",monospace; font-size:0.82rem;
+                color:#4a7a9b; letter-spacing:2.5px; text-transform:uppercase; margin-top:3px;'>
+        Overview · Real-time Signal Screener — Know Exactly When to Buy & Sell
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── Strategy Map ──────────────────────────────────────────────────────
+    st.markdown("### 🗺️ Signal Strategy Map")
+    st.caption(
+        "Six scenarios covering the full market cycle, plus the **StockSight** screener page and the "
+        "**Buy / Hold / Avoid** decision guide. Open any page from the sidebar to run a screen."
+    )
+
+    col_pairs = [STRATEGY_CARDS[i:i+3] for i in range(0, 6, 3)]
+    for trio in col_pairs:
+        cols = st.columns(3)
+        for col, card in zip(cols, trio):
+            with col:
+                st.markdown(f"""
+<div style='background:#0f1724; border:1px solid #1c2e44;
+            border-top:3px solid {card["color"]};
+            border-radius:8px; padding:18px 16px; height:100%;
+            margin-bottom:14px;'>
+    <div style='display:flex; justify-content:space-between; align-items:flex-start;'>
+        <span style='font-size:1.6rem;'>{card["emoji"]}</span>
+        <span style='font-size:9px; background:{card["sig_bg"]}; color:{card["sig_color"]};
+                     border:1px solid {card["sig_color"]}55; border-radius:12px;
+                     padding:2px 9px; font-weight:700; letter-spacing:1px;
+                     font-family:"IBM Plex Mono",monospace;'>
+            {card["signal"]}
+        </span>
+    </div>
+    <div style='font-family:"IBM Plex Mono",monospace; font-weight:700;
+                color:#fff; font-size:0.95rem; margin:10px 0 6px;'>
+        {card["title"]}
+    </div>
+    <div style='font-size:0.72rem; color:#5a8090; margin-bottom:12px;'>
+        {card["edge"]}
+    </div>
+    <div style='display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;'>
+        <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
+                     color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
+            PE {card["pe"]}
+        </span>
+        <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
+                     color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
+            Vol {card["vol"]}
+        </span>
+        <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
+                     color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
+            RSI {card["rsi"]}
+        </span>
+    </div>
+    <div style='font-size:9px; color:#4a7a9b; font-family:"IBM Plex Mono",monospace;
+                border-top:1px solid #1c2e44; padding-top:8px; margin-top:4px;'>
+        ⏱ {card["timeframe"]}
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── How it works ──────────────────────────────────────────────────────
+    st.markdown("### 📖 How Trade Plans Are Generated")
+
+    c1, c2, c3, c4 = st.columns(4)
+    steps = [
+        ("1", "Screen", "#00e5a0",
+         "Each page scans your chosen universe (Nifty 50/500 or S&P 500) using scenario-specific PE, Volume, and RSI filters."),
+        ("2", "Detect", "#4db8ff",
+         "For each passing stock, candle patterns, RSI direction, and price-vs-MA are checked to confirm signal quality."),
+        ("3", "Calculate", "#f0b429",
+         "Entry, Stop Loss (below swing low), and three Targets (1×/2×/3× risk) are computed automatically from live price data."),
+        ("4", "Act", "#ff9d42",
+         "Each card shows Confidence (High/Med/Low), Timeframe, and direct links to Yahoo Finance, Moneycontrol, and TradingView."),
+    ]
+    for col, (num, title, color, desc) in zip([c1, c2, c3, c4], steps):
         with col:
             st.markdown(f"""
-            <div style='background:#0f1724; border:1px solid #1c2e44;
-                        border-top:3px solid {card["color"]};
-                        border-radius:8px; padding:18px 16px; height:100%;
-                        margin-bottom:14px;'>
-                <div style='display:flex; justify-content:space-between; align-items:flex-start;'>
-                    <span style='font-size:1.6rem;'>{card["emoji"]}</span>
-                    <span style='font-size:9px; background:{card["sig_bg"]}; color:{card["sig_color"]};
-                                 border:1px solid {card["sig_color"]}55; border-radius:12px;
-                                 padding:2px 9px; font-weight:700; letter-spacing:1px;
-                                 font-family:"IBM Plex Mono",monospace;'>
-                        {card["signal"]}
-                    </span>
-                </div>
-                <div style='font-family:"IBM Plex Mono",monospace; font-weight:700;
-                            color:#fff; font-size:0.95rem; margin:10px 0 6px;'>
-                    {card["title"]}
-                </div>
-                <div style='font-size:0.72rem; color:#5a8090; margin-bottom:12px;'>
-                    {card["edge"]}
-                </div>
-                <div style='display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;'>
-                    <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
-                                 color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
-                        PE {card["pe"]}
-                    </span>
-                    <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
-                                 color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
-                        Vol {card["vol"]}
-                    </span>
-                    <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
-                                 color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
-                        RSI {card["rsi"]}
-                    </span>
-                </div>
-                <div style='font-size:9px; color:#4a7a9b; font-family:"IBM Plex Mono",monospace;
-                            border-top:1px solid #1c2e44; padding-top:8px; margin-top:4px;'>
-                    ⏱ {card["timeframe"]}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+<div style='background:#0f1724; border:1px solid #1c2e44; border-radius:8px;
+            padding:16px; text-align:center;'>
+    <div style='font-family:"IBM Plex Mono",monospace; font-size:1.8rem;
+                color:{color}; font-weight:700;'>{num}</div>
+    <div style='font-weight:600; color:#c8d8e8; margin:6px 0 8px;'>{title}</div>
+    <div style='font-size:0.75rem; color:#5a8090; line-height:1.6;'>{desc}</div>
+</div>
+""", unsafe_allow_html=True)
 
-st.markdown("---")
+    st.markdown("---")
 
-# ── How it works ──────────────────────────────────────────────────────────────
-st.markdown("### 📖 How Trade Plans Are Generated")
-
-c1, c2, c3, c4 = st.columns(4)
-steps = [
-    ("1", "Screen", "#00e5a0",
-     "Each page scans your chosen universe (Nifty 50/500 or S&P 500) using scenario-specific PE, Volume, and RSI filters."),
-    ("2", "Detect", "#4db8ff",
-     "For each passing stock, candle patterns, RSI direction, and price-vs-MA are checked to confirm signal quality."),
-    ("3", "Calculate", "#f0b429",
-     "Entry, Stop Loss (below swing low), and three Targets (1×/2×/3× risk) are computed automatically from live price data."),
-    ("4", "Act", "#ff9d42",
-     "Each card shows Confidence (High/Med/Low), Timeframe, and direct links to Yahoo Finance, Moneycontrol, and TradingView."),
-]
-for col, (num, title, color, desc) in zip([c1, c2, c3, c4], steps):
-    with col:
-        st.markdown(f"""
-        <div style='background:#0f1724; border:1px solid #1c2e44; border-radius:8px;
-                    padding:16px; text-align:center;'>
-            <div style='font-family:"IBM Plex Mono",monospace; font-size:1.8rem;
-                        color:{color}; font-weight:700;'>{num}</div>
-            <div style='font-weight:600; color:#c8d8e8; margin:6px 0 8px;'>{title}</div>
-            <div style='font-size:0.75rem; color:#5a8090; line-height:1.6;'>{desc}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-st.markdown("---")
-
-# ── Quick-start ───────────────────────────────────────────────────────────────
-st.markdown("### 🚀 Quick Start")
-st.markdown("""
+    # ── Quick-start ───────────────────────────────────────────────────────
+    st.markdown("### 🚀 Quick Start")
+    st.markdown("""
 Use the **sidebar** to open **Overview** (this page), the **StockSight** screener, the six scenario pages, or **Buy / Hold / Avoid**.
 
 On most scan pages you choose a universe (Nifty 50, Nifty 500, or S&P 500), tune filters, run **SCAN NOW** (or the page’s fetch button), and read results as **Cards** or **Table**, with links to Yahoo Finance, Moneycontrol / MarketWatch, and TradingView where applicable.
 """)
 
-st.markdown("### 🆕 Update — Buy / Hold / Avoid")
-st.markdown("""
+    st.markdown("### 🆕 Update — Buy / Hold / Avoid")
+    st.markdown("""
 The **Buy / Hold / Avoid** page is laid out for a faster workflow: **Settings**, **Criteria**, and **Filters** sit at the top; a **progress bar and status line** appear **above** **Fetch Stock List** while the full universe loads from Yahoo Finance.
 
 After the list loads you can narrow rows by **Composite Action Zone** (Strong Buy through Avoid) and a **ticker** substring filter, then switch between **Table** and **Cards**. Cards include confidence styling, PE / volume / RSI blocks, and research links (Yahoo Finance, Moneycontrol, **The Hindu BusinessLine**). Use **Preview news links for** to jump straight to news and search pages for a selected symbol.
@@ -223,7 +234,7 @@ After the list loads you can narrow rows by **Composite Action Zone** (Strong Bu
 The educational blocks (**indicator zones**, **composite score heatmap**, **decision matrix**, example score bar) stay **below** the interactive results so you can scan first and read the reference material when you need it.
 """)
 
-st.markdown("""
+    st.markdown("""
 <div style='background:#0f1724; border:1px solid #1c3550; border-radius:8px;
             padding:14px 18px; margin-top:12px; font-size:0.78rem; color:#5a8090;'>
     ⚠️ <b style='color:#7fa8c4;'>Disclaimer:</b> StockSight is for educational and informational purposes only.
@@ -231,3 +242,7 @@ st.markdown("""
     a registered financial advisor before making investment decisions.
 </div>
 """, unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    render_overview()
