@@ -7,9 +7,11 @@ Python **Streamlit** multipage app under `stocksight/`: scenario screeners for N
 **Run (repo root `stocksight2/`):**
 
 ```bash
-pip install -r stocksight/requirements.txt
+pip install -r requirements.txt
 streamlit run Overview.py
 ```
+
+(`requirements.txt` at repo root includes `stocksight/requirements.txt` so **Streamlit Cloud** installs `yfinance` and the rest.)
 
 Alternate entry (uses `stocksight/pages/` only; no root `pages/` proxies):
 
@@ -19,6 +21,7 @@ streamlit run stocksight/app.py
 
 | Path | Role |
 |------|------|
+| `requirements.txt` (repo root) | `-r stocksight/requirements.txt` — used by **Streamlit Cloud** and local `pip install -r requirements.txt`. |
 | `Overview.py` (repo root) | Imports `render_overview` from `stocksight.app` and calls it each run — primary Streamlit entry (sidebar **Overview**). |
 | `pages/` (repo root) | Thin proxies: `from stocksight_page_loader import exec_stocksight_page` then `exec_stocksight_page("….py")`. Loader re-`exec_module`s the real file each run so pages are not blank. |
 | `stocksight_page_loader.py` (repo root) | Resolves `stocksight/pages/*.py` and runs them with `stocksight/` on `sys.path`. |
@@ -30,9 +33,9 @@ streamlit run stocksight/app.py
 
 **Imports:** Pages use `from screener import ...` (flat) when `stocksight/` is on `sys.path`. `stocksight/app.py` defines `render_overview()` for the home page (no screener import).
 
-**Conventions:** Match existing Streamlit patterns; small focused diffs; requirements in `stocksight/requirements.txt`.
+**Conventions:** Match existing Streamlit patterns; small focused diffs; primary dependency list in `stocksight/requirements.txt`, re-exported from root `requirements.txt` for Cloud.
 
-**Streamlit Cloud:** Main file `Overview.py` at repo root; theme may live under `stocksight/.streamlit/`.
+**Streamlit Cloud:** Main file `Overview.py` at repo root; **dependencies** from root `requirements.txt` (includes `-r stocksight/requirements.txt`). Theme may live under `stocksight/.streamlit/`.
 
 ---
 
