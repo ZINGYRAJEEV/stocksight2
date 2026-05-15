@@ -11,6 +11,11 @@ from navigation_pages import (
     page_breakout_momentum,
     page_buy_hold_avoid,
     page_extreme_oversold,
+    page_high_profit_category_leader,
+    page_high_profit_duopoly,
+    page_high_profit_monopoly,
+    page_high_profit_platform,
+    page_high_profit_regulatory_moat,
     page_overbought_exit,
     page_oversold_bounce,
     page_stocksight,
@@ -50,6 +55,13 @@ NAV_PAGES = {
             title="9. Buy / Hold / Avoid",
             icon="🎯",
         ),
+    ],
+    "⚖️ Risk-Based Scenarios": [
+        st.Page(page_high_profit_regulatory_moat, title="Low Risk · Regulatory Moat", icon="🏛️"),
+        st.Page(page_high_profit_monopoly, title="Low Risk · Monopoly", icon="👑"),
+        st.Page(page_high_profit_duopoly, title="Medium Risk · Duopoly", icon="⚖️"),
+        st.Page(page_high_profit_category_leader, title="Medium Risk · Category Leader", icon="🥇"),
+        st.Page(page_high_profit_platform, title="High Risk · Platform", icon="🌐"),
     ],
 }
 

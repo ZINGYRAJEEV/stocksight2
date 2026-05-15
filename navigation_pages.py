@@ -49,3 +49,33 @@ def page_buy_hold_avoid() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
     exec_stocksight_page("Buy Hold Avoid.py")
+
+
+def page_high_profit_monopoly() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("High Profit Monopoly.py")
+
+
+def page_high_profit_platform() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("High Profit Platform.py")
+
+
+def page_high_profit_regulatory_moat() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("High Profit Regulatory Moat.py")
+
+
+def page_high_profit_duopoly() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("High Profit Duopoly.py")
+
+
+def page_high_profit_category_leader() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("High Profit Category Leader.py")
