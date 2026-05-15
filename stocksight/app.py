@@ -72,7 +72,6 @@ def render_overview() -> None:
             initial_sidebar_state="expanded",
         )
     except st.errors.StreamlitAPIException:
-        # Already configured when returning to Overview from another page this session.
         pass
 
     st.markdown("""
@@ -101,21 +100,6 @@ html, body, [class*="css"] {
 hr { border-color:#d4d4d4 !important; }
 </style>
 """, unsafe_allow_html=True)
-
-    with st.sidebar:
-        st.markdown("### Overview")
-        st.caption(
-            "📈 StockSight — strategy map and how to use each page. Open a **page** in the menu "
-            "above to run filters and scans."
-        )
-        st.markdown("---")
-        st.markdown(
-            "<div style='font-size:0.72rem; color:#4a7a9b; line-height:1.6;'>"
-            "<b>Tip</b><br>If the page list is hidden, click the "
-            "<b>«</b> control in the top-left corner of the app to expand the sidebar."
-            "</div>",
-            unsafe_allow_html=True,
-        )
 
     # ── Header ────────────────────────────────────────────────────────────
     st.markdown("""

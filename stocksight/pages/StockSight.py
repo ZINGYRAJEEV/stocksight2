@@ -7,8 +7,9 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from screener import screen_stocks, UNIVERSES
+from ui_components import safe_set_page_config
 
-st.set_page_config(
+safe_set_page_config(
     page_title="StockSight | Smart Screener",
     page_icon="📈",
     layout="wide",

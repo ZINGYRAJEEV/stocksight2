@@ -4,9 +4,9 @@ import streamlit as st
 import pandas as pd
 from urllib.parse import quote_plus
 from screener import UNIVERSES, screen_stocks
-from ui_components import inject_css
+from ui_components import inject_css, safe_set_page_config
 
-st.set_page_config(page_title="Buy / Hold / Avoid | StockSight", page_icon="📊", layout="wide")
+safe_set_page_config(page_title="Buy / Hold / Avoid | StockSight", page_icon="📊", layout="wide")
 inject_css()
 
 st.markdown("""

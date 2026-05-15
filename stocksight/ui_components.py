@@ -8,6 +8,14 @@ import pandas as pd
 from signals import SignalResult, SCENARIOS
 
 
+def safe_set_page_config(**kwargs) -> None:
+    """Call set_page_config once per session; ignore repeats (e.g. under st.navigation)."""
+    try:
+        st.set_page_config(**kwargs)
+    except st.errors.StreamlitAPIException:
+        pass
+
+
 # ─────────────────────────────────────────────
 # Page-level CSS (call once per page)
 # ─────────────────────────────────────────────

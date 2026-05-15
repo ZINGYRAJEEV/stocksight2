@@ -13,7 +13,7 @@ streamlit run Overview.py
 
 (`requirements.txt` at repo root includes `stocksight/requirements.txt` so **Streamlit Cloud** installs `yfinance` and the rest.)
 
-Alternate entry (uses `stocksight/pages/` only; no root `pages/` proxies):
+Alternate entry (overview content only — **no** sidebar page nav; use `Overview.py` for the full app):
 
 ```bash
 streamlit run stocksight/app.py
@@ -22,10 +22,10 @@ streamlit run stocksight/app.py
 | Path | Role |
 |------|------|
 | `requirements.txt` (repo root) | `-r stocksight/requirements.txt` — used by **Streamlit Cloud** and local `pip install -r requirements.txt`. |
-| `Overview.py` (repo root) | Imports `render_overview` from `stocksight.app` and calls it each run — primary Streamlit entry (sidebar **Overview**). |
-| `pages/` (repo root) | Thin proxies: `from stocksight_page_loader import exec_stocksight_page` then `exec_stocksight_page("….py")`. Loader re-`exec_module`s the real file each run so pages are not blank. |
+| `Overview.py` (repo root) | **`st.navigation`** with grouped pages + `pg.run()`; imports `render_overview` and thin runners from `navigation_pages.py`. **Disables** auto-discovery of a `pages/` folder. |
+| `navigation_pages.py` (repo root) | One callable per app page; each calls `exec_stocksight_page("….py")`. |
 | `stocksight_page_loader.py` (repo root) | Resolves `stocksight/pages/*.py` and runs them with `stocksight/` on `sys.path`. |
-| `stocksight/app.py` | Overview / strategy map; `st.set_page_config`, styles, sidebar. |
+| `stocksight/app.py` | `render_overview()` — dashboard / strategy map (no sidebar tips; those live in `Overview.py`). |
 | `stocksight/pages/*.py` | Real Streamlit pages (strategy screeners, StockSight, Buy/Hold/Avoid, etc.). |
 | `stocksight/screener.py` | Universes, `screen_stocks()`, `get_pe()`, RSI/volume/score helpers. |
 | `stocksight/signals.py` | Scenario scan logic. |

@@ -2,9 +2,9 @@
 import streamlit as st
 from screener import UNIVERSES
 from signals import scan_value_technical
-from ui_components import inject_css, scenario_header, trade_plan_card, results_table, no_results_state
+from ui_components import inject_css, scenario_header, trade_plan_card, results_table, no_results_state, safe_set_page_config
 
-st.set_page_config(page_title="Value + Technical | StockSight", page_icon="💎", layout="wide")
+safe_set_page_config(page_title="Value + Technical | StockSight", page_icon="💎", layout="wide")
 inject_css()
 
 SCENARIO = "value_technical"

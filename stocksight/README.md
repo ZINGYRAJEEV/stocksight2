@@ -101,25 +101,20 @@ Each result includes:
 
 ```
 repo root/
-├── Overview.py                 # Primary entry: streamlit run Overview.py
-├── pages/                      # Numbered proxies → stocksight/pages
+├── Overview.py                 # streamlit run Overview.py — st.navigation + grouped sidebar
+├── navigation_pages.py         # st.Page callables → stocksight_page_loader
 ├── stocksight_page_loader.py
+├── requirements.txt
 └── stocksight/
-    ├── app.py                  # Overview / strategy map UI
-    ├── screener.py             # Core screening logic & stock universes
-    ├── signals.py              # Trading strategy implementations
-    ├── ui_components.py        # Shared UI components & styling
-    ├── requirements.txt        # Python dependencies
-    ├── pages/                  # Real Streamlit pages
-    │   ├── StockSight.py       # Main screener page
+    ├── app.py                  # render_overview() dashboard
+    ├── screener.py
+    ├── signals.py
+    ├── ui_components.py
+    ├── requirements.txt
+    ├── pages/                  # Real Streamlit page scripts (loaded by loader)
+    │   ├── StockSight.py
     │   ├── Breakout Momentum.py
-    │   ├── Buy Hold Avoid.py   # Decision guidance
-    │   ├── Oversold Bounce.py
-    │   ├── Overbought Exit.py
-    │   ├── Extreme Oversold.py
-    │   └── Volume No Confirm.py
-    ├── .streamlit/
-    │   └── config.toml
+    │   └── …
     └── README.md               # This file
 ```
 
