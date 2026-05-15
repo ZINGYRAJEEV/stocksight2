@@ -17,14 +17,28 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from typing import Optional
+
 import warnings
 warnings.filterwarnings("ignore")
 
 from screener import (
-    UNIVERSES, PE_DATA_CAP,
-    get_pe, compute_rsi, compute_volume_ratio, get_stock_links,
+    UNIVERSES,
+    PE_DATA_CAP,
+    get_pe,
+    compute_rsi,
+    compute_volume_ratio,
+    get_stock_links,
+    fetch_price_history,
+    min_bars_for_screen,
+    compute_macd,
+    compute_atr,
+    compute_bollinger_pct_b,
+    ma_cross_recent,
+    pct_vs_ma,
+    get_sector_industry,
+    next_earnings_label,
+    fetch_quote_news,
 )
 
 
@@ -66,6 +80,32 @@ class SignalResult:
     confidence:    str            # HIGH / MEDIUM / LOW
     links:         dict = field(default_factory=dict)
 
+    # Bar / context
+    data_interval: str = "1d"
+
+    # Fundamentals / classification
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    next_earnings: Optional[str] = None
+
+    # Indicators (last bar)
+    macd_line: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_hist: Optional[float] = None
+    macd_bullish: bool = False
+
+    ma20: Optional[float] = None
+    ma50: Optional[float] = None
+    pct_vs_ma20: Optional[float] = None
+    golden_cross_recent: bool = False
+
+    bb_pct_b: Optional[float] = None
+    bb_touch_lower: bool = False
+
+    atr14: Optional[float] = None
+
+    news_headlines: list[str] = field(default_factory=list)
+
 
 # ─────────────────────────────────────────────────────────────
 # Helpers
@@ -88,18 +128,37 @@ def _resistance(highs: pd.Series, lookback: int = 20) -> float:
 
 
 def _confidence(vol_ratio: float, rsi_rising: bool, reversal: bool,
-                is_green: bool, scenario_id: str) -> str:
+                is_green: bool, scenario_id: str, macd_bullish: bool = False) -> str:
     score = 0
     if vol_ratio >= 3:   score += 2
     elif vol_ratio >= 2: score += 1
     if rsi_rising:       score += 1
     if reversal:         score += 2
     if is_green:         score += 1
+    if macd_bullish:      score += 1
     if scenario_id == "breakout" and vol_ratio >= 3 and rsi_rising:
         score += 1
     if score >= 5:   return "HIGH"
     if score >= 3:   return "MEDIUM"
     return "LOW"
+
+
+def _passes_advanced_filters(
+    ex: dict,
+    sector_filter: Optional[str],
+    require_macd: bool,
+    require_bb_lower: bool,
+) -> bool:
+    if sector_filter and sector_filter.strip():
+        needle = sector_filter.strip().lower()
+        hay = (ex.get("sector") or "").lower()
+        if needle not in hay:
+            return False
+    if require_macd and not ex.get("macd_bullish"):
+        return False
+    if require_bb_lower and not ex.get("bb_touch_lower"):
+        return False
+    return True
 
 
 def _build_result(
@@ -116,6 +175,8 @@ def _build_result(
     sl_lookback: int = 10,
     target_ratios: tuple = (1.0, 1.5, 2.5),
     is_sell: bool = False,
+    extras: Optional[dict] = None,
+    bar_interval: str = "1d",
 ) -> SignalResult:
     closes  = hist["Close"]
     lows    = hist["Low"]
@@ -161,7 +222,30 @@ def _build_result(
             risk_pct = 1.5
             rrr      = 1.5
 
-    confidence = _confidence(vol_ratio, rsi_rising, reversal, is_green, scenario_id)
+    confidence = _confidence(
+        vol_ratio, rsi_rising, reversal, is_green, scenario_id,
+        macd_bullish=bool((extras or {}).get("macd_bullish")),
+    )
+
+    ex = extras or {}
+    macd_line_v = ex.get("macd_line")
+    macd_sig_v = ex.get("macd_signal")
+    macd_hist_v = ex.get("macd_hist")
+    ma20_v = ex.get("ma20")
+    ma50_v = ex.get("ma50")
+    bb_pb = ex.get("bb_pct_b")
+    atr_v = ex.get("atr14")
+
+    def _finite_num(v):
+        if v is None:
+            return None
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return None
+        if np.isnan(fv):
+            return None
+        return fv
 
     return SignalResult(
         ticker       = clean,
@@ -189,6 +273,22 @@ def _build_result(
         note         = note,
         confidence   = confidence,
         links        = get_stock_links(ticker),
+        data_interval = bar_interval,
+        sector       = (ex.get("sector") or None) or None,
+        industry     = (ex.get("industry") or None) or None,
+        next_earnings = (ex.get("next_earnings") or None) or None,
+        macd_line    = _finite_num(macd_line_v),
+        macd_signal  = _finite_num(macd_sig_v),
+        macd_hist    = _finite_num(macd_hist_v),
+        macd_bullish = bool(ex.get("macd_bullish")),
+        ma20         = _finite_num(ma20_v),
+        ma50         = _finite_num(ma50_v),
+        pct_vs_ma20  = _finite_num(ex.get("pct_vs_ma20")),
+        golden_cross_recent = bool(ex.get("golden_cross_recent")),
+        bb_pct_b     = _finite_num(bb_pb),
+        bb_touch_lower = bool(ex.get("bb_touch_lower")),
+        atr14        = _finite_num(atr_v),
+        news_headlines = list(ex.get("news_headlines") or []),
     )
 
 
@@ -196,23 +296,20 @@ def _build_result(
 # Core fetch — shared across all scenarios
 # ─────────────────────────────────────────────────────────────
 
-def _fetch(ticker: str, days: int = 60):
-    """Returns (hist_df, pe, vol_ratio, rsi, rsi_prev) or None on failure."""
+def _fetch(ticker: str, interval_key: str = "1d"):
+    """
+    Returns (hist_df, pe, vol_ratio, rsi, rsi_prev, extras_dict) or None on failure.
+    """
     try:
-        end   = datetime.today()
-        start = end - timedelta(days=days)
-        stk   = yf.Ticker(ticker)
-        hist  = stk.history(
-            start=start.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d"),
-            auto_adjust=True,
-        )
-        if hist.empty or len(hist) < 25:
+        stk = yf.Ticker(ticker)
+        hist = fetch_price_history(ticker, interval_key)
+        min_bar = min_bars_for_screen(interval_key)
+        if hist.empty or len(hist) < min_bar:
             return None
 
         pe = get_pe(stk)
         if pe is None:
-            pe = 9999  # will be filtered by scenario as needed
+            pe = 9999
 
         vol_ratio = compute_volume_ratio(hist["Volume"])
         if vol_ratio is None or np.isnan(vol_ratio):
@@ -222,11 +319,62 @@ def _fetch(ticker: str, days: int = 60):
         if len(rsi_series) < 4:
             return None
         rsi      = round(float(rsi_series.iloc[-1]),  1)
-        rsi_prev = round(float(rsi_series.iloc[-4]),  1)   # 3 bars ago
+        rsi_prev = round(float(rsi_series.iloc[-4]),  1)
 
-        return hist, pe, vol_ratio, rsi, rsi_prev
+        closes = hist["Close"]
+        highs = hist["High"]
+        lows = hist["Low"]
+        px = float(closes.iloc[-1])
+
+        ma20_s = closes.rolling(20).mean()
+        ma50_s = closes.rolling(50).mean()
+        ma20 = float(ma20_s.iloc[-1]) if len(closes) >= 20 else float("nan")
+        ma50 = float(ma50_s.iloc[-1]) if len(closes) >= 50 else float("nan")
+
+        macd_l, macd_sig, macd_h = compute_macd(closes)
+        bb_pct_b, _bb_m, _bb_u, bb_l = compute_bollinger_pct_b(closes)
+        atr_v = compute_atr(highs, lows, closes)
+        gc = ma_cross_recent(ma20_s, ma50_s, lookback=5)
+
+        sector, industry = get_sector_industry(stk)
+        earn = next_earnings_label(stk)
+
+        touch_lower = False
+        if bb_l == bb_l and not np.isnan(bb_l):
+            bl = float(bb_l)
+            touch_lower = px <= bl * 1.005
+            if bb_pct_b == bb_pct_b and not np.isnan(bb_pct_b):
+                touch_lower = touch_lower or float(bb_pct_b) <= 0.08
+
+        macd_bull = bool(not np.isnan(macd_h) and macd_h > 0)
+
+        extras = {
+            "sector": sector,
+            "industry": industry,
+            "macd_line": macd_l,
+            "macd_signal": macd_sig,
+            "macd_hist": macd_h,
+            "macd_bullish": macd_bull,
+            "ma20": ma20,
+            "ma50": ma50,
+            "pct_vs_ma20": pct_vs_ma(px, ma20),
+            "golden_cross_recent": gc,
+            "bb_pct_b": bb_pct_b,
+            "bb_touch_lower": touch_lower,
+            "atr14": atr_v,
+            "next_earnings": earn,
+            "news_headlines": [],
+        }
+
+        return hist, pe, vol_ratio, rsi, rsi_prev, extras
     except Exception:
         return None
+
+
+def enrich_results_news(results: list[SignalResult], limit_per_ticker: int = 3) -> None:
+    """Populate news headlines (extra Yahoo calls — use only for small result sets)."""
+    for r in results:
+        r.news_headlines = fetch_quote_news(r.raw_ticker, limit_per_ticker)
 
 
 def _full_rsi(closes: pd.Series, period: int = 14) -> pd.Series:
@@ -251,6 +399,10 @@ def scan_oversold_bounce(
     rsi_min: float = 30.0,
     rsi_max: float = 40.0,
     progress_cb=None,
+    sector_filter: Optional[str] = None,
+    interval_key: str = "1d",
+    require_macd_bullish: bool = False,
+    require_bb_touch_lower: bool = False,
 ) -> list[SignalResult]:
     results = []
     tickers = UNIVERSES.get(universe_name, [])
@@ -258,9 +410,12 @@ def scan_oversold_bounce(
 
     for i, ticker in enumerate(tickers):
         if progress_cb: progress_cb(i + 1, total, ticker)
-        data = _fetch(ticker)
+        data = _fetch(ticker, interval_key)
         if not data: continue
-        hist, pe, vol_ratio, rsi, rsi_prev = data
+        hist, pe, vol_ratio, rsi, rsi_prev, ex = data
+
+        if not _passes_advanced_filters(ex, sector_filter, require_macd_bullish, require_bb_touch_lower):
+            continue
 
         if not (5 <= pe <= pe_max):   continue
         if vol_ratio < vol_min:       continue
@@ -275,6 +430,8 @@ def scan_oversold_bounce(
             note         = "Oversold bounce after panic. Confirm no negative news. Enter only on green reversal candle.",
             sl_lookback  = 10,
             target_ratios= (1.0, 2.0, 3.0),
+            extras       = ex,
+            bar_interval = interval_key,
         ))
 
     return sorted(results, key=lambda x: x.vol_ratio, reverse=True)
@@ -292,6 +449,10 @@ def scan_breakout_momentum(
     rsi_min: float = 50.0,
     rsi_max: float = 65.0,
     progress_cb=None,
+    sector_filter: Optional[str] = None,
+    interval_key: str = "1d",
+    require_macd_bullish: bool = False,
+    require_bb_touch_lower: bool = False,
 ) -> list[SignalResult]:
     results = []
     tickers = UNIVERSES.get(universe_name, [])
@@ -299,16 +460,19 @@ def scan_breakout_momentum(
 
     for i, ticker in enumerate(tickers):
         if progress_cb: progress_cb(i + 1, total, ticker)
-        data = _fetch(ticker)
+        data = _fetch(ticker, interval_key)
         if not data: continue
-        hist, pe, vol_ratio, rsi, rsi_prev = data
+        hist, pe, vol_ratio, rsi, rsi_prev, ex = data
+
+        if not _passes_advanced_filters(ex, sector_filter, require_macd_bullish, require_bb_touch_lower):
+            continue
 
         if not (5 <= pe <= pe_max):   continue
         if vol_ratio < vol_min:       continue
         if not (rsi_min <= rsi <= rsi_max): continue
         if rsi <= rsi_prev:           continue   # RSI crossing upward
 
-        # Extra: price must be above 20-day MA (momentum confirmation)
+        # Extra: price must be above 20-period MA (momentum confirmation)
         ma20 = hist["Close"].rolling(20).mean().iloc[-1]
         if hist["Close"].iloc[-1] < ma20:
             continue
@@ -321,6 +485,8 @@ def scan_breakout_momentum(
             note         = "Volume confirms breakout. Trail with 10–20% stop or scale out at 20–40% gain.",
             sl_lookback  = 5,   # stop below breakout candle low
             target_ratios= (1.0, 1.5, 2.5),
+            extras       = ex,
+            bar_interval = interval_key,
         ))
 
     return sorted(results, key=lambda x: x.vol_ratio, reverse=True)
@@ -338,6 +504,10 @@ def scan_value_technical(
     rsi_min: float = 40.0,
     rsi_max: float = 55.0,
     progress_cb=None,
+    sector_filter: Optional[str] = None,
+    interval_key: str = "1d",
+    require_macd_bullish: bool = False,
+    require_bb_touch_lower: bool = False,
 ) -> list[SignalResult]:
     results = []
     tickers = UNIVERSES.get(universe_name, [])
@@ -345,15 +515,18 @@ def scan_value_technical(
 
     for i, ticker in enumerate(tickers):
         if progress_cb: progress_cb(i + 1, total, ticker)
-        data = _fetch(ticker)
+        data = _fetch(ticker, interval_key)
         if not data: continue
-        hist, pe, vol_ratio, rsi, rsi_prev = data
+        hist, pe, vol_ratio, rsi, rsi_prev, ex = data
+
+        if not _passes_advanced_filters(ex, sector_filter, require_macd_bullish, require_bb_touch_lower):
+            continue
 
         if not (5 <= pe <= pe_max):   continue
         if vol_ratio < vol_min:       continue
         if not (rsi_min <= rsi <= rsi_max): continue
 
-        # Pullback to MA: price near 20-day or 50-day MA (within 3%)
+        # Pullback to MA: price near 20-day MA (within 4%)
         ma20 = hist["Close"].rolling(20).mean().iloc[-1]
         price = hist["Close"].iloc[-1]
         if abs(price - ma20) / ma20 > 0.04:
@@ -367,6 +540,8 @@ def scan_value_technical(
             note         = "Undervalued with improving technicals. Slower entry — add on confirmation. Target 30–60% gain.",
             sl_lookback  = 20,  # wider stop for long-term
             target_ratios= (1.0, 2.0, 4.0),
+            extras       = ex,
+            bar_interval = interval_key,
         ))
 
     return sorted(results, key=lambda x: x.pe)   # lowest PE first
@@ -384,6 +559,10 @@ def scan_overbought_exit(
     rsi_min: float = 75.0,
     rsi_max: float = 100.0,
     progress_cb=None,
+    sector_filter: Optional[str] = None,
+    interval_key: str = "1d",
+    require_macd_bullish: bool = False,
+    require_bb_touch_lower: bool = False,
 ) -> list[SignalResult]:
     results = []
     tickers = UNIVERSES.get(universe_name, [])
@@ -391,9 +570,12 @@ def scan_overbought_exit(
 
     for i, ticker in enumerate(tickers):
         if progress_cb: progress_cb(i + 1, total, ticker)
-        data = _fetch(ticker)
+        data = _fetch(ticker, interval_key)
         if not data: continue
-        hist, pe, vol_ratio, rsi, rsi_prev = data
+        hist, pe, vol_ratio, rsi, rsi_prev, ex = data
+
+        if not _passes_advanced_filters(ex, sector_filter, require_macd_bullish, require_bb_touch_lower):
+            continue
 
         if pe > pe_max:               continue
         if vol_ratio < vol_min:       continue
@@ -409,6 +591,8 @@ def scan_overbought_exit(
             sl_lookback  = 5,
             target_ratios= (1.0, 1.5, 2.5),
             is_sell      = True,
+            extras       = ex,
+            bar_interval = interval_key,
         ))
 
     return sorted(results, key=lambda x: x.rsi, reverse=True)
@@ -425,6 +609,10 @@ def scan_extreme_oversold(
     vol_min: float = 2.0,
     rsi_max: float = 25.0,
     progress_cb=None,
+    sector_filter: Optional[str] = None,
+    interval_key: str = "1d",
+    require_macd_bullish: bool = False,
+    require_bb_touch_lower: bool = False,
 ) -> list[SignalResult]:
     results = []
     tickers = UNIVERSES.get(universe_name, [])
@@ -432,9 +620,12 @@ def scan_extreme_oversold(
 
     for i, ticker in enumerate(tickers):
         if progress_cb: progress_cb(i + 1, total, ticker)
-        data = _fetch(ticker)
+        data = _fetch(ticker, interval_key)
         if not data: continue
-        hist, pe, vol_ratio, rsi, rsi_prev = data
+        hist, pe, vol_ratio, rsi, rsi_prev, ex = data
+
+        if not _passes_advanced_filters(ex, sector_filter, require_macd_bullish, require_bb_touch_lower):
+            continue
 
         if pe > pe_max:           continue
         if vol_ratio < vol_min:   continue
@@ -458,6 +649,8 @@ def scan_extreme_oversold(
             note         = "Very oversold — could be value trap or distress. Require positive news catalyst. Small position only, scale if confirmed.",
             sl_lookback  = 7,
             target_ratios= (0.5, 1.0, 1.5),
+            extras       = ex,
+            bar_interval = interval_key,
         ))
 
     return sorted(results, key=lambda x: x.rsi)   # lowest RSI first (most extreme)
@@ -475,6 +668,10 @@ def scan_volume_no_confirm(
     rsi_min: float = 25.0,
     rsi_max: float = 75.0,
     progress_cb=None,
+    sector_filter: Optional[str] = None,
+    interval_key: str = "1d",
+    require_macd_bullish: bool = False,
+    require_bb_touch_lower: bool = False,
 ) -> list[SignalResult]:
     results = []
     tickers = UNIVERSES.get(universe_name, [])
@@ -482,9 +679,12 @@ def scan_volume_no_confirm(
 
     for i, ticker in enumerate(tickers):
         if progress_cb: progress_cb(i + 1, total, ticker)
-        data = _fetch(ticker)
+        data = _fetch(ticker, interval_key)
         if not data: continue
-        hist, pe, vol_ratio, rsi, rsi_prev = data
+        hist, pe, vol_ratio, rsi, rsi_prev, ex = data
+
+        if not _passes_advanced_filters(ex, sector_filter, require_macd_bullish, require_bb_touch_lower):
+            continue
 
         if pe > pe_max:       continue
         if vol_ratio < vol_min:  continue
@@ -501,6 +701,8 @@ def scan_volume_no_confirm(
             note         = "Volume alone is ambiguous — direction unconfirmed. Wait 1–3 bars for RSI or price confirmation before acting.",
             sl_lookback  = 10,
             target_ratios= (1.0, 1.5, 2.0),
+            extras       = ex,
+            bar_interval = interval_key,
         ))
 
     return sorted(results, key=lambda x: x.vol_ratio, reverse=True)

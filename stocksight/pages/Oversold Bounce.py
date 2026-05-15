@@ -2,7 +2,18 @@
 import streamlit as st
 from screener import UNIVERSES
 from signals import scan_oversold_bounce
-from ui_components import inject_css, scenario_header, trade_plan_card, results_table, no_results_state, safe_set_page_config
+from ui_components import (
+    inject_css,
+    scenario_header,
+    trade_plan_card,
+    results_table,
+    no_results_state,
+    safe_set_page_config,
+    scenario_advanced_panel,
+    maybe_enrich_news,
+    render_watchlist_panel,
+    signal_results_download,
+)
 
 safe_set_page_config(page_title="Oversold Bounce | StockSight", page_icon="📉", layout="wide")
 inject_css()
@@ -10,6 +21,7 @@ inject_css()
 SCENARIO = "oversold_bounce"
 
 scenario_header(SCENARIO)
+render_watchlist_panel("ob_wl")
 
 with st.container(border=True):
     c1, c2, c3 = st.columns([1.0, 1.05, 1.2])
@@ -33,6 +45,8 @@ with st.container(border=True):
         vol_min = st.slider("Min Volume Spike (×avg)", 1.0, 10.0, 2.0, 0.1, key="ob_vol")
         rsi_range = st.slider("RSI Range (14)", 30, 80, (30, 40), 1, key="ob_rsi")
 
+adv = scenario_advanced_panel("ob_adv")
+
 scan_progress = st.empty()
 run = st.button("▶  SCAN NOW", use_container_width=True, key="scan_now_oversold_bounce")
 st.caption("Pick universe and thresholds, then scan. Progress appears in the bar above while each symbol is processed.")
@@ -43,6 +57,12 @@ if run:
     def cb(i, t, s):
         prog.progress(int(i / t * 100), text=f"Scanning {s}… ({i}/{t})")
 
+    scan_kw = {
+        "sector_filter": adv["sector_filter"],
+        "interval_key": adv["interval_key"],
+        "require_macd_bullish": adv["require_macd_bullish"],
+        "require_bb_touch_lower": adv["require_bb_touch_lower"],
+    }
     results = scan_oversold_bounce(
         universe,
         pe_max=pe_max,
@@ -50,7 +70,9 @@ if run:
         rsi_min=rsi_range[0],
         rsi_max=rsi_range[1],
         progress_cb=cb,
+        **scan_kw,
     )
+    maybe_enrich_news(results, adv.get("fetch_news", False))
     prog.empty()
     scan_progress.empty()
     st.session_state["ob_results"] = results
@@ -63,12 +85,14 @@ elif not results:
     no_results_state(SCENARIO)
 else:
     st.markdown(f"### 📋 {len(results)} stock(s) matched — Trade Plans")
+    pf_sz = float(adv.get("portfolio_for_sizing", 0.0) or 0.0)
+    signal_results_download(results, SCENARIO, button_key="ob_dl")
     view = st.radio("View", ["Cards", "Table"], horizontal=True, label_visibility="collapsed", key="view_oversold_bounce")
     st.markdown("---")
 
     if view == "Cards":
         for r in results:
-            trade_plan_card(r, SCENARIO)
+            trade_plan_card(r, SCENARIO, portfolio_value=pf_sz)
     else:
         results_table(results, SCENARIO)
 

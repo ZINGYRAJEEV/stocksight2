@@ -3,11 +3,17 @@ ui_components.py — Shared UI helpers for all signal pages.
 """
 
 import html
+import hashlib
+from datetime import datetime
+
 import streamlit as st
 import pandas as pd
-from signals import SignalResult, SCENARIOS
+
+from signals import SignalResult, SCENARIOS, enrich_results_news
+from watchlist_store import add_to_watchlist, load_watchlist, remove_from_watchlist
 
 
+INTERVAL_LABELS = {"1d": "Daily", "1h": "1 Hour", "15m": "15 Minute"}
 def safe_set_page_config(**kwargs) -> None:
     """Call set_page_config once per session; ignore repeats (e.g. under st.navigation)."""
     try:
@@ -54,6 +60,126 @@ hr { border-color:#d4d4d4 !important; }
 
 def inject_css():
     st.markdown(BASE_CSS, unsafe_allow_html=True)
+
+
+def scenario_advanced_panel(key_prefix: str) -> dict:
+    """Shared controls for scenario scans — returns kwargs-compatible dict (+ UI-only keys)."""
+    with st.expander("Advanced — bars, sector, MACD / Bollinger, headlines", expanded=False):
+        interval_key = st.selectbox(
+            "Bar interval",
+            options=["1d", "1h", "15m"],
+            format_func=lambda x: INTERVAL_LABELS.get(x, x),
+            key=f"{key_prefix}_interval",
+        )
+        sector_filter = st.text_input(
+            "Sector filter (substring, optional)",
+            "",
+            key=f"{key_prefix}_sector",
+            placeholder="e.g. Financial Services, Technology",
+        )
+        require_macd_bullish = st.checkbox(
+            "Require MACD histogram > 0",
+            value=False,
+            key=f"{key_prefix}_macd",
+        )
+        require_bb_touch_lower = st.checkbox(
+            "Require touch / near lower Bollinger band",
+            value=False,
+            key=f"{key_prefix}_bb",
+        )
+        fetch_news = st.checkbox(
+            "Fetch recent Yahoo headlines for matches (extra calls)",
+            value=False,
+            key=f"{key_prefix}_news",
+        )
+        portfolio_for_sizing = st.number_input(
+            "Portfolio value for ~1% risk share count (optional, same currency as quote)",
+            min_value=0.0,
+            value=0.0,
+            step=100000.0,
+            key=f"{key_prefix}_pf",
+        )
+
+    sf = sector_filter.strip() or None
+    return {
+        "sector_filter": sf,
+        "interval_key": interval_key,
+        "require_macd_bullish": require_macd_bullish,
+        "require_bb_touch_lower": require_bb_touch_lower,
+        "fetch_news": fetch_news,
+        "portfolio_for_sizing": portfolio_for_sizing,
+    }
+
+
+def maybe_enrich_news(results: list[SignalResult], enabled: bool, max_names: int = 35) -> None:
+    if not enabled or not results:
+        return
+    if len(results) > max_names:
+        st.warning(f"Headlines skipped — more than {max_names} matches (too many Yahoo calls). Narrow filters or disable headlines.")
+        return
+    enrich_results_news(results)
+
+
+def render_watchlist_panel(key_prefix: str) -> None:
+    with st.expander("★ Watchlist (saved on server)", expanded=False):
+        rows = load_watchlist()
+        if rows:
+            st.caption(f"{len(rows)} symbol(s) saved — stored in `stocksight/.watchlist.json`.")
+            for r in rows:
+                sym = r.get("raw_ticker", "")
+                note = r.get("note", "")
+                cc = st.columns([4, 1])
+                with cc[0]:
+                    st.markdown(f"**{sym.replace('.NS','')}** — _{note}_" if note else f"**{sym.replace('.NS','')}**")
+                with cc[1]:
+                    if st.button("Remove", key=f"{key_prefix}_rm_{hashlib.md5(sym.encode()).hexdigest()[:12]}"):
+                        remove_from_watchlist(sym)
+                        st.rerun()
+        else:
+            st.caption("Use ★ Watchlist on a card to pin symbols here.")
+
+        st.divider()
+        manual = st.text_input("Add raw ticker (e.g. RELIANCE.NS or AAPL)", "", key=f"{key_prefix}_manual")
+        if st.button("Add ticker", key=f"{key_prefix}_manual_add"):
+            add_to_watchlist(manual.strip())
+            st.rerun()
+
+
+def signal_results_download(results: list[SignalResult], scenario_id: str, button_key: str = "dl") -> None:
+    if not results:
+        return
+    rows = []
+    for r in results:
+        rows.append({
+            "Ticker": r.ticker,
+            "Raw": r.raw_ticker,
+            "Interval": r.data_interval,
+            "Sector": r.sector or "",
+            "Signal": r.signal_label,
+            "Price": r.price,
+            "PE": r.pe,
+            "Vol×": r.vol_ratio,
+            "RSI": r.rsi,
+            "MACD_hist": r.macd_hist,
+            "% vs MA20": r.pct_vs_ma20,
+            "MA20x50_cross": r.golden_cross_recent,
+            "%B_BB": r.bb_pct_b,
+            "ATR14": r.atr14,
+            "Next_Earnings": r.next_earnings or "",
+            "Entry": r.entry,
+            "Stop": r.stop_loss,
+            "T2": r.target2,
+            "Confidence": r.confidence,
+        })
+    df = pd.DataFrame(rows)
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇ Download results CSV",
+        csv,
+        file_name=f"stocksight_{scenario_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv",
+        key=f"{button_key}_csv_{scenario_id}",
+    )
 
 
 # ─────────────────────────────────────────────
@@ -122,7 +248,7 @@ def scenario_header(scenario_id: str):
 # Trade plan card — one card per stock
 # ─────────────────────────────────────────────
 
-def trade_plan_card(r: SignalResult, scenario_id: str):
+def trade_plan_card(r: SignalResult, scenario_id: str, portfolio_value: float = 0.0):
     s       = SCENARIOS[scenario_id]
     color   = s["color"]
     is_sell = r.signal_label in ("SELL / AVOID", "SELL")
@@ -141,7 +267,56 @@ def trade_plan_card(r: SignalResult, scenario_id: str):
     else:
         candle_html += f'<span style="color:#ff9d42; font-size:0.72rem;">RSI flat/falling ({r.rsi_prev}→{r.rsi})</span>'
 
-    # Levels section
+    macd_part = "—"
+    if r.macd_hist is not None:
+        macd_part = f"{r.macd_hist:.4f}"
+    ma_part = "—"
+    if r.pct_vs_ma20 is not None:
+        ma_part = f"{r.pct_vs_ma20:+.1f}%"
+        if r.golden_cross_recent:
+            ma_part += " · MA20×50"
+    bb_part = "—"
+    if r.bb_pct_b is not None:
+        bb_part = f"{r.bb_pct_b:.2f}"
+        if r.bb_touch_lower:
+            bb_part += " · near lower"
+    atr_part = "—"
+    if r.atr14 is not None:
+        atr_part = f"{r.atr14:.4f}"
+
+    sector_part = html.escape(r.sector) if r.sector else "—"
+    earn_part = html.escape(r.next_earnings) if r.next_earnings else "—"
+    interval_part = html.escape(r.data_interval or "1d")
+
+    extras_html = f"""
+        <div style='margin-top:10px; padding-top:8px; border-top:1px dashed #1a3b31;
+                    font-family:"IBM Plex Mono",monospace; font-size:0.72rem; color:#b8e7c7; line-height:1.7;'>
+            <span style='color:#a3d8b8;'>Bars</span> {interval_part}
+            &nbsp;·&nbsp; <span style='color:#a3d8b8;'>Sector</span> {sector_part}<br>
+            <span style='color:#a3d8b8;'>MACD hist</span> {macd_part}
+            &nbsp;·&nbsp; <span style='color:#a3d8b8;'>% vs MA20</span> {ma_part}<br>
+            <span style='color:#a3d8b8;'>%B</span> {bb_part}
+            &nbsp;·&nbsp; <span style='color:#a3d8b8;'>ATR14</span> {atr_part}
+            &nbsp;·&nbsp; <span style='color:#a3d8b8;'>Earnings</span> {earn_part}
+        </div>
+        """
+
+    sizing_html = ""
+    if not is_sell and not is_wait and portfolio_value and portfolio_value > 0:
+        risk_per_share = abs(float(r.price) - float(r.stop_loss))
+        if risk_per_share > 0:
+            qty = int((portfolio_value * 0.01) // risk_per_share)
+            sizing_html = f"""
+            <div style='margin-top:8px; font-size:0.72rem; color:#f0b429;
+                        font-family:"IBM Plex Mono",monospace;'>
+                ~1% portfolio risk sizing: <b>{qty}</b> shares @ risk/share {html.escape(r.currency)}{risk_per_share:,.2f}
+            </div>
+            """
+
+    news_html = ""
+    if r.news_headlines:
+        lis = "".join(f"<li style='margin:3px 0;'>{html.escape(t)}</li>" for t in r.news_headlines[:5])
+        news_html = f"<div style='margin-top:10px;font-size:0.72rem;color:#c8d8e8;'><b>Headlines</b><ul style='margin:6px 0 0 18px;'>{lis}</ul></div>"
     if is_sell:
         levels_html = f"""
         <div style='display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;'>
@@ -276,7 +451,13 @@ def trade_plan_card(r: SignalResult, scenario_id: str):
 
         <div style='margin-top:8px;'>{candle_html}</div>
 
+        {extras_html}
+
         {levels_html}
+
+        {sizing_html}
+
+        {news_html}
 
         <div style='margin-top:12px; font-size:0.75rem; color:#7abeac;
                     border-top:1px solid #1a3b31; padding-top:8px;'>
@@ -286,6 +467,14 @@ def trade_plan_card(r: SignalResult, scenario_id: str):
         <div style='margin-top:10px;'>{links_html}</div>
     </div>
     """)
+
+    uid = hashlib.md5(f"{scenario_id}|{r.raw_ticker}".encode("utf-8")).hexdigest()[:16]
+    if st.button("★ Watchlist", key=f"wl_add_{uid}"):
+        add_to_watchlist(r.raw_ticker)
+        try:
+            st.toast(f"Saved {r.ticker}", icon="★")
+        except Exception:
+            st.success(f"Saved {r.ticker}")
 
 
 # ─────────────────────────────────────────────
@@ -300,10 +489,18 @@ def results_table(results: list[SignalResult], scenario_id: str):
     for r in results:
         rows.append({
             "Ticker":       r.ticker,
+            "Bars":         r.data_interval,
+            "Sector":       r.sector or "—",
             "Price":        r.price,
             "PE":           r.pe,
             "Vol×":         r.vol_ratio,
             "RSI":          r.rsi,
+            "MACD hist":    r.macd_hist if r.macd_hist is not None else None,
+            "% vs MA20":    r.pct_vs_ma20 if r.pct_vs_ma20 is not None else None,
+            "MA20×50":      "✓" if r.golden_cross_recent else "—",
+            "%B":           r.bb_pct_b if r.bb_pct_b is not None else None,
+            "ATR14":        r.atr14 if r.atr14 is not None else None,
+            "Earnings":     r.next_earnings or "—",
             "RSI Rising":   "↑" if r.rsi_rising else "→/↓",
             "Green Candle": "✅" if r.is_green else "—",
             "Reversal":     "✅" if r.reversal  else "—",
@@ -326,10 +523,18 @@ def results_table(results: list[SignalResult], scenario_id: str):
             df[col_name] = [r.links.get(name, "") for r in results]
 
     col_cfg = {
-        "Entry":     st.column_config.NumberColumn("Entry",     format="%.2f"),
-        "Stop Loss": st.column_config.NumberColumn("Stop",      format="%.2f"),
-        "Target 2":  st.column_config.NumberColumn("Target 2",  format="%.2f"),
-        "Risk %":    st.column_config.NumberColumn("Risk %",    format="%.1f%%"),
+        "Price":        st.column_config.NumberColumn("Price", format="%.2f"),
+        "PE":           st.column_config.NumberColumn("PE", format="%.1f"),
+        "Vol×":         st.column_config.NumberColumn("Vol×", format="%.2f"),
+        "RSI":          st.column_config.NumberColumn("RSI", format="%.1f"),
+        "MACD hist":    st.column_config.NumberColumn("MACD hist", format="%.4f"),
+        "% vs MA20":    st.column_config.NumberColumn("% vs MA20", format="%.2f"),
+        "%B":           st.column_config.NumberColumn("%B", format="%.3f"),
+        "ATR14":        st.column_config.NumberColumn("ATR14", format="%.4f"),
+        "Entry":        st.column_config.NumberColumn("Entry", format="%.2f"),
+        "Stop Loss":    st.column_config.NumberColumn("Stop", format="%.2f"),
+        "Target 2":     st.column_config.NumberColumn("Target 2", format="%.2f"),
+        "Risk %":       st.column_config.NumberColumn("Risk %", format="%.1f%%"),
     }
     # Link columns
     for name in (link_cols_nse + link_cols_us):

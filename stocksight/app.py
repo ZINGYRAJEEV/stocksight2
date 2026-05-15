@@ -11,6 +11,17 @@ from __future__ import annotations
 
 import streamlit as st
 
+# Package import when started via `streamlit run Overview.py` (from stocksight.app)
+# Fallback flat import when `streamlit run stocksight/app.py` puts this folder on sys.path
+try:
+    from .screener import SPY_BENCHMARK, index_regime, NIFTY_BENCHMARK
+except ImportError:
+    from screener import SPY_BENCHMARK, index_regime, NIFTY_BENCHMARK
+
+
+@st.cache_data(ttl=300)
+def _cached_index_regime(symbol: str):
+    return index_regime(symbol)
 STRATEGY_CARDS = [
     {
         "emoji": "📉", "title": "Oversold Bounce",
@@ -116,6 +127,27 @@ hr { border-color:#d4d4d4 !important; }
 """, unsafe_allow_html=True)
 
     st.markdown("---")
+
+    nifty = _cached_index_regime(NIFTY_BENCHMARK)
+    spy = _cached_index_regime(SPY_BENCHMARK)
+
+    def _fmt(name: str, d: dict) -> str:
+        if d.get("error"):
+            return f"{name}: unavailable ({d['error']})"
+        flag = "above" if d.get("above_ma") else "below"
+        pct = d.get("pct_vs_ma")
+        pct_s = f"{pct:+.1f}%" if pct is not None else "n/a"
+        return (
+            f"{name}: last {d.get('price')} vs 200-DMA {d.get('ma')} "
+            f"(price {flag} MA, {pct_s} vs MA)"
+        )
+
+    st.info(
+        "**Market regime — 200-day MA context**\n\n"
+        f"- {_fmt('Nifty 50 (Yahoo ^NSEI)', nifty)}\n"
+        f"- {_fmt('US equities (SPY proxy)', spy)}\n\n"
+        "_Educational context only; uses Yahoo daily closes and may be unavailable if data limits apply._"
+    )
 
     # ── Strategy Map ──────────────────────────────────────────────────────
     st.markdown("### 🗺️ Signal Strategy Map")

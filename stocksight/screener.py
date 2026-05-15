@@ -7,8 +7,14 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from typing import Any, Optional
+from zoneinfo import ZoneInfo
 import warnings
 warnings.filterwarnings("ignore")
+
+
+NIFTY_BENCHMARK = "^NSEI"
+SPY_BENCHMARK = "SPY"
 
 
 # ─────────────────────────────────────────────
@@ -289,6 +295,212 @@ def compute_volume_ratio(volumes, window=20):
     return round(float(volumes.iloc[-1] / avg), 2)
 
 
+def compute_macd(closes: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    """Returns (macd_line, signal_line, histogram) at last bar, or (nan,nan,nan)."""
+    if closes is None or len(closes) < slow + signal + 2:
+        return (np.nan, np.nan, np.nan)
+    ema_fast = closes.ewm(span=fast, adjust=False).mean()
+    ema_slow = closes.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    sig_line = macd_line.ewm(span=signal, adjust=False).mean()
+    hist = macd_line - sig_line
+    return (
+        round(float(macd_line.iloc[-1]), 4),
+        round(float(sig_line.iloc[-1]), 4),
+        round(float(hist.iloc[-1]), 4),
+    )
+
+
+def compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14):
+    if len(close) < period + 2:
+        return np.nan
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.rolling(period).mean().iloc[-1]
+    return round(float(atr), 4) if pd.notna(atr) else np.nan
+
+
+def compute_bollinger_pct_b(closes: pd.Series, window: int = 20, num_std: float = 2.0):
+    """
+    Bollinger %B: 0 at lower band, 1 at upper band.
+    Also returns (middle, upper, lower) at last bar.
+    """
+    if len(closes) < window + 1:
+        return np.nan, np.nan, np.nan, np.nan
+    mid = closes.rolling(window).mean()
+    std = closes.rolling(window).std()
+    upper = mid + num_std * std
+    lower = mid - num_std * std
+    m = float(mid.iloc[-1])
+    u = float(upper.iloc[-1])
+    ell = float(lower.iloc[-1])
+    px = float(closes.iloc[-1])
+    if u == ell:
+        pct_b = 0.5
+    else:
+        pct_b = (px - ell) / (u - ell)
+    return round(float(np.clip(pct_b, -0.5, 1.5)), 4), round(m, 4), round(u, 4), round(ell, 4)
+
+
+def ma_cross_recent(ma_fast: pd.Series, ma_slow: pd.Series, lookback: int = 5) -> bool:
+    """True if golden cross (fast crossed above slow) within last `lookback` bars."""
+    if ma_fast is None or ma_slow is None or len(ma_fast) < lookback + 2:
+        return False
+    for i in range(1, lookback + 1):
+        if (
+            float(ma_fast.iloc[-i]) > float(ma_slow.iloc[-i])
+            and float(ma_fast.iloc[-i - 1]) <= float(ma_slow.iloc[-i - 1])
+        ):
+            return True
+    return False
+
+
+def pct_vs_ma(price: float, ma_val: float) -> float:
+    if not ma_val or ma_val == 0:
+        return np.nan
+    return round((price - ma_val) / ma_val * 100.0, 2)
+
+
+def fetch_price_history(ticker: str, interval_key: str = "1d") -> pd.DataFrame:
+    """
+    interval_key: '1d' | '1h' | '15m'
+    Enough history for MA50 / MACD on daily; intraday uses Yahoo limits.
+    """
+    stk = yf.Ticker(ticker)
+    empty = pd.DataFrame()
+    try:
+        if interval_key == "1d":
+            end = datetime.today()
+            start = end - timedelta(days=180)
+            df = stk.history(
+                start=start.strftime("%Y-%m-%d"),
+                end=end.strftime("%Y-%m-%d"),
+                interval="1d",
+                auto_adjust=True,
+            )
+        elif interval_key == "1h":
+            df = stk.history(period="730d", interval="1h", auto_adjust=True)
+        elif interval_key == "15m":
+            df = stk.history(period="60d", interval="15m", auto_adjust=True)
+        else:
+            df = stk.history(period="120d", interval="1d", auto_adjust=True)
+        return df if df is not None and not df.empty else empty
+    except Exception:
+        return empty
+
+
+def min_bars_for_screen(interval_key: str) -> int:
+    return {"1d": 55, "1h": 120, "15m": 200}.get(interval_key, 55)
+
+
+def get_sector_industry(ticker_obj: yf.Ticker) -> tuple[str, str]:
+    try:
+        info = ticker_obj.info or {}
+        sec = (info.get("sector") or "").strip()
+        ind = (info.get("industry") or "").strip()
+        return sec, ind
+    except Exception:
+        return "", ""
+
+
+def next_earnings_label(ticker_obj: yf.Ticker) -> str:
+    try:
+        cal = ticker_obj.calendar
+        if cal is None:
+            return ""
+        if isinstance(cal, pd.DataFrame) and not cal.empty:
+            row = cal.iloc[0]
+            for key in ("Earnings Date", "earningsDate"):
+                if key in cal.columns:
+                    val = row[key]
+                    if hasattr(val, "strftime"):
+                        return val.strftime("%Y-%m-%d")
+                    return str(val)[:10]
+            return ""
+        if isinstance(cal, dict):
+            ed = cal.get("Earnings Date") or cal.get("earningsDate")
+            if ed is None:
+                return ""
+            if isinstance(ed, (list, tuple)) and ed:
+                ed = ed[0]
+            if hasattr(ed, "strftime"):
+                return ed.strftime("%Y-%m-%d")
+            return str(ed)[:10]
+    except Exception:
+        pass
+    return ""
+
+
+def fetch_quote_news(raw_ticker: str, limit: int = 3) -> list[str]:
+    """Short headlines from yfinance (best-effort)."""
+    try:
+        t = yf.Ticker(raw_ticker)
+        news = getattr(t, "news", None) or []
+        out = []
+        for item in news[:limit]:
+            title = item.get("title") if isinstance(item, dict) else None
+            if title:
+                out.append(str(title).strip())
+        return out
+    except Exception:
+        return []
+
+
+def index_regime(index_ticker: str = NIFTY_BENCHMARK, ma_period: int = 200) -> dict[str, Any]:
+    """
+    Simple regime: last close vs long MA on daily bars (cached-friendly single fetch).
+    """
+    out: dict[str, Any] = {
+        "ticker": index_ticker,
+        "price": None,
+        "ma": None,
+        "above_ma": None,
+        "pct_vs_ma": None,
+        "error": None,
+    }
+    try:
+        hist = fetch_price_history(index_ticker, "1d")
+        if hist.empty or len(hist) < ma_period + 5:
+            out["error"] = "Insufficient index history"
+            return out
+        close = hist["Close"]
+        ma = close.rolling(ma_period).mean().iloc[-1]
+        px = float(close.iloc[-1])
+        ma_v = float(ma)
+        out["price"] = round(px, 2)
+        out["ma"] = round(ma_v, 2)
+        out["above_ma"] = px >= ma_v
+        out["pct_vs_ma"] = pct_vs_ma(px, ma_v)
+        return out
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+
+
+def us_market_status_label(now_utc: Optional[datetime] = None) -> str:
+    """Rough NYSE regular-session hint (educational, not live calendar-aware)."""
+    now = now_utc or datetime.now(tz=ZoneInfo("UTC"))
+    ny = now.astimezone(ZoneInfo("America/New_York"))
+    wd = ny.weekday()
+    if wd >= 5:
+        return "US equity markets typically closed (weekend). Quotes reflect last close."
+    hm = ny.hour * 60 + ny.minute
+    open_m = 9 * 60 + 30
+    close_m = 16 * 60
+    if hm < open_m:
+        return "NYSE/Nasdaq pre-open — US quotes usually reflect prior close until regular session."
+    if hm > close_m:
+        return "US regular session ended — data is as of today's close (or last trading day)."
+    return "US regular trading hours (approx.) — intraday refresh may lag Yahoo Finance."
+
+
 def compute_score(pe, vol_ratio, rsi):
     pe_score  = max(0.0, min(40.0, (50 - pe)  / 45 * 40)) if pe  and pe  > 0  else 0.0
     vol_score = max(0.0, min(30.0, (vol_ratio - 1) / 4 * 30)) if vol_ratio     else 0.0
@@ -306,13 +518,17 @@ def screen_stocks(
     vol_multiplier=1.5,
     rsi_min=50.0,
     progress_callback=None,
+    interval_key: str = "1d",
+    sector_filter: str = "",
+    require_above_ma20: bool = False,
+    require_macd_bullish: bool = False,
 ):
     tickers = UNIVERSES.get(universe_name, NIFTY_50)
     pe_cap  = PE_DATA_CAP.get(universe_name, 400)
     results = []
     total   = len(tickers)
-    end     = datetime.today()
-    start   = end - timedelta(days=60)
+    min_bar = min_bars_for_screen(interval_key)
+    sector_needle = (sector_filter or "").strip().lower()
 
     for i, ticker in enumerate(tickers):
         if progress_callback:
@@ -321,17 +537,19 @@ def screen_stocks(
         try:
             stock = yf.Ticker(ticker)
 
-            hist = stock.history(
-                start=start.strftime("%Y-%m-%d"),
-                end=end.strftime("%Y-%m-%d"),
-                auto_adjust=True,
-            )
-            if hist.empty or len(hist) < 22:
+            hist = fetch_price_history(ticker, interval_key)
+            if hist.empty or len(hist) < min_bar:
                 continue
 
             closes  = hist["Close"]
+            highs   = hist["High"]
+            lows    = hist["Low"]
             volumes = hist["Volume"]
             current_price = round(float(closes.iloc[-1]), 2)
+
+            sector_guess, _ind = get_sector_industry(stock)
+            if sector_needle and sector_needle not in (sector_guess or "").lower():
+                continue
 
             pe = get_pe(stock)
             if pe is None or pe <= 0 or pe > pe_cap:
@@ -350,36 +568,61 @@ def screen_stocks(
             if vol_ratio < vol_multiplier: continue
             if rsi       < rsi_min:        continue
 
+            ma20_s = closes.rolling(20).mean()
+            ma50_s = closes.rolling(50).mean()
+            ma20 = float(ma20_s.iloc[-1]) if len(closes) >= 20 else np.nan
+            ma50 = float(ma50_s.iloc[-1]) if len(closes) >= 50 else np.nan
+            if require_above_ma20 and not np.isnan(ma20) and current_price < ma20:
+                continue
+
+            macd_l, macd_s, macd_h = compute_macd(closes)
+            if require_macd_bullish:
+                if np.isnan(macd_h) or macd_h <= 0:
+                    continue
+
+            bb_pct_b, _bb_m, _bb_u, bb_l = compute_bollinger_pct_b(closes)
+            atr_v = compute_atr(highs, lows, closes)
+            gc = ma_cross_recent(ma20_s, ma50_s, lookback=5)
+
             score    = compute_score(pe, vol_ratio, rsi)
             is_nse   = ticker.endswith(".NS") or ticker.endswith(".BO")
             currency = "₹" if is_nse else "$"
             links    = get_stock_links(ticker)
-            lk       = list(links.keys())   # e.g. ["Yahoo Finance","Moneycontrol","TradingView"]
+            lk       = list(links.keys())
+            earn = next_earnings_label(stock)
 
-            results.append({
+            row = {
                 "Ticker":        ticker.replace(".NS", "").replace(".BO", ""),
                 "Currency":      currency,
+                "Interval":      interval_key,
+                "Sector":        sector_guess or "—",
                 "Price":         current_price,
                 "PE Ratio":      pe,
                 "Volume Ratio":  vol_ratio,
                 "RSI":           rsi,
+                "MACD Hist":     macd_h if not np.isnan(macd_h) else None,
+                "% vs MA20":     pct_vs_ma(current_price, ma20) if not np.isnan(ma20) else None,
+                "MA20×Golden50": "Yes" if gc else "—",
+                "%B Bollinger":  bb_pct_b if bb_pct_b is not None and not np.isnan(bb_pct_b) else None,
+                "ATR14":         atr_v if not np.isnan(atr_v) else None,
+                "Next Earnings": earn or "—",
                 "Score":         score,
                 lk[0]:           links[lk[0]],
                 lk[1]:           links[lk[1]],
                 lk[2]:           links[lk[2]],
-            })
+            }
+
+            results.append(row)
 
         except Exception:
             continue
 
     if not results:
-        return pd.DataFrame(
-            columns=["Ticker", "Currency", "Price", "PE Ratio", "Volume Ratio", "RSI", "Score", "Yahoo Finance", "Moneycontrol", "TradingView"]
-        )
+        return pd.DataFrame()
 
-    df            = pd.DataFrame(results)
-    df            = df.sort_values("Score", ascending=False).reset_index(drop=True)
-    df.index     += 1
+    df = pd.DataFrame(results)
+    df = df.sort_values("Score", ascending=False).reset_index(drop=True)
+    df.index += 1
     df.index.name = "Rank"
     return df
 

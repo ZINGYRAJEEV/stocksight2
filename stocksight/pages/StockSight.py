@@ -6,8 +6,8 @@ This page provides the main StockSight screener with a top-of-page Scan Now butt
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from screener import screen_stocks, UNIVERSES
-from ui_components import safe_set_page_config
+from screener import screen_stocks, UNIVERSES, us_market_status_label
+from ui_components import safe_set_page_config, render_watchlist_panel
 
 safe_set_page_config(
     page_title="StockSight | Smart Screener",
@@ -145,7 +145,8 @@ Yahoo Finance via yfinance<br><br>
 <b style='color:#a3d8b8;">Scoring</b><br>
 PE (40pts) + Vol (30pts) + RSI (30pts)<br><br>
 <b style='color:#a3d8b8;">Indicators</b><br>
-RSI-14 · 20-day avg volume · Trailing PE
+RSI-14 · Volume vs 20-bar avg · MACD hist · MA20 vs price · Bollinger %B · ATR14 · Next earnings (best-effort)<br>
+Trailing PE via Yahoo Finance
 </div>
 """,
             unsafe_allow_html=True,
@@ -155,6 +156,34 @@ RSI-14 · 20-day avg volume · Trailing PE
         pe_max = st.slider("Max PE Ratio", min_value=5.0, max_value=50.0, value=30.0, step=0.5, key="app1_pe")
         vol_mult = st.slider("Min Volume Spike (×avg)", min_value=1.0, max_value=10.0, value=1.5, step=0.1, key="app1_vol")
         rsi_min = st.slider("Min RSI (14)", min_value=30.0, max_value=80.0, value=50.0, step=1.0, key="app1_rsi")
+
+render_watchlist_panel("app1_wl")
+
+with st.expander("Advanced screening — bars, sector, confirmations", expanded=False):
+    interval_key = st.selectbox(
+        "Bar interval",
+        options=["1d", "1h", "15m"],
+        format_func=lambda x: {"1d": "Daily", "1h": "1 Hour", "15m": "15 Minute"}[x],
+        key="app1_interval",
+    )
+    sector_txt = st.text_input(
+        "Sector contains (optional)",
+        "",
+        key="app1_sector",
+        placeholder="e.g. Financial Services",
+    )
+    require_above_ma20 = st.checkbox(
+        "Require close above MA20",
+        value=False,
+        key="app1_ma20",
+    )
+    require_macd_bullish = st.checkbox(
+        "Require MACD histogram > 0",
+        value=False,
+        key="app1_macd",
+    )
+
+sector_filter_val = (sector_txt or "").strip() or ""
 
 scan_progress_ph = st.empty()
 scan_status_ph = st.empty()
@@ -180,6 +209,10 @@ def run_stock_scan(progress_ph, status_ph):
         vol_multiplier=vol_mult,
         rsi_min=rsi_min,
         progress_callback=on_progress,
+        interval_key=interval_key,
+        sector_filter=sector_filter_val,
+        require_above_ma20=require_above_ma20,
+        require_macd_bullish=require_macd_bullish,
     )
 
     progress_ph.empty()
@@ -201,6 +234,9 @@ if auto_refresh and st.session_state.app1_last_run:
         st.caption(f"⏱ Auto-refresh in {remaining}s")
 
 st.markdown("---")
+
+if universe == "S&P 500 (NYSE)":
+    st.caption(us_market_status_label())
 
 df = st.session_state.app1_results_df
 if df.empty and st.session_state.app1_last_run is None:
@@ -233,7 +269,7 @@ else:
     st.markdown("### Results")
     st.dataframe(df, use_container_width=True, hide_index=False, height=min(620, 60 + len(df) * 40))
     csv = df.to_csv(index=False)
-    st.download_button(label="⬇ Download Results as CSV", data=csv, file_name=f"stocksight_app1_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", mime="text/csv")
+    st.download_button(label="⬇ Download Results as CSV", data=csv, file_name=f"stocksight_app1_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", mime="text/csv", key="app1_dl_csv")
 
 st.markdown("---")
 st.markdown(
