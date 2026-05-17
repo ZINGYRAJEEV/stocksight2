@@ -536,6 +536,38 @@ def fetch_nse_fii_dii_equity_snapshot(ttl_seconds: int = 3600) -> Optional[str]:
     return text
 
 
+_OHLCV_ALIASES: dict[str, tuple[str, ...]] = {
+    "Open": ("Open", "open"),
+    "High": ("High", "high"),
+    "Low": ("Low", "low"),
+    "Close": ("Close", "close", "Adj Close", "adj close"),
+    "Volume": ("Volume", "volume"),
+}
+
+
+def hist_series(hist: pd.DataFrame, col: str) -> pd.Series:
+    """Return an OHLCV column from yfinance history (handles alias / MultiIndex shapes)."""
+    empty = pd.Series(dtype=float)
+    if hist is None or hist.empty:
+        return empty
+    names = _OHLCV_ALIASES.get(col, (col,))
+    if isinstance(hist.columns, pd.MultiIndex):
+        for name in names:
+            if name in hist.columns.get_level_values(0):
+                s = hist[name]
+                if isinstance(s, pd.DataFrame):
+                    s = s.iloc[:, 0]
+                return s.astype(float)
+        return empty
+    for name in names:
+        if name in hist.columns:
+            s = hist[name]
+            if isinstance(s, pd.DataFrame):
+                s = s.iloc[:, 0]
+            return s.astype(float)
+    return empty
+
+
 def fetch_price_history(ticker: str, interval_key: str = "1d") -> pd.DataFrame:
     """
     interval_key: '1d' | '1h' | '15m'

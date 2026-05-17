@@ -73,6 +73,24 @@ def safe_set_page_config(**kwargs) -> None:
         pass
 
 
+def ensure_session_choice(key: str, choices: list, default: str | None = None) -> str:
+    """Reset a widget session value when options were renamed (avoids Streamlit KeyError on Cloud)."""
+    if not choices:
+        return ""
+    fallback = default if default is not None else choices[0]
+    if st.session_state.get(key) not in choices:
+        st.session_state[key] = fallback
+    return str(st.session_state[key])
+
+
+def filter_column_config(df: pd.DataFrame, column_config: dict) -> dict:
+    """Streamlit raises KeyError if column_config references columns missing from df."""
+    if df is None or df.empty:
+        return {}
+    cols = set(df.columns)
+    return {k: v for k, v in column_config.items() if k in cols}
+
+
 # ─────────────────────────────────────────────
 # Page-level CSS (call once per page)
 # ─────────────────────────────────────────────
@@ -146,6 +164,52 @@ section.main .block-container {
 section.main label { color: #111827 !important; font-size: 0.8rem; }
 .stProgress > div > div { background-color:#25d366; }
 section.main hr { border-color:#d4d4d4 !important; }
+
+/* Universe / filters — light controls on light main (Popular Screens, Multibagger, scenarios, etc.) */
+section.main [data-testid="stSelectbox"] label,
+section.main [data-testid="stMultiSelect"] label,
+section.main [data-testid="stTextInput"] label,
+section.main [data-testid="stNumberInput"] label,
+section.main [data-testid="stSlider"] label,
+section.main [data-testid="stRadio"] label,
+section.main [data-testid="stCheckbox"] label {
+    color: #111827 !important;
+}
+section.main div[data-baseweb="select"] > div,
+section.main div[data-baseweb="select"] > div > div {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    border-color: #cbd5e1 !important;
+}
+section.main div[data-baseweb="select"] input,
+section.main div[data-baseweb="select"] span,
+section.main div[data-baseweb="select"] [role="combobox"] {
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+}
+section.main [data-testid="stTextInput"] input,
+section.main [data-testid="stTextInput"] textarea,
+section.main [data-testid="stNumberInput"] input {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+    border-color: #cbd5e1 !important;
+}
+section.main [data-testid="stSlider"] [data-testid="stThumbValue"],
+section.main [data-testid="stSlider"] [data-baseweb="slider"] {
+    color: #111827 !important;
+}
+/* Dropdown menu (portaled) */
+motion.div[data-baseweb="popover"] [role="listbox"] li,
+motion.div[data-baseweb="popover"] [role="option"] {
+    color: #111827 !important;
+    background-color: #ffffff !important;
+}
+motion.div[data-baseweb="popover"] [role="option"][aria-selected="true"],
+motion.div[data-baseweb="popover"] [role="option"]:hover {
+    background-color: #ecfdf5 !important;
+    color: #111827 !important;
+}
 </style>
 """
 

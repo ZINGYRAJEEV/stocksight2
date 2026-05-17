@@ -105,6 +105,29 @@ st.markdown("""
     0%, 100% { opacity: 1; }
     50%       { opacity: 0.3; }
   }
+  section.main [data-testid="stSelectbox"] label,
+  section.main [data-testid="stTextInput"] label,
+  section.main [data-testid="stSlider"] label {
+    color: #b8e7c7 !important;
+  }
+  section.main div[data-baseweb="select"] > div,
+  section.main div[data-baseweb="select"] > div > div {
+    background-color: #16352c !important;
+    color: #e8f7ef !important;
+    border-color: #1a3b31 !important;
+  }
+  section.main div[data-baseweb="select"] input,
+  section.main div[data-baseweb="select"] span,
+  section.main div[data-baseweb="select"] [role="combobox"] {
+    color: #e8f7ef !important;
+    -webkit-text-fill-color: #e8f7ef !important;
+  }
+  section.main [data-testid="stTextInput"] input {
+    background-color: #16352c !important;
+    color: #e8f7ef !important;
+    -webkit-text-fill-color: #e8f7ef !important;
+    border-color: #1a3b31 !important;
+  }
 </style>
 """, unsafe_allow_html=True)
 

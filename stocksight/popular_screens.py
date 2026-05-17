@@ -15,24 +15,46 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from multibagger import (
-    INR_PER_CRORE,
-    extract_multibagger_fundamentals,
-    market_cap_inr_to_cr,
-    normalize_debt_equity,
-    normalize_growth_pct,
-    normalize_return_pct,
-)
-from screener import (
-    UNIVERSES,
-    compute_rsi,
-    compute_volume_ratio,
-    fetch_price_history,
-    get_pe,
-    get_stock_links,
-    get_sector_industry,
-    ma_cross_recent,
-)
+try:
+    from .multibagger import (
+        INR_PER_CRORE,
+        extract_multibagger_fundamentals,
+        market_cap_inr_to_cr,
+        normalize_debt_equity,
+        normalize_growth_pct,
+        normalize_return_pct,
+    )
+    from .screener import (
+        UNIVERSES,
+        compute_rsi,
+        compute_volume_ratio,
+        fetch_price_history,
+        get_pe,
+        get_stock_links,
+        get_sector_industry,
+        hist_series,
+        ma_cross_recent,
+    )
+except ImportError:
+    from multibagger import (
+        INR_PER_CRORE,
+        extract_multibagger_fundamentals,
+        market_cap_inr_to_cr,
+        normalize_debt_equity,
+        normalize_growth_pct,
+        normalize_return_pct,
+    )
+    from screener import (
+        UNIVERSES,
+        compute_rsi,
+        compute_volume_ratio,
+        fetch_price_history,
+        get_pe,
+        get_stock_links,
+        get_sector_industry,
+        hist_series,
+        ma_cross_recent,
+    )
 
 NSE_UNIVERSES = [k for k in UNIVERSES if "NSE" in k]
 SCAN_SOURCES = NSE_UNIVERSES
@@ -114,15 +136,18 @@ def _result_from_ticker(
 ) -> Optional[PopularScreenResult]:
     if hist is None or hist.empty:
         return None
-    closes = hist["Close"]
-    vols = hist["Volume"]
+    closes = hist_series(hist, "Close")
+    vols = hist_series(hist, "Volume")
+    if closes.empty:
+        return None
     price = float(closes.iloc[-1])
     if price < 1:
         return None
 
     rsi_v = compute_rsi(closes)
     vol_r = compute_volume_ratio(vols)
-    wk_high = _gf(info, ("fiftyTwoWeekHigh",)) or float(hist["High"].max())
+    highs = hist_series(hist, "High")
+    wk_high = _gf(info, ("fiftyTwoWeekHigh",)) or (float(highs.max()) if not highs.empty else None)
     pct_hi = round((price / wk_high - 1.0) * 100.0, 2) if wk_high and wk_high > 0 else None
 
     fund = _fundamentals(info)
@@ -167,9 +192,13 @@ def _evaluate_screen(
 ) -> Optional[PopularScreenResult]:
     if hist is None or len(hist) < 30:
         return None
-    closes = hist["Close"]
-    vols = hist["Volume"]
+    closes = hist_series(hist, "Close")
+    vols = hist_series(hist, "Volume")
+    if closes.empty:
+        return None
     price = float(closes.iloc[-1])
+    highs = hist_series(hist, "High")
+    lows = hist_series(hist, "Low")
     fund = _fundamentals(info)
 
     if screen_id == "rsi_oversold":
@@ -179,8 +208,8 @@ def _evaluate_screen(
         return _mk_result(raw, info, hist, note=f"RSI {rsi_v:.1f}", score=30 - rsi_v)
 
     if screen_id in ("darvas", "breakout_stocks"):
-        wk_high = _gf(info, ("fiftyTwoWeekHigh",)) or float(hist["High"].max())
-        wk_low = _gf(info, ("fiftyTwoWeekLow",)) or float(hist["Low"].min())
+        wk_high = _gf(info, ("fiftyTwoWeekHigh",)) or (float(highs.max()) if not highs.empty else 0.0)
+        wk_low = _gf(info, ("fiftyTwoWeekLow",)) or (float(lows.min()) if not lows.empty else 0.0)
         if price < 10 or wk_high <= 0:
             return None
         if price < wk_low:
@@ -199,7 +228,7 @@ def _evaluate_screen(
         )
 
     if screen_id == "new_52w_high":
-        wk_high = _gf(info, ("fiftyTwoWeekHigh",)) or float(hist["High"].max())
+        wk_high = _gf(info, ("fiftyTwoWeekHigh",)) or (float(highs.max()) if not highs.empty else 0.0)
         if wk_high <= 0 or price < 0.98 * wk_high:
             return None
         return _mk_result(raw, info, hist, note="Near / at 52-week high", score=price / wk_high * 100)
@@ -214,9 +243,14 @@ def _evaluate_screen(
         return _mk_result(raw, info, hist, note="50 DMA crossed above 200 DMA", score=50.0)
 
     if screen_id == "price_volume_action":
-        if len(hist) < 15:
+        if len(closes) < 15:
             return None
-        wk = hist.resample("W").agg({"Close": "last", "Volume": "sum"}).dropna()
+        wk = (
+            pd.DataFrame({"Close": closes, "Volume": vols})
+            .resample("W")
+            .agg({"Close": "last", "Volume": "sum"})
+            .dropna()
+        )
         if len(wk) < 3:
             return None
         vol_chg = float(wk["Volume"].iloc[-1]) / max(float(wk["Volume"].iloc[-2]), 1.0)
@@ -301,7 +335,10 @@ def _evaluate_screen(
         return _mk_result(raw, info, hist, note=f"Growth score ~{g:.1f}", score=g * 10)
 
     if screen_id == "multibagger":
-        from multibagger import MultibaggerFilters, _passes_filters
+        try:
+            from .multibagger import MultibaggerFilters, _passes_filters
+        except ImportError:
+            from multibagger import MultibaggerFilters, _passes_filters
 
         flt = MultibaggerFilters(
             min_qtr_sales_var_pct=0.0,

@@ -15,6 +15,8 @@ from multibagger import (
 )
 from scan_history_store import append_scan_record
 from ui_components import (
+    ensure_session_choice,
+    filter_column_config,
     inject_css,
     notify_watchlist_alerts_from_metrics,
     render_watchlist_panel,
@@ -54,11 +56,21 @@ def render_multibagger_page() -> None:
     key = "mb"
     session_key = f"{key}_results"
 
+    _presets = ["ROCE leaders", "Small-cap strict"]
+    # Renamed presets leave stale session values → Streamlit KeyError on Cloud.
+    _legacy = {
+        "ROCE leaders (like Screener export)": "ROCE leaders",
+        "Small-cap strict (Screener.in)": "Small-cap strict",
+    }
+    legacy_key = f"{key}_preset"
+    if st.session_state.get(legacy_key) in _legacy:
+        st.session_state[legacy_key] = _legacy[st.session_state[legacy_key]]
+    ensure_session_choice(legacy_key, _presets, _presets[0])
     preset = st.radio(
         "Filter preset",
-        ["ROCE leaders", "Small-cap strict"],
+        _presets,
         horizontal=True,
-        key=f"{key}_preset",
+        key=legacy_key,
     )
     small_cap = preset == "Small-cap strict"
 
@@ -66,10 +78,10 @@ def render_multibagger_page() -> None:
         c1, c2, c3 = st.columns([1.0, 1.05, 1.2])
         with c1:
             st.markdown("#### Settings")
+            ensure_session_choice(f"{key}_universe", list(SCAN_SOURCES), SCAN_SOURCES[0])
             universe = st.selectbox(
                 "Stock Universe (NSE)",
                 SCAN_SOURCES,
-                index=0,
                 key=f"{key}_universe",
             )
         with c2:
@@ -221,11 +233,9 @@ Table columns from Yahoo Finance where data exists
             )
 
         df = pd.DataFrame(rows)
-        st.dataframe(
+        col_cfg = filter_column_config(
             df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
+            {
                 "CMP Rs.": st.column_config.NumberColumn(format="%.2f"),
                 "P/E": st.column_config.NumberColumn(format="%.2f"),
                 "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.2f"),
@@ -236,6 +246,12 @@ Table columns from Yahoo Finance where data exists
                 "D/E": st.column_config.NumberColumn(format="%.3f"),
                 "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
             },
+        )
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config=col_cfg,
             height=min(560, 48 + len(df) * 38),
         )
         st.caption("* ROCE from ROE when Yahoo omits ROCE. Growth % = Yahoo quarterly YoY proxies.")

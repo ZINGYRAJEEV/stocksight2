@@ -17,7 +17,10 @@ from typing import Callable, Optional
 import numpy as np
 import yfinance as yf
 
-from screener import UNIVERSES, get_pe, get_stock_links, get_sector_industry
+try:
+    from .screener import UNIVERSES, get_pe, get_stock_links, get_sector_industry, hist_series
+except ImportError:
+    from screener import UNIVERSES, get_pe, get_stock_links, get_sector_industry, hist_series
 
 INR_PER_CRORE = 10_000_000.0
 
@@ -308,8 +311,9 @@ def scan_multibagger(
             if price is None:
                 try:
                     h = stock.history(period="5d")
-                    if not h.empty:
-                        price = float(h["Close"].iloc[-1])
+                    closes = hist_series(h, "Close")
+                    if not closes.empty:
+                        price = float(closes.iloc[-1])
                 except Exception:
                     price = None
             if price is None:

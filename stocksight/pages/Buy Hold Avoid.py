@@ -120,6 +120,27 @@ st.markdown("""
     border-color:#25d366;
     color:#e8f7ef;
 }
+section.main div[data-baseweb="select"] > div,
+section.main div[data-baseweb="select"] > div > div {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    border-color: #cbd5e1 !important;
+}
+section.main div[data-baseweb="select"] input,
+section.main div[data-baseweb="select"] span,
+section.main div[data-baseweb="select"] [role="combobox"] {
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+}
+section.main [data-testid="stSelectbox"] label,
+section.main [data-testid="stTextInput"] label {
+    color: #111827 !important;
+}
+section.main [data-testid="stTextInput"] input {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 

@@ -14,7 +14,13 @@ from popular_screens import (
     scan_popular_screen,
 )
 from scan_history_store import append_scan_record
-from ui_components import inject_css, render_watchlist_panel, safe_set_page_config
+from ui_components import (
+    ensure_session_choice,
+    filter_column_config,
+    inject_css,
+    render_watchlist_panel,
+    safe_set_page_config,
+)
 
 
 def _category_order() -> list[str]:
@@ -31,27 +37,33 @@ def _render_run_panel(key: str, reg: dict) -> None:
         st.warning("No implemented screens.")
         return
 
-    sid = st.session_state.get(f"{key}_screen", screen_ids[0])
-    if sid not in screen_ids:
-        sid = screen_ids[0]
-        st.session_state[f"{key}_screen"] = sid
-
+    ensure_session_choice(f"{key}_screen", screen_ids, screen_ids[0])
+    sid = st.session_state[f"{key}_screen"]
     idx = screen_ids.index(sid)
+
+    def _screen_title(screen_id: str) -> str:
+        meta_row = reg.get(screen_id) or registry_by_id().get(screen_id)
+        return meta_row.title if meta_row else screen_id
+
     picked = st.selectbox(
         "Screen",
         screen_ids,
         index=idx,
-        format_func=lambda s: registry_by_id()[s].title,
+        format_func=_screen_title,
     )
     st.session_state[f"{key}_screen"] = picked
-    meta = reg[picked]
+    meta = reg.get(picked) or registry_by_id().get(picked)
+    if meta is None:
+        st.error("Unknown screen — pick another from the list.")
+        return
 
     st.info(f"**{meta.icon} {meta.title}** — {meta.description}\n\n_{meta.fidelity}_")
 
     with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:
-            universe = st.selectbox("Universe", SCAN_SOURCES, index=0, key=f"{key}_uni")
+            ensure_session_choice(f"{key}_uni", list(SCAN_SOURCES), SCAN_SOURCES[0])
+            universe = st.selectbox("Universe", SCAN_SOURCES, key=f"{key}_uni")
         with c2:
             max_rows = st.slider("Max results", 10, 100, 50, 10, key=f"{key}_max")
 
@@ -120,16 +132,20 @@ def _render_run_panel(key: str, reg: dict) -> None:
                 }
             )
         df = pd.DataFrame(rows)
-        st.dataframe(
+        col_cfg = filter_column_config(
             df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
+            {
                 "CMP Rs.": st.column_config.NumberColumn(format="%.2f"),
                 "P/E": st.column_config.NumberColumn(format="%.1f"),
                 "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.1f"),
                 "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
             },
+        )
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config=col_cfg,
             height=min(560, 48 + len(df) * 36),
         )
         st.download_button(
@@ -152,10 +168,10 @@ def render_popular_screens_page() -> None:
     reg = registry_by_id()
     key = "ps"
 
-    if f"{key}_screen" not in st.session_state:
-        st.session_state[f"{key}_screen"] = "price_volume_action"
-    if f"{key}_view" not in st.session_state:
-        st.session_state[f"{key}_view"] = "catalog"
+    implemented_ids = [s.screen_id for s in SCREEN_REGISTRY if s.implemented]
+    default_screen = "price_volume_action" if "price_volume_action" in implemented_ids else (implemented_ids[0] if implemented_ids else "")
+    ensure_session_choice(f"{key}_screen", implemented_ids, default_screen)
+    ensure_session_choice(f"{key}_view", ["catalog", "run"], "catalog")
 
     st.markdown("### 📋 Popular stock screens")
     st.caption(
