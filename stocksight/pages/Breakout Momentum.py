@@ -13,6 +13,9 @@ from ui_components import (
     maybe_enrich_news,
     render_watchlist_panel,
     signal_results_download,
+    log_scenario_scan,
+    notify_watchlist_alerts,
+    scenario_page_alert_hint,
 )
 
 safe_set_page_config(page_title="Breakout Momentum | StockSight", page_icon="🚀", layout="wide")
@@ -62,6 +65,13 @@ if run:
         "interval_key": adv["interval_key"],
         "require_macd_bullish": adv["require_macd_bullish"],
         "require_bb_touch_lower": adv["require_bb_touch_lower"],
+        "require_weekly_confirm": adv["require_weekly_confirm"],
+        "weekly_macd_confirm": adv["weekly_macd_confirm"],
+        "exclude_earnings_within_days": int(adv["exclude_earnings_within_days"]),
+        "skip_bearish_divergence_buy": adv["skip_bearish_divergence_buy"],
+        "min_rs_vs_bench": adv["min_rs_vs_bench"],
+        "require_stoch_cross_up": adv["require_stoch_cross_up"],
+        "require_stoch_cross_down": adv["require_stoch_cross_down"],
     }
     results = scan_breakout_momentum(
         universe,
@@ -73,6 +83,8 @@ if run:
         **scan_kw,
     )
     maybe_enrich_news(results, adv.get("fetch_news", False))
+    log_scenario_scan(SCENARIO, universe, results)
+    notify_watchlist_alerts(results, scenario_page_alert_hint(SCENARIO))
     prog.empty()
     scan_progress.empty()
     st.session_state["bm_results"] = results
@@ -92,7 +104,7 @@ else:
 
     if view == "Cards":
         for r in results:
-            trade_plan_card(r, SCENARIO, portfolio_value=pf_sz)
+            trade_plan_card(r, SCENARIO, portfolio_value=pf_sz, risk_pct=float(adv.get("risk_pct_per_trade", 1.0) or 1.0))
     else:
         results_table(results, SCENARIO)
 

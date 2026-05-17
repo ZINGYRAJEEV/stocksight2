@@ -7,7 +7,14 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from screener import screen_stocks, UNIVERSES, us_market_status_label
-from ui_components import safe_set_page_config, render_watchlist_panel
+from scan_history_store import append_scan_record
+from ui_components import (
+    first_seen_label,
+    notify_watchlist_alerts_screen_df,
+    raw_symbol_from_screen_display,
+    render_watchlist_panel,
+    safe_set_page_config,
+)
 
 safe_set_page_config(
     page_title="StockSight | Smart Screener",
@@ -20,7 +27,8 @@ st.markdown("""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
 
-  html, body, [class*="css"] {
+  section.main,
+  section.main .block-container {
     font-family: 'IBM Plex Sans', sans-serif;
     background-color: #0d1f18;
     color: #e8f7ef;
@@ -77,17 +85,6 @@ st.markdown("""
     transition: opacity 0.2s;
   }
   .stButton > button:hover { opacity: 0.92; }
-  [data-testid="stSidebar"] {
-    background-color: #ffffff;
-    border-right: 1px solid #d4d4d4;
-    color: #111827;
-  }
-  [data-testid="stSidebar"] label {
-    color: #111827 !important;
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
   .stProgress > div > div { background-color: #25d366; }
   hr { border-color: #16412f !important; margin: 8px 0; }
   .timestamp {
@@ -182,6 +179,42 @@ with st.expander("Advanced screening — bars, sector, confirmations", expanded=
         value=False,
         key="app1_macd",
     )
+    exclude_earn_days = st.slider(
+        "Exclude if earnings within N days (0 = off)",
+        min_value=0,
+        max_value=21,
+        value=0,
+        step=1,
+        key="app1_exearn",
+    )
+    use_rs_filter = st.checkbox(
+        "Require minimum RS vs benchmark (20-bar excess return vs Nifty/SPY)",
+        value=False,
+        key="app1_rs_use",
+    )
+    min_rs_pp = st.slider(
+        "Min RS vs benchmark (percentage points)",
+        min_value=-30.0,
+        max_value=30.0,
+        value=0.0,
+        step=0.5,
+        key="app1_rs_min",
+    )
+    fund_on = st.checkbox(
+        "Enable Yahoo fundamental gates (ROE / debt / revenue growth)",
+        value=False,
+        key="app1_fund_on",
+    )
+    min_roe_pct_ui = st.slider("Min ROE %", min_value=0, max_value=40, value=8, key="app1_roe")
+    max_de_ui = st.slider("Max debt/equity", min_value=0.0, max_value=400.0, value=250.0, step=5.0, key="app1_de")
+    min_rev_ui = st.slider(
+        "Min revenue growth %",
+        min_value=-50.0,
+        max_value=60.0,
+        value=0.0,
+        step=1.0,
+        key="app1_rev",
+    )
 
 sector_filter_val = (sector_txt or "").strip() or ""
 
@@ -213,7 +246,29 @@ def run_stock_scan(progress_ph, status_ph):
         sector_filter=sector_filter_val,
         require_above_ma20=require_above_ma20,
         require_macd_bullish=require_macd_bullish,
+        exclude_earnings_within_days=int(exclude_earn_days),
+        min_rs_vs_bench=float(min_rs_pp) if use_rs_filter else None,
+        min_roe_pct=float(min_roe_pct_ui) if fund_on else None,
+        max_debt_equity=float(max_de_ui) if fund_on else None,
+        min_revenue_growth_pct=float(min_rev_ui) if fund_on else None,
     )
+
+    try:
+        syms_out: list[str] = []
+        if not df.empty and "Ticker" in df.columns:
+            for t in df["Ticker"].astype(str).tolist():
+                if "NSE" in universe:
+                    syms_out.append(f"{t}.NS")
+                else:
+                    syms_out.append(t)
+        append_scan_record("StockSight", universe, syms_out, meta={"rows": int(len(df.index))})
+    except Exception:
+        pass
+
+    try:
+        notify_watchlist_alerts_screen_df(df, universe, "StockSight")
+    except Exception:
+        pass
 
     progress_ph.empty()
     status_ph.empty()
@@ -267,8 +322,21 @@ else:
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### Results")
-    st.dataframe(df, use_container_width=True, hide_index=False, height=min(620, 60 + len(df) * 40))
-    csv = df.to_csv(index=False)
+    display_df = df.copy()
+    if "Ticker" in display_df.columns:
+
+        insert_at = 1 if len(display_df.columns) >= 1 else 0
+        display_df.insert(
+            insert_at,
+            "First seen",
+            [
+                first_seen_label(raw_symbol_from_screen_display(str(x), universe))
+                for x in display_df["Ticker"].tolist()
+            ],
+        )
+
+    st.dataframe(display_df, use_container_width=True, hide_index=False, height=min(620, 60 + len(display_df) * 40))
+    csv = display_df.to_csv(index=False)
     st.download_button(label="⬇ Download Results as CSV", data=csv, file_name=f"stocksight_app1_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", mime="text/csv", key="app1_dl_csv")
 
 st.markdown("---")

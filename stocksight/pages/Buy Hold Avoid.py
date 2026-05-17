@@ -3,8 +3,9 @@ import html
 import streamlit as st
 import pandas as pd
 from urllib.parse import quote_plus
+from scan_history_store import append_scan_record
 from screener import UNIVERSES, screen_stocks
-from ui_components import inject_css, safe_set_page_config
+from ui_components import inject_css, notify_watchlist_alerts_screen_df, render_watchlist_panel, safe_set_page_config
 
 safe_set_page_config(page_title="Buy / Hold / Avoid | StockSight", page_icon="📊", layout="wide")
 inject_css()
@@ -151,6 +152,8 @@ Use the filters column to narrow the table after the list loads.
         )
         ticker_filter = st.text_input("Ticker contains", value="", key="bha_ticker")
 
+render_watchlist_panel("bha_wl")
+
 bha_fetch_progress = st.empty()
 bha_fetch_status = st.empty()
 fetch_btn = st.button("▶  FETCH STOCK LIST", use_container_width=True, key="bha_fetch")
@@ -181,6 +184,19 @@ if fetch_btn:
             rsi_min=0.0,
             progress_callback=progress_cb,
         )
+
+    try:
+        syms_out: list[str] = []
+        if not df.empty and "Ticker" in df.columns:
+            for t in df["Ticker"].astype(str).tolist():
+                syms_out.append(f"{t}.NS" if "NSE" in universe else t)
+        append_scan_record("BuyHoldAvoid", universe, syms_out, meta={"rows": int(len(df.index))})
+    except Exception:
+        pass
+    try:
+        notify_watchlist_alerts_screen_df(df, universe, "Buy / Hold / Avoid")
+    except Exception:
+        pass
 
     bha_fetch_progress.empty()
     bha_fetch_status.empty()

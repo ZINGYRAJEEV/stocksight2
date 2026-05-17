@@ -94,7 +94,8 @@ def render_overview() -> None:
     --app-text: #111827;
     --button-bg: linear-gradient(135deg,#25d366,#1aa34b);
 }
-html, body, [class*="css"] {
+section.main,
+section.main .block-container {
     font-family: 'IBM Plex Sans', sans-serif;
     background-color: var(--app-bg);
     color: var(--app-text);
@@ -106,9 +107,7 @@ html, body, [class*="css"] {
     border-radius:6px; padding:10px 24px; letter-spacing:1px;
     text-transform:uppercase; cursor:pointer; width:100%;
 }
-[data-testid="stSidebar"] { background:#ffffff; border-right:1px solid #d4d4d4; color:#111827; }
-[data-testid="stSidebar"] label { color:#111827 !important; font-size:0.8rem; }
-hr { border-color:#d4d4d4 !important; }
+section.main hr { border-color:#d4d4d4 !important; }
 </style>
 """, unsafe_allow_html=True)
 

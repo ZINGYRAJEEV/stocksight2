@@ -6,6 +6,8 @@ from datetime import datetime
 
 import streamlit as st
 
+from scan_history_store import append_scan_record
+
 from high_profit import (
     ARCHETYPES,
     HighProfitScanFilters,
@@ -20,7 +22,7 @@ from high_profit_ui import (
     high_profit_rank_table,
     no_high_profit_state,
 )
-from ui_components import inject_css, safe_set_page_config
+from ui_components import inject_css, notify_watchlist_alerts_from_metrics, render_watchlist_panel, safe_set_page_config
 
 
 def _criteria_html(archetype_id: str, pe_max: float, vol_min: float, rsi_range: tuple[int, int]) -> str:
@@ -99,6 +101,8 @@ def render_high_profit_page(archetype_id: str) -> None:
         unsafe_allow_html=True,
     )
 
+    render_watchlist_panel(f"{key}_wl")
+
     scan_progress = st.empty()
     run = st.button("▶  SCAN NOW", use_container_width=True, key=f"{key}_scan")
     st.caption(
@@ -118,14 +122,32 @@ def render_high_profit_page(archetype_id: str) -> None:
         def cb(i, t, s):
             prog.progress(int(i / t * 100), text=f"Scanning {s}… ({i}/{t})")
 
-        st.session_state[session_key] = scan_high_profit(
+        hp_results = scan_high_profit(
             archetype_id,
             scan_source=scan_source,
             filters=filters,
             progress_cb=cb,
         )
+        st.session_state[session_key] = hp_results
         st.session_state[f"{session_key}_at"] = datetime.now().strftime("%d %b %Y")
         st.session_state[f"{session_key}_source"] = scan_source
+        try:
+            syms_hp = [r.raw_ticker for r in hp_results]
+            append_scan_record(
+                f"high_profit_{archetype_id}",
+                scan_source or "",
+                syms_hp,
+                meta={"matches": len(syms_hp)},
+            )
+        except Exception:
+            pass
+        try:
+            metrics_hp = [
+                (r.ticker, r.raw_ticker, float(r.price), float(r.rsi)) for r in hp_results
+            ]
+            notify_watchlist_alerts_from_metrics(metrics_hp, nav_title(archetype_id))
+        except Exception:
+            pass
         prog.empty()
         scan_progress.empty()
 

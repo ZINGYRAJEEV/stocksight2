@@ -18,7 +18,21 @@ def exec_stocksight_page(filename: str) -> None:
     # Streamlit keeps the process alive; a previously imported `screener` may be
     # cached without newer symbols. Drop impl modules so the page script always
     # loads fresh code from disk.
-    for _m in ("screener", "signals", "ui_components", "high_profit", "high_profit_ui", "high_profit_page"):
+    for _m in (
+        "screener",
+        "signals",
+        "ui_components",
+        "scan_history_store",
+        "watchlist_store",
+        "email_alerts",
+        "high_profit",
+        "high_profit_ui",
+        "high_profit_page",
+        "multibagger",
+        "multibagger_page",
+        "popular_screens",
+        "popular_screens_page",
+    ):
         sys.modules.pop(_m, None)
     path = _STOCKSIGHT / "pages" / filename
     safe = path.stem.replace(" ", "_").replace("-", "_")

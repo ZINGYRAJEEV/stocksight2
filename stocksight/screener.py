@@ -9,8 +9,15 @@ import numpy as np
 from datetime import datetime, timedelta
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
+import json
+import time
+import urllib.error
+import urllib.request
 import warnings
 warnings.filterwarnings("ignore")
+
+
+_NSE_FII_CACHE: tuple[float, Optional[str]] = (0.0, None)
 
 
 NIFTY_BENCHMARK = "^NSEI"
@@ -368,6 +375,167 @@ def pct_vs_ma(price: float, ma_val: float) -> float:
     return round((price - ma_val) / ma_val * 100.0, 2)
 
 
+def compute_stochastic(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    k_period: int = 14,
+    d_period: int = 3,
+) -> tuple[pd.Series, pd.Series]:
+    """
+    Classic slow stochastic %K / %D (simple smoothing on raw stochastic).
+    %K_raw = 100 * (C - LL_k) / (HH_k - LL_k); %K = SMA(%K_raw, d_period); %D = SMA(%K, d_period).
+    """
+    if high is None or low is None or close is None:
+        return pd.Series(dtype=float), pd.Series(dtype=float)
+    ll = low.rolling(k_period).min()
+    hh = high.rolling(k_period).max()
+    denom = (hh - ll).replace(0, np.nan)
+    raw_k = ((close - ll) / denom).clip(lower=0, upper=1) * 100.0
+    pct_k = raw_k.rolling(d_period).mean()
+    pct_d = pct_k.rolling(d_period).mean()
+    return pct_k, pct_d
+
+
+def stochastic_last_and_crosses(pct_k: pd.Series, pct_d: pd.Series) -> dict[str, Any]:
+    """Latest %K/%D and bullish/bearish crossover on the last closed bar."""
+    out = {
+        "stoch_k": None,
+        "stoch_d": None,
+        "stoch_cross_up": False,
+        "stoch_cross_down": False,
+    }
+    if pct_k is None or pct_d is None or len(pct_k) < 3 or len(pct_d) < 3:
+        return out
+    k_now = pct_k.iloc[-1]
+    d_now = pct_d.iloc[-1]
+    k_prev = pct_k.iloc[-2]
+    d_prev = pct_d.iloc[-2]
+    if pd.notna(k_now):
+        out["stoch_k"] = round(float(k_now), 2)
+    if pd.notna(d_now):
+        out["stoch_d"] = round(float(d_now), 2)
+    if all(pd.notna(v) for v in (k_now, d_now, k_prev, d_prev)):
+        out["stoch_cross_up"] = bool(k_prev <= d_prev and k_now > d_now)
+        out["stoch_cross_down"] = bool(k_prev >= d_prev and k_now < d_now)
+    return out
+
+
+def compute_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
+    """Session / cumulative VWAP series (typical price × volume, cumulative)."""
+    if high is None or low is None or close is None or volume is None:
+        return pd.Series(dtype=float)
+    if len(close) < 2:
+        return pd.Series(dtype=float)
+    typ = (high.astype(float) + low.astype(float) + close.astype(float)) / 3.0
+    vol = volume.astype(float).clip(lower=0)
+    pv = typ * vol
+    cum_v = vol.cumsum().replace(0, np.nan)
+    return (pv.cumsum() / cum_v)
+
+
+def relative_strength_vs_benchmark(
+    stock_hist: pd.DataFrame,
+    bench_hist: pd.DataFrame,
+    bars: int = 20,
+) -> Optional[float]:
+    """
+    Excess return (percentage points) of stock vs benchmark over last `bars` bars on aligned dates.
+    """
+    if stock_hist is None or bench_hist is None:
+        return None
+    if stock_hist.empty or bench_hist.empty:
+        return None
+    try:
+        left = stock_hist[["Close"]].copy()
+        right = bench_hist[["Close"]].copy()
+        right.columns = ["Bench"]
+        joined = left.join(right, how="inner").dropna()
+        if len(joined) < bars + 1:
+            return None
+        tail = joined.iloc[-(bars + 1) :]
+        s0, s1 = float(tail["Close"].iloc[0]), float(tail["Close"].iloc[-1])
+        b0, b1 = float(tail["Bench"].iloc[0]), float(tail["Bench"].iloc[-1])
+        if s0 <= 0 or b0 <= 0:
+            return None
+        stock_ret = (s1 / s0 - 1.0) * 100.0
+        bench_ret = (b1 / b0 - 1.0) * 100.0
+        return round(float(stock_ret - bench_ret), 2)
+    except Exception:
+        return None
+
+
+def benchmark_ticker_for(raw_ticker: str) -> str:
+    return NIFTY_BENCHMARK if str(raw_ticker).upper().endswith((".NS", ".BO")) else SPY_BENCHMARK
+
+
+def fetch_nse_fii_dii_equity_snapshot(ttl_seconds: int = 3600) -> Optional[str]:
+    """
+    Best-effort aggregate NSE equity FII/DII net figures (crores) from nseindia.com JSON.
+    This is **market-wide** provisional activity, not per-stock flow; requires cookie handshake.
+    """
+    global _NSE_FII_CACHE
+    now = time.time()
+    ts, cached = _NSE_FII_CACHE
+    if cached and (now - ts) < ttl_seconds:
+        return cached
+
+    ua = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    )
+    home = urllib.request.Request(
+        "https://www.nseindia.com/",
+        headers={"User-Agent": ua, "Accept-Language": "en-US,en;q=0.9"},
+        method="GET",
+    )
+    api = urllib.request.Request(
+        "https://www.nseindia.com/api/fiidiiTradeReact",
+        headers={
+            "User-Agent": ua,
+            "Accept": "application/json,text/plain,*/*",
+            "Referer": "https://www.nseindia.com/",
+        },
+        method="GET",
+    )
+    text: Optional[str] = None
+    try:
+        with urllib.request.urlopen(home, timeout=12) as resp:  # noqa: S310 — curated NSE URL
+            resp.read()
+        with urllib.request.urlopen(api, timeout=12) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+        data = json.loads(raw)
+        rows = data if isinstance(data, list) else data.get("data") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            _NSE_FII_CACHE = (now, None)
+            return None
+        # Typical rows: category name + buy/sell/net values in INR crores
+        fii_net = dii_net = None
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            cat = str(row.get("category") or row.get("categoryName") or "").upper()
+            net = row.get("fnNetAmount") or row.get("netValue") or row.get("net")
+            try:
+                net_v = float(net)
+            except (TypeError, ValueError):
+                continue
+            if "FII" in cat or "FPI" in cat:
+                fii_net = net_v
+            if "DII" in cat:
+                dii_net = net_v
+        bits = []
+        if fii_net is not None:
+            bits.append(f"FII/FPI net ₹{fii_net:,.0f} Cr")
+        if dii_net is not None:
+            bits.append(f"DII net ₹{dii_net:,.0f} Cr")
+        text = " · ".join(bits) if bits else None
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError):
+        text = None
+    _NSE_FII_CACHE = (now, text)
+    return text
+
+
 def fetch_price_history(ticker: str, interval_key: str = "1d") -> pd.DataFrame:
     """
     interval_key: '1d' | '1h' | '15m'
@@ -453,6 +621,57 @@ def fetch_quote_news(raw_ticker: str, limit: int = 3) -> list[str]:
         return []
 
 
+def rsi_series_wilder(closes: pd.Series, period: int = 14) -> pd.Series:
+    """Full RSI series (Wilder / EMA), same convention as signals._full_rsi."""
+    delta = closes.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
+
+
+def fetch_weekly_history(ticker: str, period: str = "2y") -> pd.DataFrame:
+    """Weekly bars for multi-timeframe context."""
+    try:
+        df = yf.Ticker(ticker).history(period=period, interval="1wk", auto_adjust=True)
+        return df if df is not None and not df.empty else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def weekly_buy_alignment(closes_w: pd.Series, rsi_floor: float = 45.0) -> bool:
+    """
+    Weekly uptrend filter for long-bias scans: last weekly close above ~10-week MA
+    and weekly RSI(14) above rsi_floor.
+    """
+    if closes_w is None or closes_w.empty or len(closes_w) < 15:
+        return False
+    ma10 = closes_w.rolling(10).mean().iloc[-1]
+    rsi_s = rsi_series_wilder(closes_w, 14)
+    rsi_now = rsi_s.iloc[-1]
+    if pd.isna(ma10) or pd.isna(rsi_now):
+        return False
+    px = float(closes_w.iloc[-1])
+    return px >= float(ma10) * 0.998 and float(rsi_now) >= rsi_floor
+
+
+def calendar_days_until(date_label: Optional[str]) -> Optional[int]:
+    """Days from today to next earnings date string YYYY-MM-DD (best-effort)."""
+    if not date_label or len(str(date_label)) < 10:
+        return None
+    try:
+        from datetime import date as date_cls
+
+        s = str(date_label)[:10]
+        y, m, d = int(s[0:4]), int(s[5:7]), int(s[8:10])
+        tgt = date_cls(y, m, d)
+        return (tgt - date_cls.today()).days
+    except Exception:
+        return None
+
+
 def index_regime(index_ticker: str = NIFTY_BENCHMARK, ma_period: int = 200) -> dict[str, Any]:
     """
     Simple regime: last close vs long MA on daily bars (cached-friendly single fetch).
@@ -508,6 +727,36 @@ def compute_score(pe, vol_ratio, rsi):
     return round(pe_score + vol_score + rsi_score, 1)
 
 
+def extract_yfinance_fundamentals(info: dict) -> dict[str, Optional[float]]:
+    """Pull ROE / debt / revenue growth from Yahoo `info` (keys vary). Percent-style normalization."""
+
+    def gf(keys: tuple[str, ...]) -> Optional[float]:
+        for k in keys:
+            v = info.get(k)
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+                if np.isnan(fv):
+                    continue
+                return fv
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    roe = gf(("returnOnEquity", "return_on_equity"))
+    if roe is not None and abs(roe) <= 1.0:
+        roe *= 100.0
+
+    de = gf(("debtToEquity", "totalDebtToEquity"))
+
+    rg = gf(("revenueGrowth", "revenue_growth"))
+    if rg is not None and abs(rg) <= 1.0:
+        rg *= 100.0
+
+    return {"roe_pct": roe, "debt_equity": de, "revenue_growth_pct": rg}
+
+
 # ─────────────────────────────────────────────
 # Main Screening Function
 # ─────────────────────────────────────────────
@@ -522,6 +771,12 @@ def screen_stocks(
     sector_filter: str = "",
     require_above_ma20: bool = False,
     require_macd_bullish: bool = False,
+    *,
+    min_roe_pct: Optional[float] = None,
+    max_debt_equity: Optional[float] = None,
+    min_revenue_growth_pct: Optional[float] = None,
+    exclude_earnings_within_days: int = 0,
+    min_rs_vs_bench: Optional[float] = None,
 ):
     tickers = UNIVERSES.get(universe_name, NIFTY_50)
     pe_cap  = PE_DATA_CAP.get(universe_name, 400)
@@ -529,6 +784,9 @@ def screen_stocks(
     total   = len(tickers)
     min_bar = min_bars_for_screen(interval_key)
     sector_needle = (sector_filter or "").strip().lower()
+
+    bench_sym = NIFTY_BENCHMARK if "NSE" in str(universe_name).upper() else SPY_BENCHMARK
+    bench_hist = fetch_price_history(bench_sym, interval_key)
 
     for i, ticker in enumerate(tickers):
         if progress_callback:
@@ -556,6 +814,27 @@ def screen_stocks(
                 continue
             pe = round(pe, 2)
 
+            try:
+                info = stock.info or {}
+            except Exception:
+                info = {}
+            fund = extract_yfinance_fundamentals(info)
+            if min_roe_pct is not None:
+                if fund["roe_pct"] is None or fund["roe_pct"] < float(min_roe_pct):
+                    continue
+            if max_debt_equity is not None:
+                if fund["debt_equity"] is None or fund["debt_equity"] > float(max_debt_equity):
+                    continue
+            if min_revenue_growth_pct is not None:
+                if fund["revenue_growth_pct"] is None or fund["revenue_growth_pct"] < float(min_revenue_growth_pct):
+                    continue
+
+            earn_raw = next_earnings_label(stock)
+            d_earn = calendar_days_until(earn_raw)
+            if exclude_earnings_within_days > 0 and d_earn is not None:
+                if 0 <= d_earn <= int(exclude_earnings_within_days):
+                    continue
+
             vol_ratio = compute_volume_ratio(volumes)
             if vol_ratio is None or np.isnan(vol_ratio):
                 continue
@@ -567,6 +846,12 @@ def screen_stocks(
             if pe        > pe_threshold:   continue
             if vol_ratio < vol_multiplier: continue
             if rsi       < rsi_min:        continue
+
+            rs_excess = relative_strength_vs_benchmark(hist, bench_hist, bars=20)
+            if min_rs_vs_bench is not None:
+                thr_rs = float(min_rs_vs_bench)
+                if rs_excess is None or rs_excess < thr_rs:
+                    continue
 
             ma20_s = closes.rolling(20).mean()
             ma50_s = closes.rolling(50).mean()
@@ -589,7 +874,6 @@ def screen_stocks(
             currency = "₹" if is_nse else "$"
             links    = get_stock_links(ticker)
             lk       = list(links.keys())
-            earn = next_earnings_label(stock)
 
             row = {
                 "Ticker":        ticker.replace(".NS", "").replace(".BO", ""),
@@ -600,12 +884,17 @@ def screen_stocks(
                 "PE Ratio":      pe,
                 "Volume Ratio":  vol_ratio,
                 "RSI":           rsi,
+                "RS vs Idx":     rs_excess,
                 "MACD Hist":     macd_h if not np.isnan(macd_h) else None,
                 "% vs MA20":     pct_vs_ma(current_price, ma20) if not np.isnan(ma20) else None,
                 "MA20×Golden50": "Yes" if gc else "—",
                 "%B Bollinger":  bb_pct_b if bb_pct_b is not None and not np.isnan(bb_pct_b) else None,
                 "ATR14":         atr_v if not np.isnan(atr_v) else None,
-                "Next Earnings": earn or "—",
+                "Next Earnings": earn_raw or "—",
+                "ΔEarn(d)":      d_earn,
+                "ROE %":         fund["roe_pct"],
+                "D/E":           fund["debt_equity"],
+                "Rev growth %":  fund["revenue_growth_pct"],
                 "Score":         score,
                 lk[0]:           links[lk[0]],
                 lk[1]:           links[lk[1]],

@@ -9,6 +9,24 @@ def page_stocksight() -> None:
     exec_stocksight_page("StockSight.py")
 
 
+def page_watchlist_cross_scan() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Watchlist Cross-Scan.py")
+
+
+def page_scan_history() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Scan History.py")
+
+
+def page_portfolio() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Portfolio.py")
+
+
 def page_breakout_momentum() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
@@ -79,3 +97,15 @@ def page_high_profit_category_leader() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
     exec_stocksight_page("High Profit Category Leader.py")
+
+
+def page_multibagger() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Multibagger.py")
+
+
+def page_popular_screens() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Popular Screens.py")

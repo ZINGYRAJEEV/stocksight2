@@ -16,13 +16,19 @@ from navigation_pages import (
     page_high_profit_monopoly,
     page_high_profit_platform,
     page_high_profit_regulatory_moat,
+    page_multibagger,
+    page_popular_screens,
     page_overbought_exit,
     page_oversold_bounce,
+    page_portfolio,
+    page_scan_history,
     page_stocksight,
     page_value_technical,
     page_volume_no_confirm,
+    page_watchlist_cross_scan,
 )
 from stocksight.app import render_overview
+from stocksight.ui_components import inject_app_chrome
 
 try:
     st.set_page_config(
@@ -38,6 +44,9 @@ NAV_PAGES = {
     "": [
         st.Page(render_overview, title="Overview", icon="📊", default=True),
         st.Page(page_stocksight, title="StockSight (Main Screener)", icon="📈"),
+        st.Page(page_watchlist_cross_scan, title="Watchlist Cross-Scan", icon="📌"),
+        st.Page(page_scan_history, title="Scan History", icon="🗂️"),
+        st.Page(page_portfolio, title="Portfolio", icon="💼"),
     ],
     "📈 Strategy Modules": [
         st.Page(page_breakout_momentum, title="Breakout Momentum", icon="🚀"),
@@ -63,7 +72,13 @@ NAV_PAGES = {
         st.Page(page_high_profit_category_leader, title="Medium Risk · Category Leader", icon="🥇"),
         st.Page(page_high_profit_platform, title="High Risk · Platform", icon="🌐"),
     ],
+    "🌱 Theme Screens": [
+        st.Page(page_popular_screens, title="Popular Screens", icon="📋", default=False),
+        st.Page(page_multibagger, title="Multibagger Theme", icon="🌱"),
+    ],
 }
+
+inject_app_chrome()
 
 pg = st.navigation(NAV_PAGES, expanded=True)
 
