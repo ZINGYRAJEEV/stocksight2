@@ -20,17 +20,30 @@ try:
 except ImportError:
     make_subplots = None
 
-from screener import fetch_price_history, rsi_series_wilder, compute_vwap
-from signals import SignalResult, SCENARIOS, enrich_results_news, scenario_display_title
-from scan_history_store import append_scan_record, build_first_seen_map
-from watchlist_store import (
-    add_to_watchlist,
-    load_alert_prefs,
-    load_watchlist,
-    remove_from_watchlist,
-    set_email_watchlist_alerts,
-    upsert_watchlist_fields,
-)
+try:
+    from .screener import fetch_price_history, rsi_series_wilder, compute_vwap
+    from .signals import SignalResult, SCENARIOS, enrich_results_news, scenario_display_title
+    from .scan_history_store import append_scan_record, build_first_seen_map
+    from .watchlist_store import (
+        add_to_watchlist,
+        load_alert_prefs,
+        load_watchlist,
+        remove_from_watchlist,
+        set_email_watchlist_alerts,
+        upsert_watchlist_fields,
+    )
+except ImportError:
+    from screener import fetch_price_history, rsi_series_wilder, compute_vwap
+    from signals import SignalResult, SCENARIOS, enrich_results_news, scenario_display_title
+    from scan_history_store import append_scan_record, build_first_seen_map
+    from watchlist_store import (
+        add_to_watchlist,
+        load_alert_prefs,
+        load_watchlist,
+        remove_from_watchlist,
+        set_email_watchlist_alerts,
+        upsert_watchlist_fields,
+    )
 
 
 INTERVAL_LABELS = {"1d": "Daily", "1h": "1 Hour", "15m": "15 Minute"}

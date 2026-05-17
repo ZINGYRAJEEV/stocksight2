@@ -5,6 +5,15 @@ Run from repo root: streamlit run Overview.py
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parent
+_STOCKSIGHT_PKG = _REPO / "stocksight"
+# Page scripts use flat imports (from screener import …); package imports need the folder on path too.
+if str(_STOCKSIGHT_PKG) not in sys.path:
+    sys.path.insert(0, str(_STOCKSIGHT_PKG))
+
 import streamlit as st
 
 from navigation_pages import (
