@@ -32,6 +32,7 @@ def exec_stocksight_page(filename: str) -> None:
         "multibagger_page",
         "popular_screens",
         "popular_screens_page",
+        "breeze_data",
     ):
         sys.modules.pop(_m, None)
     path = _STOCKSIGHT / "pages" / filename

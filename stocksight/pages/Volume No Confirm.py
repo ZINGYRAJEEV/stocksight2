@@ -1,4 +1,4 @@
-"""Page: Volume Spike — No RSI Confirmation. Hold / Wait."""
+"""Volume No Confirm — unusual volume, unclear direction. For watchlist prep; see in-page Who/What banner."""
 import streamlit as st
 from screener import UNIVERSES
 from signals import scan_volume_no_confirm

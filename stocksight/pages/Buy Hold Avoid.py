@@ -1,11 +1,19 @@
-"""Page: Buy / Hold / Avoid Decision Chart — Composite Score Guidance"""
+"""Buy / Hold / Avoid — composite score zones and action rules. Use after other screens; for decision-making, not discovery."""
 import html
 import streamlit as st
 import pandas as pd
 from urllib.parse import quote_plus
 from scan_history_store import append_scan_record
-from screener import UNIVERSES, screen_stocks
-from ui_components import inject_css, notify_watchlist_alerts_screen_df, render_watchlist_panel, safe_set_page_config
+from screener import UNIVERSES, composite_action_zone, matrix_decision_note, screen_stocks
+from ui_components import (
+    filter_column_config,
+    inject_css,
+    notify_watchlist_alerts_screen_df,
+    page_audience_note,
+    render_decision_matrix_legend,
+    render_watchlist_panel,
+    safe_set_page_config,
+)
 
 safe_set_page_config(page_title="Buy / Hold / Avoid | StockSight", page_icon="📊", layout="wide")
 inject_css()
@@ -145,6 +153,11 @@ section.main [data-testid="stTextInput"] input {
 """, unsafe_allow_html=True)
 
 st.markdown("## 📊 Buy / Hold / Avoid Decision Guide", unsafe_allow_html=True)
+page_audience_note(
+    "Investors who already have a shortlist and need a single composite view before acting—use **after** StockSight or scenario scans.",
+    "Loads a full universe, scores each name (PE, volume, RSI), maps to **Strong Buy → Avoid** zones, "
+    "and supports filters, cards, and news links. This is the final decision layer, not a discovery screener.",
+)
 st.markdown("---")
 
 with st.container(border=True):
@@ -234,12 +247,11 @@ if df is None or df.empty:
     """)
 else:
     df = df.copy()
-    df["Action"] = df["Score"].apply(
-        lambda score: "Strong Buy" if score >= 80 else
-                      "Buy / Watch" if score >= 60 else
-                      "Neutral / Wait" if score >= 40 else
-                      "Avoid"
-    )
+    df["Decision"] = df["Score"].apply(composite_action_zone)
+    df["Matrix note"] = df["Decision"].map(matrix_decision_note)
+    df["Action"] = df["Decision"]
+    if "Composite" not in df.columns:
+        df["Composite"] = df["Score"]
     df["BusinessLine"] = df["Ticker"].apply(
         lambda ticker: f"https://www.thehindubusinessline.com/search/?q={quote_plus(ticker.replace('.NS', '').replace('.BO', ''))}"
     )
@@ -248,7 +260,7 @@ else:
         df = df[df["Ticker"].str.contains(ticker_filter.upper(), na=False)]
 
     if action_zone != "All":
-        df = df[df["Action"] == action_zone]
+        df = df[df["Decision"] == action_zone]
 
     if df.empty:
         st.html("""
@@ -379,13 +391,17 @@ else:
             )
 
             display_cols = [
-                "Ticker", "Price", "PE Ratio", "Volume Ratio", "RSI", "Score",
+                "Ticker", "Decision", "Composite", "Matrix note",
+                "Price", "PE Ratio", "Volume Ratio", "RSI", "Score",
                 "Confidence", "Action",
                 "Yahoo Finance", "Moneycontrol", "BusinessLine",
             ]
             visible_cols = [col for col in display_cols if col in df_table.columns]
 
             col_cfg = {
+                "Decision": st.column_config.TextColumn("Decision", width="medium"),
+                "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
+                "Composite": st.column_config.NumberColumn("Composite", format="%.1f"),
                 "Price": st.column_config.NumberColumn("Price", format="%.2f"),
                 "PE Ratio": st.column_config.NumberColumn("PE Ratio", format="%.2f"),
                 "Volume Ratio": st.column_config.NumberColumn("Volume Ratio", format="%.2f"),
@@ -400,10 +416,11 @@ else:
             st.dataframe(
                 df_table[visible_cols],
                 use_container_width=True,
-                column_config=col_cfg,
+                column_config=filter_column_config(df_table[visible_cols], col_cfg),
                 hide_index=False,
                 height=min(600, 60 + len(df_table) * 38),
             )
+            render_decision_matrix_legend()
 
         selected_ticker = st.selectbox(
             "Preview news links for",

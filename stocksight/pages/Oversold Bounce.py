@@ -1,4 +1,4 @@
-"""Page: Oversold Bounce — PE 5–50, Vol ≥2×, RSI 30–40 rising"""
+"""Oversold Bounce — mean-reversion after panic selling. For swing traders; see in-page Who/What banner."""
 import streamlit as st
 from screener import UNIVERSES
 from signals import scan_oversold_bounce

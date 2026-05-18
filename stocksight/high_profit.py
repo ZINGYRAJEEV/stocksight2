@@ -42,6 +42,8 @@ ARCHETYPES: dict[str, dict] = {
             "Near-monopoly businesses with pricing power and high barriers. "
             "PE can be rich; momentum and business quality matter more than value alone."
         ),
+        "audience": "Long-term investors seeking durable franchises with pricing power and lower business risk.",
+        "purpose": "Scores curated monopoly-style names on live PE, volume, RSI, and a composite quality/momentum score.",
         "filter_note": "Curated watchlist · live PE / vol / RSI · ranked by composite /100",
         "defaults": {"pe_max": 120.0, "vol_min": 1.2, "rsi_range": (50, 100)},
         "criteria_pe": "Any (rich OK)",
@@ -62,6 +64,8 @@ ARCHETYPES: dict[str, dict] = {
             "Two-sided or aggregator platforms where scale reinforces growth. "
             "Favour rising volume with intact trend."
         ),
+        "audience": "Growth investors comfortable with volatility and platform business models.",
+        "purpose": "Screens platform archetype watchlist names for trend, liquidity, and composite score—not a full startup screener.",
         "filter_note": "Curated platform names · ranked by composite /100",
         "defaults": {"pe_max": 100.0, "vol_min": 1.0, "rsi_range": (45, 100)},
         "criteria_pe": "5 – 100",
@@ -82,6 +86,8 @@ ARCHETYPES: dict[str, dict] = {
             "Licence- or regulation-protected franchises (exchanges, depositories, clearing). "
             "Typically asset-light with very high margins."
         ),
+        "audience": "Conservative investors who like regulated, licence-backed cash generators.",
+        "purpose": "Ranks exchange/clearing-style names on technicals plus static moat metadata and Buy? / Precautions columns.",
         "filter_note": "Licence-backed franchises · ranked by composite /100",
         "defaults": {"pe_max": 120.0, "vol_min": 1.0, "rsi_range": (48, 100)},
         "criteria_pe": "Any",
@@ -101,6 +107,8 @@ ARCHETYPES: dict[str, dict] = {
         "description": (
             "Markets split between two dominant players — stable economics, less disruption risk than fragmented sectors."
         ),
+        "audience": "Investors wanting oligopoly stability without paying for a pure monopoly premium.",
+        "purpose": "Applies PE/volume/RSI filters to duopoly watchlist names and surfaces leadership / precaution notes.",
         "filter_note": "Two-player markets · ranked by composite /100",
         "defaults": {"pe_max": 80.0, "vol_min": 1.2, "rsi_range": (48, 100)},
         "criteria_pe": "5 – 80",
@@ -120,6 +128,8 @@ ARCHETYPES: dict[str, dict] = {
         "description": (
             "#1 or #2 share in a growing category — brand + distribution moat, not always legal monopoly."
         ),
+        "audience": "Investors targeting category winners in consumer, pharma, or industrial niches.",
+        "purpose": "Filters category-leader watchlist for momentum and valuation; compare Buy? flags across peers.",
         "filter_note": "#1/#2 category share · ranked by composite /100",
         "defaults": {"pe_max": 90.0, "vol_min": 1.3, "rsi_range": (50, 100)},
         "criteria_pe": "5 – 90",

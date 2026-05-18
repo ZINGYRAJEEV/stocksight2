@@ -1,4 +1,4 @@
-"""Page: Overbought / Exit — Any PE, Vol ≥2×, RSI >75"""
+"""Overbought Exit — trim or exit stretched winners. For holders managing risk; see in-page Who/What banner."""
 import streamlit as st
 from screener import UNIVERSES
 from signals import scan_overbought_exit

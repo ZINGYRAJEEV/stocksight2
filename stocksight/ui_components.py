@@ -21,7 +21,16 @@ except ImportError:
     make_subplots = None
 
 try:
-    from .screener import fetch_price_history, rsi_series_wilder, compute_vwap
+    from .screener import (
+        DECISION_ZONES,
+        compute_score,
+        decision_from_metrics,
+        fetch_price_history,
+        matrix_decision,
+        matrix_decision_note,
+        rsi_series_wilder,
+        compute_vwap,
+    )
     from .signals import SignalResult, SCENARIOS, enrich_results_news, scenario_display_title
     from .scan_history_store import append_scan_record, build_first_seen_map
     from .watchlist_store import (
@@ -33,7 +42,16 @@ try:
         upsert_watchlist_fields,
     )
 except ImportError:
-    from screener import fetch_price_history, rsi_series_wilder, compute_vwap
+    from screener import (
+        DECISION_ZONES,
+        compute_score,
+        decision_from_metrics,
+        fetch_price_history,
+        matrix_decision,
+        matrix_decision_note,
+        rsi_series_wilder,
+        compute_vwap,
+    )
     from signals import SignalResult, SCENARIOS, enrich_results_news, scenario_display_title
     from scan_history_store import append_scan_record, build_first_seen_map
     from watchlist_store import (
@@ -89,6 +107,41 @@ def filter_column_config(df: pd.DataFrame, column_config: dict) -> dict:
         return {}
     cols = set(df.columns)
     return {k: v for k, v in column_config.items() if k in cols}
+
+
+def page_audience_note(who_for: str, what_it_does: str) -> None:
+    """Short guidance block: intended user and what the page does."""
+    st.info(
+        f"**Who this is for:** {who_for}\n\n"
+        f"**What it does:** {what_it_does}"
+    )
+
+
+def render_decision_matrix_legend() -> None:
+    """Reference key for Decision / Matrix note columns shown after scans."""
+    with st.expander("📊 Buy / Sell decision matrix (reference)", expanded=False):
+        st.caption(
+            "After each scan, **Decision** blends the scenario signal (when applicable) with the "
+            "**Composite** score (PE + volume + RSI, 0–100). Same zones as **Buy / Hold / Avoid**."
+        )
+        for threshold, label, note in DECISION_ZONES:
+            st.markdown(f"- **{label}** (composite ≥ {threshold:.0f}): {note}")
+        st.markdown(
+            "- **Sell / Trim** — Overbought / exit scenario or SELL signal.\n"
+            "- **Cautious Buy** — Extreme oversold / cautious entry only.\n"
+            "- **Neutral / Wait** — Volume spike without RSI confirmation or WAIT signal."
+        )
+
+
+def _decision_for_signal_result(r: SignalResult) -> tuple[str, float, str]:
+    dec, comp, note = decision_from_metrics(
+        r.pe,
+        r.vol_ratio,
+        r.rsi,
+        signal_label=r.signal_label,
+        scenario_id=r.scenario_id,
+    )
+    return dec, comp, note
 
 
 # ─────────────────────────────────────────────
@@ -237,6 +290,12 @@ def render_chart_expander(raw_ticker: str, interval_key: str, uid: str) -> None:
     if not raw_ticker:
         return
     with st.expander("📉 Inline chart — OHLC · MA · Volume · RSI", expanded=False):
+        try:
+            from breeze_data import breeze_status_message
+
+            st.caption(breeze_status_message())
+        except Exception:
+            pass
         df = _cached_chart_df(raw_ticker, interval_key)
         if df is None or df.empty:
             st.caption("No chart data for this symbol / interval.")
@@ -663,6 +722,7 @@ def signal_results_download(
         return
     rows = []
     for r in results:
+        decision, composite, matrix_note = _decision_for_signal_result(r)
         row = {
             "Ticker": r.ticker,
             "Raw": r.raw_ticker,
@@ -670,6 +730,9 @@ def signal_results_download(
             "Interval": r.data_interval,
             "Sector": r.sector or "",
             "Signal": r.signal_label,
+            "Decision": decision,
+            "Composite": composite if composite == composite else None,
+            "Matrix note": matrix_note,
             "Price": r.price,
             "PE": r.pe,
             "Vol×": r.vol_ratio,
@@ -776,6 +839,10 @@ def scenario_header(scenario_id: str):
         </div>
     </div>
     """)
+    audience = s.get("audience")
+    purpose = s.get("purpose")
+    if audience and purpose:
+        page_audience_note(audience, purpose)
 
 
 # ─────────────────────────────────────────────
@@ -1101,9 +1168,14 @@ def results_table(results: list[SignalResult], scenario_id: str, *, include_scen
 
     rows = []
     for r in results:
+        decision, composite, matrix_note = _decision_for_signal_result(r)
         row = {
             "Ticker":       r.ticker,
             "First seen":   first_seen_label(r.raw_ticker),
+            "Decision":     decision,
+            "Composite":    composite if composite == composite else None,
+            "Matrix note":  matrix_note,
+            "Signal":       r.signal_label,
             "Bars":         r.data_interval,
             "Sector":       r.sector or "—",
             "Price":        r.price,
@@ -1155,6 +1227,9 @@ def results_table(results: list[SignalResult], scenario_id: str, *, include_scen
             df[col_name] = [r.links.get(name, "") for r in results]
 
     col_cfg = {
+        "Decision":     st.column_config.TextColumn("Decision", width="medium"),
+        "Matrix note":  st.column_config.TextColumn("Matrix note", width="large"),
+        "Composite":    st.column_config.NumberColumn("Composite", format="%.1f"),
         "Price":        st.column_config.NumberColumn("Price", format="%.2f"),
         "PE":           st.column_config.NumberColumn("PE", format="%.1f"),
         "Vol×":         st.column_config.NumberColumn("Vol×", format="%.2f"),
@@ -1180,10 +1255,11 @@ def results_table(results: list[SignalResult], scenario_id: str, *, include_scen
 
     st.dataframe(
         df, use_container_width=True,
-        column_config=col_cfg,
+        column_config=filter_column_config(df, col_cfg),
         hide_index=True,
         height=min(500, 50 + len(df) * 38),
     )
+    render_decision_matrix_legend()
 
 
 # ─────────────────────────────────────────────

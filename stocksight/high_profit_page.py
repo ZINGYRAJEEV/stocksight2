@@ -1,4 +1,4 @@
-"""Shared Streamlit renderer for high-profit archetype pages."""
+"""High-profit archetype pages — curated moat/platform/duopoly watchlists with live technical scores."""
 
 from __future__ import annotations
 
@@ -22,7 +22,14 @@ from high_profit_ui import (
     high_profit_rank_table,
     no_high_profit_state,
 )
-from ui_components import inject_css, notify_watchlist_alerts_from_metrics, render_watchlist_panel, safe_set_page_config
+from ui_components import (
+    inject_css,
+    notify_watchlist_alerts_from_metrics,
+    page_audience_note,
+    render_decision_matrix_legend,
+    render_watchlist_panel,
+    safe_set_page_config,
+)
 
 
 def _criteria_html(archetype_id: str, pe_max: float, vol_min: float, rsi_range: tuple[int, int]) -> str:
@@ -50,6 +57,8 @@ def render_high_profit_page(archetype_id: str) -> None:
     )
     inject_css()
     high_profit_header(archetype_id)
+    if a.get("audience") and a.get("purpose"):
+        page_audience_note(a["audience"], a["purpose"])
 
     key = f"hp_{archetype_id}"
     session_key = f"{key}_results"
@@ -169,6 +178,7 @@ def render_high_profit_page(archetype_id: str) -> None:
         src_note = f" · {last_source}" if last_source else ""
         st.caption(f"Showing {len(results)} match(es){src_note}")
         high_profit_rank_table(results, scan_at)
+        render_decision_matrix_legend()
         st.markdown("---")
         st.markdown(f"### 📋 {len(results)} name(s) — Detail cards")
         view = st.radio(

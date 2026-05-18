@@ -1,4 +1,4 @@
-"""Streamlit — Popular stock screens hub."""
+"""Popular Screens hub — classic named filters for NSE universes (Yahoo data)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
+from screener import decision_from_metrics
 from popular_screens import (
     SCAN_SOURCES,
     SCREEN_REGISTRY,
@@ -18,6 +19,8 @@ from ui_components import (
     ensure_session_choice,
     filter_column_config,
     inject_css,
+    page_audience_note,
+    render_decision_matrix_legend,
     render_watchlist_panel,
     safe_set_page_config,
 )
@@ -114,10 +117,16 @@ def _render_run_panel(key: str, reg: dict) -> None:
         st.caption(f"**{len(results)}** result(s)" + (f" · {scan_at}" if scan_at else ""))
         rows = []
         for i, r in enumerate(results, start=1):
+            decision, composite, matrix_note = decision_from_metrics(
+                r.pe, r.vol_ratio, r.rsi, scenario_id=picked
+            )
             rows.append(
                 {
                     "S.No.": i,
                     "Name": r.ticker,
+                    "Decision": decision,
+                    "Composite": composite if composite == composite else None,
+                    "Matrix note": matrix_note,
                     "CMP Rs.": r.price,
                     "P/E": r.pe,
                     "Mar Cap Rs.Cr.": r.market_cap_cr,
@@ -135,6 +144,9 @@ def _render_run_panel(key: str, reg: dict) -> None:
         col_cfg = filter_column_config(
             df,
             {
+                "Decision": st.column_config.TextColumn("Decision", width="medium"),
+                "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
+                "Composite": st.column_config.NumberColumn(format="%.1f"),
                 "CMP Rs.": st.column_config.NumberColumn(format="%.2f"),
                 "P/E": st.column_config.NumberColumn(format="%.1f"),
                 "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.1f"),
@@ -155,6 +167,7 @@ def _render_run_panel(key: str, reg: dict) -> None:
             mime="text/csv",
             key=f"{key}_dl",
         )
+        render_decision_matrix_legend()
 
 
 def render_popular_screens_page() -> None:
@@ -174,9 +187,14 @@ def render_popular_screens_page() -> None:
     ensure_session_choice(f"{key}_view", ["catalog", "run"], "catalog")
 
     st.markdown("### 📋 Popular stock screens")
+    page_audience_note(
+        "Investors who already know classic screens (Magic Formula, Darvas, RSI oversold, dividend yield, etc.) "
+        "and want a quick Yahoo-based pass on NSE universes.",
+        "Browse 20+ named screens, open one, pick **Nifty 50** or **Nifty 500**, and run rules ranked by score. "
+        "Some screens are proxies only—see fidelity notes in the catalog.",
+    )
     st.caption(
-        "Classic filter catalog powered by **Yahoo Finance**. Pick a screen in **Catalog** and click **Open** "
-        "to run it. Use **Nifty 50** for a quick test or **Nifty 500** for breadth."
+        "Pick a screen in **Catalog** → **Open**, or use **Run screen**. Data via **Yahoo Finance**."
     )
 
     view = st.radio(

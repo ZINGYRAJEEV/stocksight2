@@ -1,4 +1,4 @@
-"""Page: Breakout Momentum — PE 5–50, Vol ≥3×, RSI 50–65 rising"""
+"""Breakout Momentum — high-volume breakouts with rising RSI. For momentum traders; see in-page Who/What banner."""
 import streamlit as st
 from screener import UNIVERSES
 from signals import scan_breakout_momentum

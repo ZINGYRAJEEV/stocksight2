@@ -150,9 +150,14 @@ section.main hr { border-color:#d4d4d4 !important; }
 
     # ── Strategy Map ──────────────────────────────────────────────────────
     st.markdown("### 🗺️ Signal Strategy Map")
+    st.info(
+        "**Who StockSight is for:** self-directed investors and traders screening NSE / US names with Yahoo data.\n\n"
+        "**How to use the app:** start with **StockSight (Main Screener)** or **Popular Screens** for ideas → "
+        "refine with **Strategy** / **Theme** pages → save symbols to the watchlist → "
+        "use **Buy / Hold / Avoid** last for zone-based decisions. **Portfolio** tracks entries; **Scan History** logs past runs."
+    )
     st.caption(
-        "Six scenarios covering the full market cycle, plus the **StockSight** screener page and the "
-        "**Buy / Hold / Avoid** decision guide. Open any page from the sidebar to run a screen."
+        "Six technical scenarios cover the market cycle. Open any sidebar page to run a screen."
     )
 
     col_pairs = [STRATEGY_CARDS[i:i+3] for i in range(0, 6, 3)]

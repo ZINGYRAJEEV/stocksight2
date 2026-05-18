@@ -1,10 +1,11 @@
-"""Page: Watchlist Cross-Scan — run all six scenario scanners on saved watchlist symbols only."""
+"""Watchlist Cross-Scan — runs all six scenario modules on saved symbols only. For users with a focused ticker list."""
 
 from __future__ import annotations
 
 import streamlit as st
 import pandas as pd
 
+from screener import decision_from_metrics
 from signals import cross_scan_watchlist, scenario_display_title, scenario_nav_key
 from watchlist_store import load_watchlist
 from ui_components import (
@@ -14,6 +15,7 @@ from ui_components import (
     safe_set_page_config,
     scenario_advanced_panel,
     maybe_enrich_news,
+    page_audience_note,
     render_watchlist_panel,
     signal_results_download,
     log_scenario_scan,
@@ -30,11 +32,10 @@ safe_set_page_config(
 inject_css()
 
 st.markdown("### 📌 Watchlist cross-scan")
-st.caption(
-    "Runs the **six technical scenario modules** on symbols in your saved watchlist only, "
-    "using each scenario's **default** PE / volume / RSI thresholds. "
-    "Tune thresholds on individual scenario pages; use Advanced below for bar interval, sector, MACD/Bollinger, "
-    "weekly confirmation, earnings window, and RSI divergence filters."
+page_audience_note(
+    "Traders who maintain a short list in the watchlist and want every scenario signal in one pass.",
+    "Runs oversold, breakout, value, exit, extreme oversold, and volume-wait modules on **watchlist symbols only** "
+    "(default thresholds). Tune filters on individual scenario pages; use Advanced for interval, sector, and MACD options.",
 )
 
 render_watchlist_panel("xc_wl")
@@ -102,6 +103,11 @@ else:
                     "Ticker": r.ticker,
                     "Scenario": scenario_display_title(r.scenario_id),
                     "Signal": r.signal_label,
+                    "Decision": decision_from_metrics(
+                        r.pe, r.vol_ratio, r.rsi,
+                        signal_label=r.signal_label,
+                        scenario_id=r.scenario_id,
+                    )[0],
                 }
                 for r in results
             ]

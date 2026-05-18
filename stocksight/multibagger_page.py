@@ -1,4 +1,4 @@
-"""Streamlit page — Multibagger theme (fundamental growth screen)."""
+"""Multibagger theme page — fundamental growth + quality gates on NSE."""
 
 from __future__ import annotations
 
@@ -13,12 +13,15 @@ from multibagger import (
     MultibaggerFilters,
     scan_multibagger,
 )
+from screener import decision_from_metrics
 from scan_history_store import append_scan_record
 from ui_components import (
     ensure_session_choice,
     filter_column_config,
     inject_css,
     notify_watchlist_alerts_from_metrics,
+    page_audience_note,
+    render_decision_matrix_legend,
     render_watchlist_panel,
     safe_set_page_config,
 )
@@ -33,9 +36,13 @@ def render_multibagger_page() -> None:
     inject_css()
 
     st.markdown("### 🌱 Multibagger theme")
+    page_audience_note(
+        "Fundamental investors hunting high growth + quality on NSE (small/mid cap or ROCE-led lists).",
+        "Filters on quarterly sales/profit growth, ROCE, optional debt and market-cap gates; "
+        "outputs a ranked table with Yahoo links. Use **ROCE leaders** preset first, then **Small-cap strict** if needed.",
+    )
     st.caption(
-        "Fundamental growth screen: **Qtr Sales Var %**, **Qtr Profit Var %**, **ROCE %**, **Mar Cap (cr)** "
-        "via Yahoo Finance. Start with **Curated (ROCE export names)** for a quick run."
+        "Columns: **Qtr Sales Var %**, **Qtr Profit Var %**, **ROCE %**, **Mar Cap (cr)** — Yahoo proxies."
     )
 
     st.markdown("""
@@ -214,11 +221,18 @@ Table columns from Yahoo Finance where data exists
         rows = []
         for rank, r in enumerate(results, start=1):
             roce_lbl = f"{r.roce_pct:.1f}" + ("*" if r.roce_is_roe_proxy else "")
+            fit = min(100.0, float(r.fit_score or 0))
+            decision, composite, matrix_note = decision_from_metrics(
+                r.pe, None, None, score=fit, signal_label="BUY", scenario_id="multibagger"
+            )
             rows.append(
                 {
                     "S.No.": rank,
                     "Name": r.label,
                     "Ticker": r.ticker,
+                    "Decision": decision,
+                    "Composite": composite if composite == composite else fit,
+                    "Matrix note": matrix_note,
                     "CMP Rs.": r.price,
                     "P/E": r.pe,
                     "Mar Cap Rs.Cr.": r.market_cap_cr,
@@ -236,6 +250,9 @@ Table columns from Yahoo Finance where data exists
         col_cfg = filter_column_config(
             df,
             {
+                "Decision": st.column_config.TextColumn("Decision", width="medium"),
+                "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
+                "Composite": st.column_config.NumberColumn(format="%.1f"),
                 "CMP Rs.": st.column_config.NumberColumn(format="%.2f"),
                 "P/E": st.column_config.NumberColumn(format="%.2f"),
                 "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.2f"),
@@ -264,6 +281,7 @@ Table columns from Yahoo Finance where data exists
             mime="text/csv",
             key=f"{key}_dl",
         )
+        render_decision_matrix_legend()
 
     st.markdown("---")
     st.caption("⚠️ Educational only — confirm fundamentals on Yahoo Finance before investing.")

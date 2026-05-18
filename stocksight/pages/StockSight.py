@@ -1,6 +1,6 @@
 """
-StockSight — Real-time Fundamental + Momentum Screener
-This page provides the main StockSight screener with a top-of-page Scan Now button.
+StockSight — main fundamental + momentum screener (PE, volume, RSI, composite score).
+For: active traders and investors who want one ranked list across Nifty 50/500 or S&P 500.
 """
 
 import streamlit as st
@@ -9,9 +9,12 @@ from datetime import datetime
 from screener import screen_stocks, UNIVERSES, us_market_status_label
 from scan_history_store import append_scan_record
 from ui_components import (
+    filter_column_config,
     first_seen_label,
     notify_watchlist_alerts_screen_df,
+    page_audience_note,
     raw_symbol_from_screen_display,
+    render_decision_matrix_legend,
     render_watchlist_panel,
     safe_set_page_config,
 )
@@ -146,6 +149,12 @@ with col_h2:
     if st.session_state.app1_last_run:
         ts = st.session_state.app1_last_run.strftime("%H:%M:%S  %d %b %Y")
         st.markdown(f'<div class="timestamp"><span class="status-dot"></span>Last run: {ts}</div>', unsafe_allow_html=True)
+
+page_audience_note(
+    "Anyone building a daily or weekly shortlist—beginners can start with Nifty 50; active users can tune PE, volume, and RSI.",
+    "Runs the core screen across your chosen universe, ranks by composite score, and shows table/cards with "
+    "Yahoo / Moneycontrol / TradingView links, optional news enrichment, and watchlist alerts.",
+)
 
 st.markdown("---")
 
@@ -358,9 +367,34 @@ else:
             ],
         )
 
-    st.dataframe(display_df, use_container_width=True, hide_index=False, height=min(620, 60 + len(display_df) * 40))
+    _link_cols = ("Yahoo Finance", "Moneycontrol", "MarketWatch", "TradingView")
+    col_cfg = filter_column_config(
+        display_df,
+        {
+            "Decision": st.column_config.TextColumn("Decision", width="medium"),
+            "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
+            "Composite": st.column_config.NumberColumn("Composite", format="%.1f"),
+            "Price": st.column_config.NumberColumn(format="%.2f"),
+            "PE Ratio": st.column_config.NumberColumn(format="%.1f"),
+            "Volume Ratio": st.column_config.NumberColumn(format="%.2f"),
+            "RSI": st.column_config.NumberColumn(format="%.1f"),
+            "Score": st.column_config.NumberColumn(format="%.1f"),
+            **{
+                name: st.column_config.LinkColumn(name, display_text="Open ↗")
+                for name in _link_cols
+            },
+        },
+    )
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=False,
+        column_config=col_cfg,
+        height=min(620, 60 + len(display_df) * 40),
+    )
     csv = display_df.to_csv(index=False)
     st.download_button(label="⬇ Download Results as CSV", data=csv, file_name=f"stocksight_app1_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", mime="text/csv", key="app1_dl_csv")
+    render_decision_matrix_legend()
 
 st.markdown("---")
 st.markdown(

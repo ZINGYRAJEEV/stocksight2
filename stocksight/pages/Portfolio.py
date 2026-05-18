@@ -1,4 +1,4 @@
-"""Page: Portfolio — simple qty / entry tracking with live MTM from Yahoo (best-effort)."""
+"""Portfolio — tracks qty/entry and live MTM; for holders monitoring P&L and watchlist price/RSI alerts."""
 
 from __future__ import annotations
 
@@ -10,15 +10,22 @@ import yfinance as yf
 
 from screener import compute_rsi, fetch_price_history
 from watchlist_store import list_open_positions, upsert_watchlist_fields
-from ui_components import inject_css, notify_watchlist_alerts_from_metrics, render_watchlist_panel, safe_set_page_config
+from ui_components import (
+    inject_css,
+    notify_watchlist_alerts_from_metrics,
+    page_audience_note,
+    render_watchlist_panel,
+    safe_set_page_config,
+)
 
 safe_set_page_config(page_title="Portfolio | StockSight", page_icon="💼", layout="wide")
 inject_css()
 
 st.markdown("### 💼 Portfolio tracker")
-st.caption(
-    "Positions live in the same JSON store as the watchlist (`stocksight/.watchlist.json`). "
-    "Set **qty** + **entry price** on a symbol to track MTM; clearing qty removes the position fields."
+page_audience_note(
+    "Investors tracking open positions (not a full broker replacement)—pairs with watchlist alerts.",
+    "Stores qty and average entry beside watchlist data, fetches live quotes from Yahoo, shows MTM and optional RSI; "
+    "fires email/watchlist alerts when price or RSI rules hit.",
 )
 
 render_watchlist_panel("pf_wl")

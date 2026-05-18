@@ -1,4 +1,4 @@
-"""Page: Value + Technical — PE 5–15, Vol 1.5–2×, RSI 40–55, near MA"""
+"""Value + Technical — low PE pullbacks to support. For value investors; see in-page Who/What banner."""
 import streamlit as st
 from screener import UNIVERSES
 from signals import scan_value_technical

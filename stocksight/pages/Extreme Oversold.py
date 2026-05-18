@@ -1,4 +1,4 @@
-"""Page: Extreme Oversold — Any PE, Vol ≥2×, RSI <25"""
+"""Extreme Oversold — deep capitulation candidates. For contrarians; see in-page Who/What banner."""
 import streamlit as st
 from screener import UNIVERSES
 from signals import scan_extreme_oversold

@@ -572,9 +572,22 @@ def fetch_price_history(ticker: str, interval_key: str = "1d") -> pd.DataFrame:
     """
     interval_key: '1d' | '1h' | '15m'
     Enough history for MA50 / MACD on daily; intraday uses Yahoo limits.
+
+    NSE/BSE (.NS / .BO): uses ICICI Breeze when [breeze] secrets/env are set,
+    otherwise Yahoo Finance via yfinance.
     """
-    stk = yf.Ticker(ticker)
     empty = pd.DataFrame()
+    if ticker.endswith(".NS") or ticker.endswith(".BO"):
+        try:
+            from breeze_data import fetch_breeze_price_history
+
+            bdf = fetch_breeze_price_history(ticker, interval_key)
+            if bdf is not None and not bdf.empty:
+                return bdf
+        except Exception:
+            pass
+
+    stk = yf.Ticker(ticker)
     try:
         if interval_key == "1d":
             end = datetime.today()
@@ -759,6 +772,117 @@ def compute_score(pe, vol_ratio, rsi):
     return round(pe_score + vol_score + rsi_score, 1)
 
 
+# Buy / Hold / Avoid decision matrix (composite 0–100 + scenario signal overrides)
+DECISION_ZONES: tuple[tuple[float, str, str], ...] = (
+    (80.0, "Strong Buy", "PE + volume + RSI composite ≥ 80 — aligned momentum and valuation."),
+    (60.0, "Buy / Watch", "Composite 60–79 — constructive; confirm with chart/news before entry."),
+    (40.0, "Neutral / Wait", "Composite 40–59 — mixed; avoid aggressive new positions."),
+    (0.0, "Avoid", "Composite < 40 — weak vs standard PE / vol / RSI weights."),
+)
+
+
+def composite_action_zone(score: Optional[float]) -> str:
+    """Map StockSight composite score (0–100) to action zone label."""
+    if score is None:
+        return "—"
+    try:
+        s = float(score)
+        if np.isnan(s):
+            return "—"
+    except (TypeError, ValueError):
+        return "—"
+    for threshold, label, _note in DECISION_ZONES:
+        if s >= threshold:
+            return label
+    return "Avoid"
+
+
+def matrix_decision_note(decision: str) -> str:
+    for _thr, label, note in DECISION_ZONES:
+        if label == decision:
+            return note
+    extra = {
+        "Sell / Trim": "Scenario exit signal — consider reducing or tightening stops.",
+        "Cautious Buy": "Scenario allows entry only with catalyst and tight risk control.",
+        "Neutral / Wait": "No clear edge — wait for confirmation.",
+    }
+    return extra.get(decision, "Educational matrix only — not financial advice.")
+
+
+def matrix_decision(
+    *,
+    score: Optional[float] = None,
+    signal_label: Optional[str] = None,
+    scenario_id: Optional[str] = None,
+) -> str:
+    """
+    Unified buy/sell matrix: scenario signal (BUY/SELL/WAIT) plus composite score when available.
+    """
+    sig = (signal_label or "").upper().replace("HOLD-WAIT", "WAIT").strip()
+    sid = (scenario_id or "").lower()
+
+    if sid == "overbought_exit" or sig == "SELL":
+        return "Sell / Trim"
+    if sid == "volume_no_confirm" or sig == "WAIT":
+        return "Neutral / Wait"
+    if sig == "CAUTIOUS BUY" or sid == "extreme_oversold":
+        zone = composite_action_zone(score) if score is not None else "Buy / Watch"
+        if zone == "Strong Buy":
+            return "Cautious Buy"
+        if zone in ("Buy / Watch", "Neutral / Wait", "Avoid"):
+            return "Cautious Buy" if zone != "Avoid" else "Neutral / Wait"
+        return "Cautious Buy"
+
+    if score is not None:
+        return composite_action_zone(score)
+    if sig == "BUY":
+        return "Buy / Watch"
+    return "Neutral / Wait"
+
+
+def decision_from_metrics(
+    pe: Optional[float],
+    vol_ratio: Optional[float],
+    rsi: Optional[float],
+    *,
+    score: Optional[float] = None,
+    signal_label: Optional[str] = None,
+    scenario_id: Optional[str] = None,
+) -> tuple[str, float, str]:
+    """Returns (decision_label, composite_score, matrix_note)."""
+    comp = score
+    if comp is None and pe is not None and vol_ratio is not None and rsi is not None:
+        try:
+            if not (np.isnan(float(pe)) or np.isnan(float(vol_ratio)) or np.isnan(float(rsi))):
+                comp = compute_score(float(pe), float(vol_ratio), float(rsi))
+        except (TypeError, ValueError):
+            comp = None
+    decision = matrix_decision(score=comp, signal_label=signal_label, scenario_id=scenario_id)
+    comp_out = round(float(comp), 1) if comp is not None and not np.isnan(float(comp)) else float("nan")
+    return decision, comp_out, matrix_decision_note(decision)
+
+
+def add_decision_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add Decision + Matrix note (+ Composite if missing) to a results dataframe."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if "Score" in out.columns and "Composite" not in out.columns:
+        out["Composite"] = out["Score"]
+
+    def _row_decision(row: pd.Series) -> str:
+        pe = row.get("PE Ratio", row.get("PE"))
+        vol = row.get("Volume Ratio", row.get("Vol×"))
+        rsi = row.get("RSI")
+        sc = row.get("Composite", row.get("Score"))
+        dec, _, _ = decision_from_metrics(pe, vol, rsi, score=sc)
+        return dec
+
+    out["Decision"] = out.apply(_row_decision, axis=1)
+    out["Matrix note"] = out["Decision"].map(matrix_decision_note)
+    return out
+
+
 def extract_yfinance_fundamentals(info: dict) -> dict[str, Optional[float]]:
     """Pull ROE / debt / revenue growth from Yahoo `info` (keys vary). Percent-style normalization."""
 
@@ -902,6 +1026,9 @@ def screen_stocks(
             gc = ma_cross_recent(ma20_s, ma50_s, lookback=5)
 
             score    = compute_score(pe, vol_ratio, rsi)
+            decision, _, matrix_note = decision_from_metrics(
+                pe, vol_ratio, rsi, score=score, signal_label="BUY"
+            )
             is_nse   = ticker.endswith(".NS") or ticker.endswith(".BO")
             currency = "₹" if is_nse else "$"
             links    = get_stock_links(ticker)
@@ -928,6 +1055,9 @@ def screen_stocks(
                 "D/E":           fund["debt_equity"],
                 "Rev growth %":  fund["revenue_growth_pct"],
                 "Score":         score,
+                "Composite":     score,
+                "Decision":      decision,
+                "Matrix note":   matrix_note,
                 lk[0]:           links[lk[0]],
                 lk[1]:           links[lk[1]],
                 lk[2]:           links[lk[2]],

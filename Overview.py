@@ -53,6 +53,7 @@ NAV_PAGES = {
     "": [
         st.Page(render_overview, title="Overview", icon="📊", default=True),
         st.Page(page_stocksight, title="StockSight (Main Screener)", icon="📈"),
+        st.Page(page_popular_screens, title="Popular Screens", icon="📋"),
         st.Page(page_watchlist_cross_scan, title="Watchlist Cross-Scan", icon="📌"),
         st.Page(page_scan_history, title="Scan History", icon="🗂️"),
         st.Page(page_portfolio, title="Portfolio", icon="💼"),
@@ -82,7 +83,6 @@ NAV_PAGES = {
         st.Page(page_high_profit_platform, title="High Risk · Platform", icon="🌐"),
     ],
     "🌱 Theme Screens": [
-        st.Page(page_popular_screens, title="Popular Screens", icon="📋", default=False),
         st.Page(page_multibagger, title="Multibagger Theme", icon="🌱"),
     ],
 }
@@ -93,11 +93,24 @@ pg = st.navigation(NAV_PAGES, expanded=True)
 
 with st.sidebar:
     st.markdown("---")
+    try:
+        from breeze_data import breeze_configured, breeze_status_message
+
+        with st.expander("ICICI Breeze API (optional)", expanded=False):
+            st.caption(breeze_status_message())
+            if not breeze_configured():
+                st.caption(
+                    "For NSE/BSE charts via ICICI: register at "
+                    "[Breeze API](https://api.icicidirect.com/apiuser/home), "
+                    "`pip install breeze-connect`, then add `[breeze]` keys to "
+                    "`.streamlit/secrets.toml`. Charts still use **Plotly**; Breeze supplies OHLC data."
+                )
+    except Exception:
+        pass
     st.caption(
-        "📈 StockSight — pick a page above to run scans. "
-        "Under **🎯 Decision Framework**, **9. Buy / Hold / Avoid** is the final decision layer "
-        "(composite score, zones, and action rules) — use it last before acting. "
-        "If the menu is truncated, use **View more** or expand the sidebar (**«**)."
+        "📈 **Popular Screens** sits under the main screener for classic named filters. "
+        "**Buy / Hold / Avoid** is the final decision layer—use it after you have candidates. "
+        "Expand the sidebar (**«**) if the menu is truncated."
     )
 
 pg.run()

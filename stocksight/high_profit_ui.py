@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from high_profit import ARCHETYPES, nav_title
+from screener import composite_action_zone, matrix_decision_note
 
 
 def high_profit_header(archetype_id: str) -> None:
@@ -49,9 +50,13 @@ def high_profit_rank_table(results: list, scan_date: str | None = None) -> None:
 
     rows = []
     for rank, r in enumerate(results, start=1):
+        decision = composite_action_zone(r.score)
         row = {
             "Rank": rank,
             "Ticker": r.ticker,
+            "Decision": decision,
+            "Composite": r.score,
+            "Matrix note": matrix_decision_note(decision),
             "Price": r.price,
             "PE": r.pe if r.pe < 9000 else None,
             "Vol×": r.vol_ratio,
@@ -69,6 +74,9 @@ def high_profit_rank_table(results: list, scan_date: str | None = None) -> None:
 
     df = pd.DataFrame(rows)
     col_cfg = {
+        "Decision": st.column_config.TextColumn("Decision", width="medium"),
+        "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
+        "Composite": st.column_config.NumberColumn("Composite", format="%.1f"),
         "Price": st.column_config.NumberColumn("Price ₹", format="%.0f"),
         "PE": st.column_config.NumberColumn("PE", format="%.1f"),
         "Vol×": st.column_config.NumberColumn("Vol×", format="%.2f"),
