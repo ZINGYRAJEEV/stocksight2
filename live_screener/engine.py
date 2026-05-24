@@ -146,17 +146,19 @@ def get_scan_state() -> ScanState:
 
 
 def _criteria_pass_flags(row: dict[str, Any], cfg: dict[str, Any]) -> dict[str, bool]:
-    """Per-filter pass flags for UI highlighting (rows already passed all gates)."""
+    """Per-filter pass flags for UI highlighting — aligned with `scan_healthy_dip` gates."""
     roe = row.get("roe_pct")
     de = row.get("debt_equity")
     pe = row.get("pe")
     dd = row.get("drawdown_52w_pct")
     rsi = row.get("rsi")
     ma200 = row.get("pct_vs_ma200")
+    max_de = float(cfg.get("max_debt_equity", 1))
 
     return {
         "roe": roe is not None and roe >= float(cfg.get("min_roe_pct", 15)),
-        "debt": de is not None and de <= float(cfg.get("max_debt_equity", 1)),
+        # Banks often omit D/E on Yahoo — same as scan: skip gate when missing.
+        "debt": de is None or de <= max_de,
         "pe": pe is not None and pe <= float(cfg.get("max_pe", 30)),
         "drawdown": dd is not None
         and float(cfg.get("drawdown_min_pct", 20)) <= dd <= float(cfg.get("drawdown_max_pct", 40)),

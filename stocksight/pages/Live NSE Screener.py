@@ -115,7 +115,8 @@ if not rows and st.session_state.live_nse_last_run is None:
 elif not rows:
     st.warning("No names passed all filters this run.")
 else:
-    st.success(f"**{len(rows)}** stocks meet all Healthy Dip conditions (highlighted).")
+    n_pass = sum(1 for r in rows if r.get("all_conditions_met"))
+    st.success(f"**{n_pass}** of **{len(rows)}** stocks meet all Healthy Dip conditions (highlighted).")
     if st.session_state.live_nse_last_run:
         st.caption(f"Last run: {st.session_state.live_nse_last_run.strftime('%H:%M:%S %d %b %Y')}")
 
@@ -126,6 +127,14 @@ else:
     ]
     show_cols = [c for c in show_cols if c in df.columns]
     display = df[show_cols].copy()
+    if "debt_equity" in display.columns:
+        display["debt_equity"] = display["debt_equity"].apply(
+            lambda v: "n/a" if v is None or (isinstance(v, float) and pd.isna(v)) else round(float(v), 2)
+        )
+    if "pct_vs_ma200" in display.columns:
+        display["pct_vs_ma200"] = display["pct_vs_ma200"].apply(
+            lambda v: None if v is None or (isinstance(v, float) and pd.isna(v)) else round(float(v), 1)
+        )
     display.columns = [
         "Ticker", "Price", "ROE %", "D/E", "P/E", "↓52w %", "RSI", "vs 200MA %",
         "Why it fell", "Sector",

@@ -1163,14 +1163,12 @@ def scan_healthy_dip(
             continue
 
         pct_vs_ma200: Optional[float] = None
-        if require_near_ma200:
-            long_hist = fetch_daily_history_min_bars(ticker, 205)
-            if long_hist.empty or len(long_hist) < 200:
-                continue
+        long_hist = fetch_daily_history_min_bars(ticker, 205)
+        if not long_hist.empty and len(long_hist) >= 200:
             ma200 = float(long_hist["Close"].rolling(200).mean().iloc[-1])
-            if ma200 <= 0:
-                continue
-            pct_vs_ma200 = pct_vs_ma(price, ma200)
+            if ma200 > 0:
+                pct_vs_ma200 = pct_vs_ma(price, ma200)
+        if require_near_ma200:
             if pct_vs_ma200 is None:
                 continue
             if pct_vs_ma200 > float(ma200_tolerance_pct):
