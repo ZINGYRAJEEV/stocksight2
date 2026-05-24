@@ -1,65 +1,27 @@
 """
-Overview — StockSight Home / Strategy Dashboard
-Run with: streamlit run app.py
+Overview — StockSight home / strategy dashboard.
+
+Imported by repo-root `Overview.py`, which must call `render_overview()` on every
+Streamlit run (a bare `import *` would cache this module and skip reruns → blank page).
+
+Run: `streamlit run Overview.py` from repo root, or `streamlit run stocksight/app.py`.
 """
 
+from __future__ import annotations
+
 import streamlit as st
-from .screener import UNIVERSES
 
-st.set_page_config(
-    page_title="Overview | StockSight",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+# Package import when started via `streamlit run Overview.py` (from stocksight.app)
+# Fallback flat import when `streamlit run stocksight/app.py` puts this folder on sys.path
+try:
+    from .screener import SPY_BENCHMARK, index_regime, NIFTY_BENCHMARK
+except ImportError:
+    from screener import SPY_BENCHMARK, index_regime, NIFTY_BENCHMARK
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
-:root {
-    color-scheme: light;
-    --app-bg: #f8fafc;
-    --app-text: #111827;
-    --button-bg: linear-gradient(135deg,#25d366,#1aa34b);
-}
-html, body, [class*="css"] {
-    font-family: 'IBM Plex Sans', sans-serif;
-    background-color: var(--app-bg);
-    color: var(--app-text);
-}
-.stButton > button {
-    background: var(--button-bg);
-    color: #000; font-family:'IBM Plex Mono',monospace;
-    font-weight:700; font-size:0.82rem; border:none;
-    border-radius:6px; padding:10px 24px; letter-spacing:1px;
-    text-transform:uppercase; cursor:pointer; width:100%;
-}
-[data-testid="stSidebar"] { background:#ffffff; border-right:1px solid #d4d4d4; color:#111827; }
-[data-testid="stSidebar"] label { color:#111827 !important; font-size:0.8rem; }
-hr { border-color:#d4d4d4 !important; }
-</style>
-""", unsafe_allow_html=True)
 
-# ── Header ────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div style='margin-bottom:24px;'>
-    <div style='font-family:"IBM Plex Mono",monospace; font-size:2.4rem;
-                font-weight:700; color:#00e5a0; letter-spacing:-0.5px;'>
-        📈 StockSight
-    </div>
-    <div style='font-family:"IBM Plex Mono",monospace; font-size:0.82rem;
-                color:#4a7a9b; letter-spacing:2.5px; text-transform:uppercase; margin-top:3px;'>
-        Real-time Signal Screener — Know Exactly When to Buy & Sell
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown("---")
-
-# ── Strategy Map ──────────────────────────────────────────────────────────────
-st.markdown("### 🗺️ Signal Strategy Map")
-st.caption("Six scenarios covering the full market cycle. Click a page in the sidebar to run any screen.")
-
+@st.cache_data(ttl=300)
+def _cached_index_regime(symbol: str):
+    return index_regime(symbol)
 STRATEGY_CARDS = [
     {
         "emoji": "📉", "title": "Oversold Bounce",
@@ -84,6 +46,14 @@ STRATEGY_CARDS = [
         "timeframe": "Long · 1–6 months",
         "edge": "Undervalued names pulling back to MA — slow but high conviction.",
         "color": "#f0b429",
+    },
+    {
+        "emoji": "🩺", "title": "Healthy Dip",
+        "signal": "BUY", "sig_color": "#00e5a0", "sig_bg": "#0a2e1e",
+        "pe": "≤ 30", "vol": "any", "rsi": "≤ 40",
+        "timeframe": "Position · 3–12+ months",
+        "edge": "Strong ROE & low debt in a 20–40% pullback near the 200-day MA.",
+        "color": "#7ec8e3",
     },
     {
         "emoji": "🔴", "title": "Overbought / Exit",
@@ -111,94 +81,188 @@ STRATEGY_CARDS = [
     },
 ]
 
-col_pairs = [STRATEGY_CARDS[i:i+3] for i in range(0, 6, 3)]
-for trio in col_pairs:
-    cols = st.columns(3)
-    for col, card in zip(cols, trio):
+
+def render_overview() -> None:
+    try:
+        st.set_page_config(
+            page_title="Overview | StockSight",
+            page_icon="📈",
+            layout="wide",
+            initial_sidebar_state="expanded",
+        )
+    except st.errors.StreamlitAPIException:
+        pass
+
+    st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
+:root {
+    color-scheme: light;
+    --app-bg: #f8fafc;
+    --app-text: #111827;
+    --button-bg: linear-gradient(135deg,#25d366,#1aa34b);
+}
+section.main,
+section.main .block-container {
+    font-family: 'IBM Plex Sans', sans-serif;
+    background-color: var(--app-bg);
+    color: var(--app-text);
+}
+.stButton > button {
+    background: var(--button-bg);
+    color: #000; font-family:'IBM Plex Mono',monospace;
+    font-weight:700; font-size:0.82rem; border:none;
+    border-radius:6px; padding:10px 24px; letter-spacing:1px;
+    text-transform:uppercase; cursor:pointer; width:100%;
+}
+section.main hr { border-color:#d4d4d4 !important; }
+</style>
+""", unsafe_allow_html=True)
+
+    # ── Header ────────────────────────────────────────────────────────────
+    st.markdown("""
+<div style='margin-bottom:24px;'>
+    <div style='font-family:"IBM Plex Mono",monospace; font-size:2.4rem;
+                font-weight:700; color:#00e5a0; letter-spacing:-0.5px;'>
+        📈 StockSight
+    </div>
+    <div style='font-family:"IBM Plex Mono",monospace; font-size:0.82rem;
+                color:#4a7a9b; letter-spacing:2.5px; text-transform:uppercase; margin-top:3px;'>
+        Overview · Real-time Signal Screener — Know Exactly When to Buy & Sell
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    nifty = _cached_index_regime(NIFTY_BENCHMARK)
+    spy = _cached_index_regime(SPY_BENCHMARK)
+
+    def _fmt(name: str, d: dict) -> str:
+        if d.get("error"):
+            return f"{name}: unavailable ({d['error']})"
+        flag = "above" if d.get("above_ma") else "below"
+        pct = d.get("pct_vs_ma")
+        pct_s = f"{pct:+.1f}%" if pct is not None else "n/a"
+        return (
+            f"{name}: last {d.get('price')} vs 200-DMA {d.get('ma')} "
+            f"(price {flag} MA, {pct_s} vs MA)"
+        )
+
+    st.info(
+        "**Market regime — 200-day MA context**\n\n"
+        f"- {_fmt('Nifty 50 (Yahoo ^NSEI)', nifty)}\n"
+        f"- {_fmt('US equities (SPY proxy)', spy)}\n\n"
+        "_Educational context only; uses Yahoo daily closes and may be unavailable if data limits apply._"
+    )
+
+    # ── Strategy Map ──────────────────────────────────────────────────────
+    st.markdown("### 🗺️ Signal Strategy Map")
+    st.info(
+        "**Who StockSight is for:** self-directed investors and traders screening NSE / US names with Yahoo data.\n\n"
+        "**How to use the app:** start with **StockSight (Main Screener)** or **Popular Screens** for ideas → "
+        "refine with **Strategy** / **Theme** pages → save symbols to the watchlist → "
+        "use **Buy / Hold / Avoid** last for zone-based decisions. **Portfolio** tracks entries; **Scan History** logs past runs."
+    )
+    st.caption(
+        "Strategy modules cover momentum, value, dips, and exits. Open any sidebar page to run a screen."
+    )
+
+    col_pairs = [STRATEGY_CARDS[i : i + 3] for i in range(0, len(STRATEGY_CARDS), 3)]
+    for trio in col_pairs:
+        cols = st.columns(3)
+        for col, card in zip(cols, trio):
+            with col:
+                st.markdown(f"""
+<div style='background:#0f1724; border:1px solid #1c2e44;
+            border-top:3px solid {card["color"]};
+            border-radius:8px; padding:18px 16px; height:100%;
+            margin-bottom:14px;'>
+    <div style='display:flex; justify-content:space-between; align-items:flex-start;'>
+        <span style='font-size:1.6rem;'>{card["emoji"]}</span>
+        <span style='font-size:9px; background:{card["sig_bg"]}; color:{card["sig_color"]};
+                     border:1px solid {card["sig_color"]}55; border-radius:12px;
+                     padding:2px 9px; font-weight:700; letter-spacing:1px;
+                     font-family:"IBM Plex Mono",monospace;'>
+            {card["signal"]}
+        </span>
+    </div>
+    <div style='font-family:"IBM Plex Mono",monospace; font-weight:700;
+                color:#fff; font-size:0.95rem; margin:10px 0 6px;'>
+        {card["title"]}
+    </div>
+    <div style='font-size:0.72rem; color:#5a8090; margin-bottom:12px;'>
+        {card["edge"]}
+    </div>
+    <div style='display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;'>
+        <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
+                     color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
+            PE {card["pe"]}
+        </span>
+        <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
+                     color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
+            Vol {card["vol"]}
+        </span>
+        <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
+                     color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
+            RSI {card["rsi"]}
+        </span>
+    </div>
+    <div style='font-size:9px; color:#4a7a9b; font-family:"IBM Plex Mono",monospace;
+                border-top:1px solid #1c2e44; padding-top:8px; margin-top:4px;'>
+        ⏱ {card["timeframe"]}
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ── How it works ──────────────────────────────────────────────────────
+    st.markdown("### 📖 How Trade Plans Are Generated")
+
+    c1, c2, c3, c4 = st.columns(4)
+    steps = [
+        ("1", "Screen", "#00e5a0",
+         "Each page scans your chosen universe (Nifty 50/500 or S&P 500) using scenario-specific PE, Volume, and RSI filters."),
+        ("2", "Detect", "#4db8ff",
+         "For each passing stock, candle patterns, RSI direction, and price-vs-MA are checked to confirm signal quality."),
+        ("3", "Calculate", "#f0b429",
+         "Entry, Stop Loss (below swing low), and three Targets (1×/2×/3× risk) are computed automatically from live price data."),
+        ("4", "Act", "#ff9d42",
+         "Each card shows Confidence (High/Med/Low), Timeframe, and direct links to Yahoo Finance, Moneycontrol, and TradingView."),
+    ]
+    for col, (num, title, color, desc) in zip([c1, c2, c3, c4], steps):
         with col:
             st.markdown(f"""
-            <div style='background:#0f1724; border:1px solid #1c2e44;
-                        border-top:3px solid {card["color"]};
-                        border-radius:8px; padding:18px 16px; height:100%;
-                        margin-bottom:14px;'>
-                <div style='display:flex; justify-content:space-between; align-items:flex-start;'>
-                    <span style='font-size:1.6rem;'>{card["emoji"]}</span>
-                    <span style='font-size:9px; background:{card["sig_bg"]}; color:{card["sig_color"]};
-                                 border:1px solid {card["sig_color"]}55; border-radius:12px;
-                                 padding:2px 9px; font-weight:700; letter-spacing:1px;
-                                 font-family:"IBM Plex Mono",monospace;'>
-                        {card["signal"]}
-                    </span>
-                </div>
-                <div style='font-family:"IBM Plex Mono",monospace; font-weight:700;
-                            color:#fff; font-size:0.95rem; margin:10px 0 6px;'>
-                    {card["title"]}
-                </div>
-                <div style='font-size:0.72rem; color:#5a8090; margin-bottom:12px;'>
-                    {card["edge"]}
-                </div>
-                <div style='display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;'>
-                    <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
-                                 color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
-                        PE {card["pe"]}
-                    </span>
-                    <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
-                                 color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
-                        Vol {card["vol"]}
-                    </span>
-                    <span style='font-size:9px; background:#0a1525; border:1px solid #1c2e44;
-                                 color:#7fa8c4; border-radius:4px; padding:2px 7px;'>
-                        RSI {card["rsi"]}
-                    </span>
-                </div>
-                <div style='font-size:9px; color:#4a7a9b; font-family:"IBM Plex Mono",monospace;
-                            border-top:1px solid #1c2e44; padding-top:8px; margin-top:4px;'>
-                    ⏱ {card["timeframe"]}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+<div style='background:#0f1724; border:1px solid #1c2e44; border-radius:8px;
+            padding:16px; text-align:center;'>
+    <div style='font-family:"IBM Plex Mono",monospace; font-size:1.8rem;
+                color:{color}; font-weight:700;'>{num}</div>
+    <div style='font-weight:600; color:#c8d8e8; margin:6px 0 8px;'>{title}</div>
+    <div style='font-size:0.75rem; color:#5a8090; line-height:1.6;'>{desc}</div>
+</div>
+""", unsafe_allow_html=True)
 
-st.markdown("---")
+    st.markdown("---")
 
-# ── How it works ──────────────────────────────────────────────────────────────
-st.markdown("### 📖 How Trade Plans Are Generated")
+    # ── Quick-start ───────────────────────────────────────────────────────
+    st.markdown("### 🚀 Quick Start")
+    st.markdown("""
+Use the **sidebar** to open **Overview** (this page), the **StockSight** screener, the six scenario pages, or **Buy / Hold / Avoid**.
 
-c1, c2, c3, c4 = st.columns(4)
-steps = [
-    ("1", "Screen", "#00e5a0",
-     "Each page scans your chosen universe (Nifty 50/500 or S&P 500) using scenario-specific PE, Volume, and RSI filters."),
-    ("2", "Detect", "#4db8ff",
-     "For each passing stock, candle patterns, RSI direction, and price-vs-MA are checked to confirm signal quality."),
-    ("3", "Calculate", "#f0b429",
-     "Entry, Stop Loss (below swing low), and three Targets (1×/2×/3× risk) are computed automatically from live price data."),
-    ("4", "Act", "#ff9d42",
-     "Each card shows Confidence (High/Med/Low), Timeframe, and direct links to Yahoo Finance, Moneycontrol, and TradingView."),
-]
-for col, (num, title, color, desc) in zip([c1, c2, c3, c4], steps):
-    with col:
-        st.markdown(f"""
-        <div style='background:#0f1724; border:1px solid #1c2e44; border-radius:8px;
-                    padding:16px; text-align:center;'>
-            <div style='font-family:"IBM Plex Mono",monospace; font-size:1.8rem;
-                        color:{color}; font-weight:700;'>{num}</div>
-            <div style='font-weight:600; color:#c8d8e8; margin:6px 0 8px;'>{title}</div>
-            <div style='font-size:0.75rem; color:#5a8090; line-height:1.6;'>{desc}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-st.markdown("---")
-
-# ── Quick-start ───────────────────────────────────────────────────────────────
-st.markdown("### 🚀 Quick Start")
-st.markdown("""
-Use the **sidebar** to navigate to any of the 6 signal pages. There is also a new **Buy / Hold / Avoid Decision Guide** page in the Streamlit page menu with indicator zones, composite score heatmap, and action rules.
-- Lets you choose your stock universe (Nifty 50, Nifty 500, or S&P 500)
-- Has a one-click **SCAN NOW** button
-- Shows results as **Cards** (full trade plan per stock) or **Table** (compact overview)
-- Every matched stock has live links to Yahoo Finance, Moneycontrol/MarketWatch, and TradingView
+On most scan pages you choose a universe (Nifty 50, Nifty 500, or S&P 500), tune filters, run **SCAN NOW** (or the page’s fetch button), and read results as **Cards** or **Table**, with links to Yahoo Finance, Moneycontrol / MarketWatch, and TradingView where applicable.
 """)
 
-st.markdown("""
+    st.markdown("### 🆕 Update — Buy / Hold / Avoid")
+    st.markdown("""
+The **Buy / Hold / Avoid** page is laid out for a faster workflow: **Settings**, **Criteria**, and **Filters** sit at the top; a **progress bar and status line** appear **above** **Fetch Stock List** while the full universe loads from Yahoo Finance.
+
+After the list loads you can narrow rows by **Composite Action Zone** (Strong Buy through Avoid) and a **ticker** substring filter, then switch between **Table** and **Cards**. Cards include confidence styling, PE / volume / RSI blocks, and research links (Yahoo Finance, Moneycontrol, **The Hindu BusinessLine**). Use **Preview news links for** to jump straight to news and search pages for a selected symbol.
+
+The educational blocks (**indicator zones**, **composite score heatmap**, **decision matrix**, example score bar) stay **below** the interactive results so you can scan first and read the reference material when you need it.
+""")
+
+    st.markdown("""
 <div style='background:#0f1724; border:1px solid #1c3550; border-radius:8px;
             padding:14px 18px; margin-top:12px; font-size:0.78rem; color:#5a8090;'>
     ⚠️ <b style='color:#7fa8c4;'>Disclaimer:</b> StockSight is for educational and informational purposes only.
@@ -206,3 +270,7 @@ st.markdown("""
     a registered financial advisor before making investment decisions.
 </div>
 """, unsafe_allow_html=True)
+
+
+if __name__ == "__main__":
+    render_overview()
