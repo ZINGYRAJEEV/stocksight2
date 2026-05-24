@@ -51,6 +51,18 @@ def page_value_technical() -> None:
     exec_stocksight_page("Value Technical.py")
 
 
+def page_healthy_dip() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Healthy Dip.py")
+
+
+def page_live_nse_screener() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Live NSE Screener.py")
+
+
 def page_overbought_exit() -> None:
     from stocksight_page_loader import exec_stocksight_page
 

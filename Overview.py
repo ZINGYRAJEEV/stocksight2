@@ -33,6 +33,8 @@ from navigation_pages import (
     page_scan_history,
     page_stocksight,
     page_value_technical,
+    page_healthy_dip,
+    page_live_nse_screener,
     page_volume_no_confirm,
     page_watchlist_cross_scan,
 )
@@ -53,6 +55,7 @@ NAV_PAGES = {
     "": [
         st.Page(render_overview, title="Overview", icon="📊", default=True),
         st.Page(page_stocksight, title="StockSight (Main Screener)", icon="📈"),
+        st.Page(page_live_nse_screener, title="Live NSE Screener", icon="📡"),
         st.Page(page_popular_screens, title="Popular Screens", icon="📋"),
         st.Page(page_watchlist_cross_scan, title="Watchlist Cross-Scan", icon="📌"),
         st.Page(page_scan_history, title="Scan History", icon="🗂️"),
@@ -63,6 +66,7 @@ NAV_PAGES = {
         st.Page(page_oversold_bounce, title="Oversold Bounce", icon="📉"),
         st.Page(page_extreme_oversold, title="Extreme Oversold", icon="⚡"),
         st.Page(page_value_technical, title="Value Technical", icon="💎"),
+        st.Page(page_healthy_dip, title="Healthy Dip", icon="🩺"),
     ],
     "📉 Risk & Exit Modules": [
         st.Page(page_overbought_exit, title="Overbought Exit", icon="🔴"),

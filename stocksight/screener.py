@@ -666,6 +666,542 @@ def fetch_quote_news(raw_ticker: str, limit: int = 3) -> list[str]:
         return []
 
 
+_RECOMMENDATION_LABELS: dict[str, str] = {
+    "strong_buy": "Strong Buy",
+    "buy": "Buy",
+    "hold": "Hold",
+    "sell": "Sell",
+    "strong_sell": "Strong Sell",
+    "underperform": "Underperform",
+    "outperform": "Outperform",
+    "none": "—",
+}
+
+
+def raw_ticker_from_display(display_ticker: str, universe_name: str = "") -> str:
+    """Map table ticker to yfinance symbol (e.g. RELIANCE → RELIANCE.NS)."""
+    s = str(display_ticker or "").strip()
+    if not s:
+        return ""
+    up = s.upper()
+    if up.endswith(".NS") or up.endswith(".BO"):
+        return s
+    if "NSE" in str(universe_name).upper():
+        return f"{s}.NS"
+    return s
+
+
+def _format_recommendation_key(key: Optional[str]) -> str:
+    if not key:
+        return "—"
+    k = str(key).strip().lower().replace(" ", "_")
+    return _RECOMMENDATION_LABELS.get(k, key.replace("_", " ").title())
+
+
+def _ratings_breakdown_from_frame(rec: pd.DataFrame) -> str:
+    """Latest period row from yfinance `recommendations` (0m = current month)."""
+    if rec is None or rec.empty:
+        return ""
+    row = rec.iloc[0]
+    parts: list[str] = []
+    for col, label in (
+        ("strongBuy", "Strong Buy"),
+        ("buy", "Buy"),
+        ("hold", "Hold"),
+        ("sell", "Sell"),
+        ("strongSell", "Strong Sell"),
+    ):
+        try:
+            n = int(row[col])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if n > 0:
+            parts.append(f"{n} {label}")
+    return ", ".join(parts)
+
+
+def fetch_analyst_recommendation(raw_ticker: str, *, current_price: Optional[float] = None) -> dict[str, Any]:
+    """
+    Analyst consensus from Yahoo Finance (`Ticker.info` + `recommendations`).
+    Best-effort; NSE coverage varies. Educational only.
+    """
+    empty: dict[str, Any] = {
+        "consensus": None,
+        "mean_score": None,
+        "analyst_count": None,
+        "target_mean": None,
+        "target_high": None,
+        "target_low": None,
+        "upside_pct": None,
+        "ratings_breakdown": "",
+        "summary": "—",
+    }
+    if not raw_ticker:
+        return empty
+
+    try:
+        stk = yf.Ticker(raw_ticker)
+        info = stk.info or {}
+    except Exception:
+        return empty
+
+    def _gf(keys: tuple[str, ...]) -> Optional[float]:
+        for k in keys:
+            v = info.get(k)
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+                if np.isnan(fv):
+                    continue
+                return fv
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    key_raw = info.get("recommendationKey") or info.get("recommendation_key")
+    consensus = _format_recommendation_key(key_raw if key_raw else None)
+    mean_score = _gf(("recommendationMean", "recommendation_mean"))
+    analyst_count = info.get("numberOfAnalystOpinions") or info.get("number_of_analyst_opinions")
+    try:
+        analyst_count = int(analyst_count) if analyst_count is not None else None
+    except (TypeError, ValueError):
+        analyst_count = None
+
+    target_mean = _gf(("targetMeanPrice", "target_mean_price"))
+    target_high = _gf(("targetHighPrice", "target_high_price"))
+    target_low = _gf(("targetLowPrice", "target_low_price"))
+
+    px = current_price
+    if px is None:
+        px = _gf(("currentPrice", "regularMarketPrice", "previousClose"))
+
+    upside_pct: Optional[float] = None
+    if px and px > 0 and target_mean and target_mean > 0:
+        upside_pct = round((target_mean / px - 1.0) * 100.0, 1)
+
+    breakdown = ""
+    try:
+        rec = stk.recommendations
+        if rec is not None and not rec.empty:
+            breakdown = _ratings_breakdown_from_frame(rec)
+    except Exception:
+        pass
+
+    summary_parts = [consensus]
+    if mean_score is not None:
+        summary_parts.append(f"mean {mean_score:.2f}/5")
+    if analyst_count is not None:
+        summary_parts.append(f"{analyst_count} analysts")
+    if target_mean is not None:
+        summary_parts.append(f"target {target_mean:.2f}")
+    if upside_pct is not None:
+        summary_parts.append(f"upside {upside_pct:+.1f}%")
+    summary = " · ".join(p for p in summary_parts if p and p != "—") or "—"
+    if breakdown:
+        summary = f"{summary} ({breakdown})" if summary != "—" else breakdown
+
+    return {
+        "consensus": consensus if consensus != "—" else None,
+        "mean_score": round(mean_score, 3) if mean_score is not None else None,
+        "analyst_count": analyst_count,
+        "target_mean": round(target_mean, 2) if target_mean is not None else None,
+        "target_high": round(target_high, 2) if target_high is not None else None,
+        "target_low": round(target_low, 2) if target_low is not None else None,
+        "upside_pct": upside_pct,
+        "ratings_breakdown": breakdown,
+        "summary": summary,
+    }
+
+
+def enrich_dataframe_analyst_recommendations(
+    df: pd.DataFrame,
+    *,
+    universe_name: str = "",
+    ticker_col: str = "Ticker",
+    raw_ticker_col: Optional[str] = None,
+    delay_sec: float = 0.2,
+) -> pd.DataFrame:
+    """
+    Add analyst recommendation columns via per-row Yahoo Finance calls.
+    Use on export-sized result sets only (rate-limit aware).
+    """
+    if df is None or df.empty:
+        return df
+
+    out = df.copy()
+    price_col = "Price" if "Price" in out.columns else None
+
+    consensus_l: list[Optional[str]] = []
+    mean_l: list[Optional[float]] = []
+    count_l: list[Optional[int]] = []
+    tgt_l: list[Optional[float]] = []
+    upside_l: list[Optional[float]] = []
+    breakdown_l: list[str] = []
+    summary_l: list[str] = []
+
+    for idx, row in out.iterrows():
+        if raw_ticker_col and raw_ticker_col in out.columns:
+            raw = str(row[raw_ticker_col] or "").strip()
+        else:
+            raw = raw_ticker_from_display(str(row.get(ticker_col, "")), universe_name)
+        px = None
+        if price_col:
+            try:
+                px = float(row[price_col])
+            except (TypeError, ValueError):
+                px = None
+        rec = fetch_analyst_recommendation(raw, current_price=px)
+        consensus_l.append(rec.get("consensus"))
+        mean_l.append(rec.get("mean_score"))
+        count_l.append(rec.get("analyst_count"))
+        tgt_l.append(rec.get("target_mean"))
+        upside_l.append(rec.get("upside_pct"))
+        breakdown_l.append(rec.get("ratings_breakdown") or "")
+        summary_l.append(rec.get("summary") or "—")
+        if delay_sec > 0:
+            time.sleep(delay_sec)
+
+    out["Analyst consensus"] = consensus_l
+    out["Analyst mean (1-5)"] = mean_l
+    out["Analyst count"] = count_l
+    out["Analyst target mean"] = tgt_l
+    out["Upside to target %"] = upside_l
+    out["Analyst ratings mix"] = breakdown_l
+    out["Analyst recommendation"] = summary_l
+    return out
+
+
+def _return_pct_over_bars(closes: pd.Series, bars: int) -> Optional[float]:
+    if closes is None or len(closes) < bars + 1:
+        return None
+    try:
+        s0 = float(closes.iloc[-(bars + 1)])
+        s1 = float(closes.iloc[-1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if s0 <= 0:
+        return None
+    return round((s1 / s0 - 1.0) * 100.0, 1)
+
+
+def fetch_historical_summary(
+    raw_ticker: str,
+    *,
+    current_price: Optional[float] = None,
+    hist: Optional[pd.DataFrame] = None,
+) -> dict[str, Any]:
+    """
+    ~1 year of daily OHLCV from Yahoo — returns summary stats for table/CSV columns.
+    """
+    empty: dict[str, Any] = {
+        "hist_start": None,
+        "hist_end": None,
+        "high_52w": None,
+        "low_52w": None,
+        "pct_below_52w_high": None,
+        "return_1m_pct": None,
+        "return_3m_pct": None,
+        "return_6m_pct": None,
+        "return_1y_pct": None,
+        "avg_volume_20d": None,
+        "summary": "—",
+        "detail": "—",
+    }
+    if not raw_ticker:
+        return empty
+
+    try:
+        if hist is None or hist.empty:
+            hist = yf.Ticker(raw_ticker).history(period="1y", interval="1d", auto_adjust=True)
+    except Exception:
+        return empty
+
+    if hist is None or hist.empty or len(hist) < 22:
+        return empty
+
+    closes = hist_series(hist, "Close") if "Close" not in hist.columns else hist["Close"].astype(float)
+    highs = hist_series(hist, "High")
+    lows = hist_series(hist, "Low")
+    vols = hist_series(hist, "Volume")
+
+    if closes.empty:
+        return empty
+
+    px = current_price
+    if px is None:
+        try:
+            px = float(closes.iloc[-1])
+        except (TypeError, ValueError):
+            px = None
+
+    high_52w = float(highs.max()) if not highs.empty else None
+    low_52w = float(lows.min()) if not lows.empty else None
+
+    pct_below: Optional[float] = None
+    if px and high_52w and high_52w > 0:
+        pct_below = round((1.0 - px / high_52w) * 100.0, 1)
+
+    r1m = _return_pct_over_bars(closes, 21)
+    r3m = _return_pct_over_bars(closes, 63)
+    r6m = _return_pct_over_bars(closes, 126)
+    r1y = _return_pct_over_bars(closes, min(252, len(closes) - 1))
+
+    avg_vol = None
+    if not vols.empty and len(vols) >= 20:
+        avg_vol = round(float(vols.iloc[-20:].mean()), 0)
+
+    try:
+        hist_start = str(closes.index[0])[:10]
+        hist_end = str(closes.index[-1])[:10]
+    except Exception:
+        hist_start = hist_end = None
+
+    parts = []
+    if r1m is not None:
+        parts.append(f"1M {r1m:+.1f}%")
+    if r3m is not None:
+        parts.append(f"3M {r3m:+.1f}%")
+    if r6m is not None:
+        parts.append(f"6M {r6m:+.1f}%")
+    if r1y is not None:
+        parts.append(f"1Y {r1y:+.1f}%")
+    if pct_below is not None:
+        parts.append(f"{pct_below:.0f}% below 52w high")
+    summary = " · ".join(parts) if parts else "—"
+
+    detail_bits = [
+        f"Range {hist_start} → {hist_end}" if hist_start and hist_end else "",
+    ]
+    if high_52w is not None and low_52w is not None:
+        detail_bits.append(f"52w H {high_52w:.2f} / L {low_52w:.2f}")
+    if avg_vol is not None:
+        detail_bits.append(f"avg vol 20d {avg_vol:,.0f}")
+    detail = " · ".join(b for b in detail_bits if b) or summary
+
+    return {
+        "hist_start": hist_start,
+        "hist_end": hist_end,
+        "high_52w": round(high_52w, 2) if high_52w is not None else None,
+        "low_52w": round(low_52w, 2) if low_52w is not None else None,
+        "pct_below_52w_high": pct_below,
+        "return_1m_pct": r1m,
+        "return_3m_pct": r3m,
+        "return_6m_pct": r6m,
+        "return_1y_pct": r1y,
+        "avg_volume_20d": avg_vol,
+        "summary": summary,
+        "detail": detail,
+    }
+
+
+def _analyst_from_info(stk: yf.Ticker, info: dict, *, current_price: Optional[float] = None) -> dict[str, Any]:
+    """Analyst block using an already-open Ticker + info dict."""
+
+    def _gf(keys: tuple[str, ...]) -> Optional[float]:
+        for k in keys:
+            v = info.get(k)
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+                if np.isnan(fv):
+                    continue
+                return fv
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    key_raw = info.get("recommendationKey") or info.get("recommendation_key")
+    consensus = _format_recommendation_key(key_raw if key_raw else None)
+    mean_score = _gf(("recommendationMean", "recommendation_mean"))
+    analyst_count = info.get("numberOfAnalystOpinions") or info.get("number_of_analyst_opinions")
+    try:
+        analyst_count = int(analyst_count) if analyst_count is not None else None
+    except (TypeError, ValueError):
+        analyst_count = None
+
+    target_mean = _gf(("targetMeanPrice", "target_mean_price"))
+    target_high = _gf(("targetHighPrice", "target_high_price"))
+    target_low = _gf(("targetLowPrice", "target_low_price"))
+
+    px = current_price
+    if px is None:
+        px = _gf(("currentPrice", "regularMarketPrice", "previousClose"))
+
+    upside_pct: Optional[float] = None
+    if px and px > 0 and target_mean and target_mean > 0:
+        upside_pct = round((target_mean / px - 1.0) * 100.0, 1)
+
+    breakdown = ""
+    try:
+        rec = stk.recommendations
+        if rec is not None and not rec.empty:
+            breakdown = _ratings_breakdown_from_frame(rec)
+    except Exception:
+        pass
+
+    summary_parts = [consensus]
+    if mean_score is not None:
+        summary_parts.append(f"mean {mean_score:.2f}/5")
+    if analyst_count is not None:
+        summary_parts.append(f"{analyst_count} analysts")
+    if target_mean is not None:
+        summary_parts.append(f"target {target_mean:.2f}")
+    if upside_pct is not None:
+        summary_parts.append(f"upside {upside_pct:+.1f}%")
+    summary = " · ".join(p for p in summary_parts if p and p != "—") or "—"
+    if breakdown:
+        summary = f"{summary} ({breakdown})" if summary != "—" else breakdown
+
+    return {
+        "consensus": consensus if consensus != "—" else None,
+        "mean_score": round(mean_score, 3) if mean_score is not None else None,
+        "analyst_count": analyst_count,
+        "target_mean": round(target_mean, 2) if target_mean is not None else None,
+        "target_high": round(target_high, 2) if target_high is not None else None,
+        "target_low": round(target_low, 2) if target_low is not None else None,
+        "upside_pct": upside_pct,
+        "ratings_breakdown": breakdown,
+        "summary": summary,
+    }
+
+
+def enrich_dataframe_yahoo_context(
+    df: pd.DataFrame,
+    *,
+    universe_name: str = "",
+    ticker_col: str = "Ticker",
+    raw_ticker_col: Optional[str] = None,
+    include_analyst: bool = True,
+    include_history: bool = True,
+    delay_sec: float = 0.15,
+) -> pd.DataFrame:
+    """
+    One Yahoo Ticker fetch per row — analyst consensus + ~1y historical summary columns.
+    """
+    if df is None or df.empty or (not include_analyst and not include_history):
+        return df
+
+    out = df.copy()
+    price_col = "Price" if "Price" in out.columns else None
+
+    analyst_cols: dict[str, list] = {
+        "Analyst consensus": [],
+        "Analyst mean (1-5)": [],
+        "Analyst count": [],
+        "Analyst target mean": [],
+        "Upside to target %": [],
+        "Analyst ratings mix": [],
+        "Analyst recommendation": [],
+    }
+    hist_cols: dict[str, list] = {
+        "Hist start": [],
+        "Hist end": [],
+        "52w high": [],
+        "52w low": [],
+        "% below 52w high": [],
+        "Return 1M %": [],
+        "Return 3M %": [],
+        "Return 6M %": [],
+        "Return 1Y %": [],
+        "Avg volume 20d": [],
+        "Historical snapshot": [],
+        "Historical detail": [],
+    }
+
+    for _, row in out.iterrows():
+        if raw_ticker_col and raw_ticker_col in out.columns:
+            raw = str(row[raw_ticker_col] or "").strip()
+        else:
+            raw = raw_ticker_from_display(str(row.get(ticker_col, "")), universe_name)
+
+        px = None
+        if price_col:
+            try:
+                px = float(row[price_col])
+            except (TypeError, ValueError):
+                px = None
+
+        hist_df: Optional[pd.DataFrame] = None
+        try:
+            stk = yf.Ticker(raw)
+        except Exception:
+            stk = None
+
+        if include_history and stk is not None:
+            try:
+                hist_df = stk.history(period="1y", interval="1d", auto_adjust=True)
+            except Exception:
+                hist_df = None
+
+        if include_analyst:
+            try:
+                if stk is not None:
+                    info = stk.info or {}
+                    rec = _analyst_from_info(stk, info, current_price=px)
+                else:
+                    rec = fetch_analyst_recommendation(raw, current_price=px)
+            except Exception:
+                rec = fetch_analyst_recommendation(raw, current_price=px)
+            analyst_cols["Analyst consensus"].append(rec.get("consensus"))
+            analyst_cols["Analyst mean (1-5)"].append(rec.get("mean_score"))
+            analyst_cols["Analyst count"].append(rec.get("analyst_count"))
+            analyst_cols["Analyst target mean"].append(rec.get("target_mean"))
+            analyst_cols["Upside to target %"].append(rec.get("upside_pct"))
+            analyst_cols["Analyst ratings mix"].append(rec.get("ratings_breakdown") or "")
+            analyst_cols["Analyst recommendation"].append(rec.get("summary") or "—")
+        elif include_history:
+            # still need delay if only history
+            pass
+
+        if include_history:
+            h = fetch_historical_summary(raw, current_price=px, hist=hist_df)
+            hist_cols["Hist start"].append(h.get("hist_start"))
+            hist_cols["Hist end"].append(h.get("hist_end"))
+            hist_cols["52w high"].append(h.get("high_52w"))
+            hist_cols["52w low"].append(h.get("low_52w"))
+            hist_cols["% below 52w high"].append(h.get("pct_below_52w_high"))
+            hist_cols["Return 1M %"].append(h.get("return_1m_pct"))
+            hist_cols["Return 3M %"].append(h.get("return_3m_pct"))
+            hist_cols["Return 6M %"].append(h.get("return_6m_pct"))
+            hist_cols["Return 1Y %"].append(h.get("return_1y_pct"))
+            hist_cols["Avg volume 20d"].append(h.get("avg_volume_20d"))
+            hist_cols["Historical snapshot"].append(h.get("summary") or "—")
+            hist_cols["Historical detail"].append(h.get("detail") or "—")
+
+        if delay_sec > 0:
+            time.sleep(delay_sec)
+
+    if include_analyst:
+        for k, vals in analyst_cols.items():
+            out[k] = vals
+    if include_history:
+        for k, vals in hist_cols.items():
+            out[k] = vals
+    return out
+
+
+def enrich_dataframe_analyst_recommendations(
+    df: pd.DataFrame,
+    *,
+    universe_name: str = "",
+    ticker_col: str = "Ticker",
+    raw_ticker_col: Optional[str] = None,
+    delay_sec: float = 0.2,
+) -> pd.DataFrame:
+    """Add analyst recommendation columns (delegates to combined Yahoo enrich)."""
+    return enrich_dataframe_yahoo_context(
+        df,
+        universe_name=universe_name,
+        ticker_col=ticker_col,
+        raw_ticker_col=raw_ticker_col,
+        include_analyst=True,
+        include_history=False,
+        delay_sec=delay_sec,
+    )
+
+
 def rsi_series_wilder(closes: pd.Series, period: int = 14) -> pd.Series:
     """Full RSI series (Wilder / EMA), same convention as signals._full_rsi."""
     delta = closes.diff()
@@ -911,6 +1447,86 @@ def extract_yfinance_fundamentals(info: dict) -> dict[str, Optional[float]]:
         rg *= 100.0
 
     return {"roe_pct": roe, "debt_equity": de, "revenue_growth_pct": rg}
+
+
+def normalize_debt_equity(v: Optional[float]) -> Optional[float]:
+    """Yahoo often reports D/E as percent (e.g. 39); values > 1 are scaled to a ratio."""
+    if v is None:
+        return None
+    try:
+        fv = float(v)
+    except (TypeError, ValueError):
+        return None
+    if np.isnan(fv):
+        return None
+    if fv > 1.0:
+        fv = fv / 100.0
+    return round(fv, 3)
+
+
+def drawdown_pct_from_52w_high(price: float, week52_high: Optional[float]) -> Optional[float]:
+    """Percent below the 52-week high (e.g. 25.0 = 25% drawdown)."""
+    if week52_high is None or week52_high <= 0 or price <= 0:
+        return None
+    return round((1.0 - float(price) / float(week52_high)) * 100.0, 1)
+
+
+def extract_healthy_dip_fundamentals(info: dict) -> dict[str, Optional[float]]:
+    """Fundamentals for quality-at-dip screens (Yahoo `info`, best-effort)."""
+
+    def gf(keys: tuple[str, ...]) -> Optional[float]:
+        for k in keys:
+            v = info.get(k)
+            if v is None:
+                continue
+            try:
+                fv = float(v)
+                if np.isnan(fv):
+                    continue
+                return fv
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    base = extract_yfinance_fundamentals(info)
+    de = normalize_debt_equity(base.get("debt_equity"))
+
+    pb = gf(("priceToBook", "price_to_book"))
+    peg = gf(("pegRatio", "trailingPegRatio"))
+
+    ic = gf(("interestCoverage", "interest_coverage"))
+    pm = gf(("profitMargins", "profit_margin"))
+    if pm is not None and abs(pm) <= 1.0:
+        pm *= 100.0
+
+    wk_high = gf(("fiftyTwoWeekHigh", "52WeekHigh"))
+    wk_low = gf(("fiftyTwoWeekLow", "52WeekLow"))
+
+    return {
+        **base,
+        "debt_equity": de,
+        "price_to_book": pb,
+        "peg_ratio": peg,
+        "interest_coverage": ic,
+        "profit_margin_pct": pm,
+        "week52_high": wk_high,
+        "week52_low": wk_low,
+    }
+
+
+def fetch_daily_history_min_bars(ticker: str, min_bars: int = 220) -> pd.DataFrame:
+    """Daily OHLCV with enough history for long moving averages (up to ~2y via Yahoo)."""
+    hist = fetch_price_history(ticker, "1d")
+    if hist is not None and len(hist) >= min_bars:
+        return hist
+    try:
+        ext = yf.Ticker(ticker).history(period="2y", interval="1d", auto_adjust=True)
+        if ext is not None and not ext.empty:
+            if hist is None or hist.empty or len(ext) >= len(hist):
+                return ext
+    except Exception:
+        pass
+    return hist if hist is not None else pd.DataFrame()
 
 
 # ─────────────────────────────────────────────

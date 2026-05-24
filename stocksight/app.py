@@ -48,6 +48,14 @@ STRATEGY_CARDS = [
         "color": "#f0b429",
     },
     {
+        "emoji": "🩺", "title": "Healthy Dip",
+        "signal": "BUY", "sig_color": "#00e5a0", "sig_bg": "#0a2e1e",
+        "pe": "≤ 30", "vol": "any", "rsi": "≤ 40",
+        "timeframe": "Position · 3–12+ months",
+        "edge": "Strong ROE & low debt in a 20–40% pullback near the 200-day MA.",
+        "color": "#7ec8e3",
+    },
+    {
         "emoji": "🔴", "title": "Overbought / Exit",
         "signal": "SELL", "sig_color": "#ff4d4d", "sig_bg": "#2e0a0a",
         "pe": "Any", "vol": "≥ 2×", "rsi": "> 75",
@@ -157,10 +165,10 @@ section.main hr { border-color:#d4d4d4 !important; }
         "use **Buy / Hold / Avoid** last for zone-based decisions. **Portfolio** tracks entries; **Scan History** logs past runs."
     )
     st.caption(
-        "Six technical scenarios cover the market cycle. Open any sidebar page to run a screen."
+        "Strategy modules cover momentum, value, dips, and exits. Open any sidebar page to run a screen."
     )
 
-    col_pairs = [STRATEGY_CARDS[i:i+3] for i in range(0, 6, 3)]
+    col_pairs = [STRATEGY_CARDS[i : i + 3] for i in range(0, len(STRATEGY_CARDS), 3)]
     for trio in col_pairs:
         cols = st.columns(3)
         for col, card in zip(cols, trio):

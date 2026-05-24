@@ -6,7 +6,7 @@ For: active traders and investors who want one ranked list across Nifty 50/500 o
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from screener import screen_stocks, UNIVERSES, us_market_status_label
+from screener import screen_stocks, UNIVERSES, us_market_status_label, enrich_dataframe_yahoo_context
 from scan_history_store import append_scan_record
 from ui_components import (
     filter_column_config,
@@ -15,6 +15,7 @@ from ui_components import (
     page_audience_note,
     raw_symbol_from_screen_display,
     render_decision_matrix_legend,
+    render_historical_detail_panel,
     render_watchlist_panel,
     safe_set_page_config,
 )
@@ -307,6 +308,7 @@ def run_stock_scan(progress_ph, status_ph):
     st.session_state.app1_results_df = df
     st.session_state.app1_last_run = datetime.now()
     st.session_state.app1_is_running = False
+    st.session_state.pop("app1_yahoo_cache_sig", None)
 
 
 if run_app1:
@@ -385,15 +387,73 @@ else:
             },
         },
     )
+    y1, y2 = st.columns(2)
+    with y1:
+        include_analyst_csv = st.checkbox(
+            "Analyst recommendations (Yahoo)",
+            value=True,
+            key="app1_analyst_csv",
+            help="Consensus, targets, rating mix.",
+        )
+    with y2:
+        include_history_csv = st.checkbox(
+            "Historical snapshot ~1y (Yahoo)",
+            value=True,
+            key="app1_history_csv",
+            help="1M/3M/6M/1Y returns, 52w range, volume.",
+        )
+
+    export_df = display_df
+    want_yahoo = include_analyst_csv or include_history_csv
+    if want_yahoo:
+        if len(display_df) > 60:
+            st.warning("Yahoo columns skipped — more than 60 rows. Narrow filters or turn off checkboxes.")
+        else:
+            sig = (
+                universe,
+                tuple(display_df["Ticker"].astype(str).tolist()),
+                include_analyst_csv,
+                include_history_csv,
+            )
+            if st.session_state.get("app1_yahoo_cache_sig") != sig:
+                with st.spinner("Fetching Yahoo analyst + historical data…"):
+                    export_df = enrich_dataframe_yahoo_context(
+                        display_df,
+                        universe_name=universe,
+                        ticker_col="Ticker",
+                        include_analyst=include_analyst_csv,
+                        include_history=include_history_csv,
+                    )
+                    st.session_state.app1_yahoo_cache_sig = sig
+                    st.session_state.app1_export_df = export_df
+            else:
+                export_df = st.session_state.get("app1_export_df", display_df)
+
+    show_df = export_df if want_yahoo and (
+        "Historical snapshot" in export_df.columns or "Analyst recommendation" in export_df.columns
+    ) else display_df
+
+    table_col_cfg = dict(col_cfg)
+    for text_col in ("Analyst recommendation", "Historical snapshot", "Historical detail"):
+        if text_col in show_df.columns:
+            table_col_cfg[text_col] = st.column_config.TextColumn(text_col, width="large")
+
     st.dataframe(
-        display_df,
+        show_df,
         use_container_width=True,
         hide_index=False,
-        column_config=col_cfg,
-        height=min(620, 60 + len(display_df) * 40),
+        column_config=filter_column_config(show_df, table_col_cfg),
+        height=min(620, 60 + len(show_df) * 40),
     )
-    csv = display_df.to_csv(index=False)
-    st.download_button(label="⬇ Download Results as CSV", data=csv, file_name=f"stocksight_app1_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", mime="text/csv", key="app1_dl_csv")
+    render_historical_detail_panel(export_df if want_yahoo else display_df)
+    csv = export_df.to_csv(index=True if export_df.index.name else False)
+    st.download_button(
+        label="⬇ Download Results as CSV",
+        data=csv,
+        file_name=f"stocksight_app1_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv",
+        key="app1_dl_csv",
+    )
     render_decision_matrix_legend()
 
 st.markdown("---")

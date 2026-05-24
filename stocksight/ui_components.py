@@ -497,6 +497,23 @@ def maybe_enrich_news(results: list[SignalResult], enabled: bool, max_names: int
     enrich_results_news(results)
 
 
+def maybe_enrich_healthy_dip_context(results: list[SignalResult], enabled: bool, max_names: int = 30) -> None:
+    """Headlines + one-line fall context for Healthy Dip (on by default after scan)."""
+    if not enabled or not results:
+        return
+    try:
+        from signals import enrich_healthy_dip_fall_context
+    except ImportError:
+        from .signals import enrich_healthy_dip_fall_context  # type: ignore[attr-defined]
+    if len(results) > max_names:
+        st.warning(
+            f"“Why it fell” context skipped — {len(results)} matches (cap {max_names}). "
+            "Tighten filters or turn off context in the panel above."
+        )
+        return
+    enrich_healthy_dip_fall_context(results)
+
+
 def log_scenario_scan(page_key: str, universe_label: str, results: list[SignalResult]) -> None:
     """Persist a lightweight snapshot for audit / 'first seen' style workflows."""
     try:
@@ -711,15 +728,62 @@ def render_watchlist_panel(key_prefix: str) -> None:
                 st.caption("SMTP status: unknown")
 
 
+def render_historical_detail_panel(df: pd.DataFrame) -> None:
+    """Expandable table of Yahoo ~1y historical fields for result rows."""
+    if df is None or df.empty or "Historical detail" not in df.columns:
+        return
+    hist_cols = [
+        c
+        for c in (
+            "Ticker",
+            "Hist start",
+            "Hist end",
+            "52w high",
+            "52w low",
+            "% below 52w high",
+            "Return 1M %",
+            "Return 3M %",
+            "Return 6M %",
+            "Return 1Y %",
+            "Avg volume 20d",
+            "Historical snapshot",
+            "Historical detail",
+        )
+        if c in df.columns
+    ]
+    if len(hist_cols) < 2:
+        return
+    with st.expander("📊 Historical detail (Yahoo ~1y daily)", expanded=False):
+        st.caption("Daily OHLCV-derived stats from Yahoo Finance. Trading-day approximations for return windows.")
+        st.dataframe(
+            df[hist_cols],
+            use_container_width=True,
+            hide_index=False,
+            column_config={
+                "Historical snapshot": st.column_config.TextColumn(width="large"),
+                "Historical detail": st.column_config.TextColumn(width="large"),
+            },
+        )
+
+
 def signal_results_download(
     results: list[SignalResult],
     scenario_id: str,
     button_key: str = "dl",
     *,
     include_scenario: bool = False,
+    include_analyst: bool = True,
+    include_history: bool = True,
 ) -> None:
     if not results:
         return
+    if (include_analyst or include_history) and len(results) > 50:
+        st.warning(
+            "Yahoo analyst/history columns skipped — more than 50 matches (rate limits). "
+            "Narrow the scan or disable extras."
+        )
+        include_analyst = False
+        include_history = False
     rows = []
     for r in results:
         decision, composite, matrix_note = _decision_for_signal_result(r)
@@ -769,6 +833,25 @@ def signal_results_download(
     df = pd.DataFrame(rows)
     if "First_seen" in df.columns:
         df = df.rename(columns={"First_seen": "First seen"})
+    if (include_analyst or include_history) and not df.empty:
+        try:
+            from screener import enrich_dataframe_yahoo_context
+        except ImportError:
+            from .screener import enrich_dataframe_yahoo_context  # type: ignore[attr-defined]
+        cache_key = (
+            f"csv_yahoo_{scenario_id}_{button_key}_{include_analyst}_{include_history}_"
+            f"{hash(tuple(df['Raw'].astype(str).tolist()))}"
+        )
+        if cache_key not in st.session_state:
+            with st.spinner("Fetching Yahoo analyst + historical data for CSV…"):
+                st.session_state[cache_key] = enrich_dataframe_yahoo_context(
+                    df,
+                    ticker_col="Ticker",
+                    raw_ticker_col="Raw",
+                    include_analyst=include_analyst,
+                    include_history=include_history,
+                )
+        df = st.session_state[cache_key]
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button(
         "⬇ Download results CSV",
@@ -994,6 +1077,17 @@ def trade_plan_card(
             </div>
             """
 
+    fall_html = ""
+    if r.fall_context:
+        fall_html = f"""
+        <div style='margin-top:10px; padding:10px 12px; background:#0a1e28;
+                    border-left:3px solid #7ec8e3; border-radius:4px;
+                    font-size:0.78rem; color:#c8d8e8; line-height:1.5;'>
+            <span style='color:#7ec8e3; font-weight:700;'>Why it might have fallen</span><br>
+            {html.escape(r.fall_context, quote=False)}
+        </div>
+        """
+
     news_html = ""
     if r.news_headlines:
         lis = "".join(f"<li style='margin:3px 0;'>{html.escape(t)}</li>" for t in r.news_headlines[:5])
@@ -1138,6 +1232,8 @@ def trade_plan_card(
 
         {sizing_html}
 
+        {fall_html}
+
         {news_html}
 
         <div style='margin-top:12px; font-size:0.75rem; color:#7abeac;
@@ -1162,7 +1258,13 @@ def trade_plan_card(
 # Results table (compact summary)
 # ─────────────────────────────────────────────
 
-def results_table(results: list[SignalResult], scenario_id: str, *, include_scenario: bool = False):
+def results_table(
+    results: list[SignalResult],
+    scenario_id: str,
+    *,
+    include_scenario: bool = False,
+    include_yahoo_context: bool = True,
+) -> None:
     if not results:
         return
 
@@ -1207,6 +1309,9 @@ def results_table(results: list[SignalResult], scenario_id: str, *, include_scen
             "Risk %":       r.risk_pct,
             "Confidence":   r.confidence,
         }
+        if scenario_id == "healthy_dip":
+            row["Drawdown %"] = r.drawdown_52w_pct
+            row["Why it fell"] = (r.fall_context or "—")[:120]
         if include_scenario:
             row = {
                 "Ticker": row["Ticker"],
@@ -1216,6 +1321,24 @@ def results_table(results: list[SignalResult], scenario_id: str, *, include_scen
         rows.append(row)
 
     df = pd.DataFrame(rows)
+    df["Raw"] = [r.raw_ticker for r in results]
+
+    if include_yahoo_context and len(df) <= 50:
+        try:
+            from screener import enrich_dataframe_yahoo_context
+        except ImportError:
+            from .screener import enrich_dataframe_yahoo_context  # type: ignore[attr-defined]
+        cache_key = f"table_yahoo_{scenario_id}_{hash(tuple(df['Raw'].astype(str).tolist()))}"
+        if cache_key not in st.session_state:
+            with st.spinner("Loading Yahoo historical + analyst columns…"):
+                st.session_state[cache_key] = enrich_dataframe_yahoo_context(
+                    df,
+                    ticker_col="Ticker",
+                    raw_ticker_col="Raw",
+                    include_analyst=True,
+                    include_history=True,
+                )
+        df = st.session_state[cache_key]
 
     link_cols_nse = ["Yahoo Finance", "Moneycontrol", "TradingView"]
     link_cols_us  = ["Yahoo Finance", "MarketWatch",  "TradingView"]
@@ -1253,6 +1376,11 @@ def results_table(results: list[SignalResult], scenario_id: str, *, include_scen
         if name in df.columns:
             col_cfg[name] = st.column_config.LinkColumn(name, display_text="Open ↗")
 
+    for text_col in ("Analyst recommendation", "Historical snapshot", "Historical detail"):
+        if text_col in df.columns:
+            col_cfg[text_col] = st.column_config.TextColumn(text_col, width="large")
+
+    render_historical_detail_panel(df)
     st.dataframe(
         df, use_container_width=True,
         column_config=filter_column_config(df, col_cfg),

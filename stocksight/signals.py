@@ -49,6 +49,9 @@ try:
         relative_strength_vs_benchmark,
         benchmark_ticker_for,
         fetch_nse_fii_dii_equity_snapshot,
+        extract_healthy_dip_fundamentals,
+        drawdown_pct_from_52w_high,
+        fetch_daily_history_min_bars,
     )
 except ImportError:
     from screener import (
@@ -77,6 +80,9 @@ except ImportError:
         relative_strength_vs_benchmark,
         benchmark_ticker_for,
         fetch_nse_fii_dii_equity_snapshot,
+        extract_healthy_dip_fundamentals,
+        drawdown_pct_from_52w_high,
+        fetch_daily_history_min_bars,
     )
 
 
@@ -165,6 +171,12 @@ class SignalResult:
 
     nse_flow_note: Optional[str] = None       # market-wide FII/DII snapshot (NSE names only)
     news_sentiment: Optional[str] = None      # bullish / neutral / bearish (keyword scan)
+
+    drawdown_52w_pct: Optional[float] = None  # % below 52-week high (healthy dip)
+    fall_context: Optional[str] = None        # one-line “why it might have fallen” (headlines + tape)
+    roe_pct: Optional[float] = None
+    debt_equity: Optional[float] = None
+    pct_vs_ma200: Optional[float] = None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -397,7 +409,9 @@ def _build_result(
             rrr      = 1.5
 
     ex = extras or {}
-    buy_side = scenario_id in ("oversold_bounce", "breakout", "value_technical", "extreme_oversold")
+    buy_side = scenario_id in (
+        "oversold_bounce", "breakout", "value_technical", "extreme_oversold", "healthy_dip",
+    )
     confidence = _confidence(
         vol_ratio,
         rsi_rising,
@@ -486,6 +500,11 @@ def _build_result(
         price_vs_vwap_pct = _finite_num(ex.get("price_vs_vwap_pct")),
         nse_flow_note = (ex.get("nse_flow_note") or None),
         news_sentiment = (ex.get("news_sentiment") or None),
+        drawdown_52w_pct = _finite_num(ex.get("drawdown_52w_pct")),
+        fall_context = (ex.get("fall_context") or None),
+        roe_pct = _finite_num(ex.get("roe_pct")),
+        debt_equity = _finite_num(ex.get("debt_equity")),
+        pct_vs_ma200 = _finite_num(ex.get("pct_vs_ma200")),
     )
 
 
@@ -631,6 +650,113 @@ def enrich_results_news(results: list[SignalResult], limit_per_ticker: int = 3) 
     for r in results:
         r.news_headlines = fetch_quote_news(r.raw_ticker, limit_per_ticker)
         r.news_sentiment = headline_sentiment_label(r.news_headlines)
+
+
+_STRUCTURAL_FALL_KW = (
+    "fraud", "scam", "probe", "investigation", "lawsuit", "default", "bankruptcy",
+    "insolvency", "resign", "arrest", "ban", "sebi", "penalty", "fine", "raid",
+    "accounting", "irregular", "whistleblow",
+)
+_EARNINGS_FALL_KW = (
+    "miss", "misses", "disappoint", "profit warning", "cuts guidance", "guidance cut",
+    "downgrade", "downgraded", "weak results", "loss widens", "slump", "plunge",
+)
+_MACRO_FALL_KW = (
+    "fed", "rate hike", "rates rise", "inflation", "recession", "selloff", "sell-off",
+    "tariff", "war", "geopolit", "risk-off", "outflow", "fii sell", "crash", "correction",
+    "market fall", "nifty fall", "sensex fall",
+)
+_SECTOR_FALL_KW = (
+    "sector", "industry", "peers", "competition", "regulat", "policy", "ban on",
+)
+
+
+def _truncate_headline(text: str, max_len: int = 88) -> str:
+    t = " ".join(str(text).split())
+    if len(t) <= max_len:
+        return t
+    return t[: max_len - 1].rstrip() + "…"
+
+
+def summarize_why_it_fell(
+    headlines: list[str],
+    *,
+    sector: Optional[str] = None,
+    drawdown_pct: Optional[float] = None,
+    rel_strength_20d: Optional[float] = None,
+) -> str:
+    """
+    Educational one-liner from recent headlines + simple tape context.
+    Not causal analysis — prompts the user to read further.
+    """
+    if not headlines:
+        tape = []
+        if drawdown_pct is not None:
+            tape.append(f"~{drawdown_pct:.0f}% below 52-week high")
+        if rel_strength_20d is not None:
+            if rel_strength_20d < -3:
+                tape.append("weaker than index lately")
+            elif rel_strength_20d > 3:
+                tape.append("holding up vs index despite dip")
+        tape_bit = (" (" + "; ".join(tape) + ")") if tape else ""
+        return (
+            "No recent headlines in Yahoo — may be broad market / sector rotation"
+            + tape_bit
+            + ". Check Screener.in or the latest concall."
+        )
+
+    scores: dict[str, int] = {
+        "structural": 0,
+        "earnings": 0,
+        "macro": 0,
+        "sector": 0,
+    }
+    for h in headlines:
+        low = str(h).lower()
+        if any(w in low for w in _STRUCTURAL_FALL_KW):
+            scores["structural"] += 3
+        if any(w in low for w in _EARNINGS_FALL_KW):
+            scores["earnings"] += 2
+        if any(w in low for w in _MACRO_FALL_KW):
+            scores["macro"] += 2
+        if any(w in low for w in _SECTOR_FALL_KW):
+            scores["sector"] += 1
+        if sector:
+            sec = str(sector).lower().split()[0]
+            if len(sec) > 4 and sec in low:
+                scores["sector"] += 2
+
+    top = max(scores.items(), key=lambda kv: kv[1])
+    lead = _truncate_headline(headlines[0])
+    sentiment = headline_sentiment_label(headlines)
+
+    if top[1] == 0:
+        driver = "Mixed or unclear drivers in headlines"
+    elif top[0] == "structural":
+        driver = "⚠ Possible structural risk in news — verify before averaging down"
+    elif top[0] == "earnings":
+        driver = "Recent news skews to earnings / guidance disappointment"
+    elif top[0] == "macro":
+        driver = "Headlines point to macro / market-wide pressure"
+    else:
+        driver = "Sector or competitive themes in recent news"
+
+    sent_bit = f" (tone: {sentiment})" if sentiment else ""
+    return f"{driver}{sent_bit} — e.g. “{lead}”"
+
+
+def enrich_healthy_dip_fall_context(results: list[SignalResult], limit_per_ticker: int = 4) -> None:
+    """Fetch headlines and set `fall_context` for Healthy Dip matches (extra Yahoo calls)."""
+    for r in results:
+        headlines = fetch_quote_news(r.raw_ticker, limit_per_ticker)
+        r.news_headlines = headlines
+        r.news_sentiment = headline_sentiment_label(headlines)
+        r.fall_context = summarize_why_it_fell(
+            headlines,
+            sector=r.sector,
+            drawdown_pct=r.drawdown_52w_pct,
+            rel_strength_20d=r.rel_strength_20d,
+        )
 
 
 def headline_sentiment_label(headlines: list[str]) -> Optional[str]:
@@ -901,7 +1027,203 @@ def scan_value_technical(
 
 
 # ─────────────────────────────────────────────────────────────
-# Scenario 4 — Overbought / Exit
+# Scenario — Healthy company at a dip (beginner value + technical)
+# ROE / D/E / PE · 20–40% below 52w high · RSI oversold · near 200-DMA
+# ─────────────────────────────────────────────────────────────
+
+def _healthy_dip_rank_score(
+    drawdown_pct: float,
+    rsi: float,
+    roe: Optional[float],
+    dd_min: float,
+    dd_max: float,
+) -> float:
+    dd_mid = (dd_min + dd_max) / 2.0
+    dd_fit = max(0.0, 10.0 - abs(drawdown_pct - dd_mid))
+    rsi_fit = max(0.0, 40.0 - rsi)
+    roe_fit = min(roe or 0.0, 30.0)
+    return dd_fit + rsi_fit * 0.5 + roe_fit * 0.3
+
+
+def scan_healthy_dip(
+    universe_name: str,
+    *,
+    min_roe_pct: float = 15.0,
+    max_debt_equity: float = 1.0,
+    max_pe: float = 30.0,
+    max_price_to_book: Optional[float] = 1.5,
+    max_peg: Optional[float] = 1.0,
+    min_interest_coverage: Optional[float] = 3.0,
+    drawdown_min_pct: float = 20.0,
+    drawdown_max_pct: float = 40.0,
+    rsi_max: float = 40.0,
+    require_near_ma200: bool = True,
+    ma200_tolerance_pct: float = 5.0,
+    apply_pb_filter: bool = True,
+    apply_peg_filter: bool = False,
+    apply_interest_coverage: bool = False,
+    progress_cb=None,
+    sector_filter: Optional[str] = None,
+    interval_key: str = "1d",
+    require_macd_bullish: bool = False,
+    require_bb_touch_lower: bool = False,
+    tickers_override: Optional[list[str]] = None,
+    require_weekly_confirm: bool = False,
+    exclude_earnings_within_days: int = 0,
+    skip_bearish_divergence_buy: bool = False,
+    min_rs_vs_bench: Optional[float] = None,
+    require_stoch_cross_up: bool = False,
+    require_stoch_cross_down: bool = False,
+    weekly_macd_confirm: bool = False,
+) -> list[SignalResult]:
+    results: list[tuple[float, SignalResult]] = []
+    tickers = _ticker_list(universe_name, tickers_override)
+    total = len(tickers)
+    pe_cap = PE_DATA_CAP.get(universe_name, 400)
+
+    for i, ticker in enumerate(tickers):
+        if progress_cb:
+            progress_cb(i + 1, total, ticker)
+
+        data = _fetch(
+            ticker,
+            interval_key,
+            include_weekly=require_weekly_confirm,
+            weekly_macd_confirm=weekly_macd_confirm,
+        )
+        if not data:
+            continue
+        hist, pe_raw, vol_ratio, rsi, rsi_prev, ex = data
+
+        if not _passes_advanced_filters(
+            ex,
+            sector_filter,
+            require_macd_bullish,
+            require_bb_touch_lower,
+            require_weekly_confirm=require_weekly_confirm,
+            weekly_macd_confirm=weekly_macd_confirm,
+            exclude_earnings_within_days=exclude_earnings_within_days,
+            skip_bearish_divergence_buy=skip_bearish_divergence_buy,
+            buy_side_screening=True,
+            min_rs_vs_bench=min_rs_vs_bench,
+            require_stoch_cross_up=require_stoch_cross_up,
+            require_stoch_cross_down=False,
+        ):
+            continue
+
+        try:
+            stk = yf.Ticker(ticker)
+            info = stk.info or {}
+        except Exception:
+            info = {}
+
+        fund = extract_healthy_dip_fundamentals(info)
+        roe = fund.get("roe_pct")
+        de = fund.get("debt_equity")
+        if roe is not None and roe < float(min_roe_pct):
+            continue
+        if roe is None:
+            continue
+        if de is not None and de > float(max_debt_equity):
+            continue
+
+        pe = get_pe(stk)
+        if pe is None or pe <= 0 or pe > min(float(max_pe), float(pe_cap)):
+            continue
+
+        if apply_pb_filter and max_price_to_book is not None:
+            pb = fund.get("price_to_book")
+            if pb is not None and pb > float(max_price_to_book):
+                continue
+
+        if apply_peg_filter and max_peg is not None:
+            peg = fund.get("peg_ratio")
+            if peg is not None and peg > 0 and peg > float(max_peg):
+                continue
+
+        if apply_interest_coverage and min_interest_coverage is not None:
+            ic = fund.get("interest_coverage")
+            # Only filter when Yahoo reports coverage; skip gate if missing.
+            if ic is not None and ic < float(min_interest_coverage):
+                continue
+
+        price = float(hist["Close"].iloc[-1])
+        wk_high = fund.get("week52_high")
+        if wk_high is None or wk_high <= 0:
+            long_hist = fetch_daily_history_min_bars(ticker, 252)
+            if not long_hist.empty:
+                wk_high = float(long_hist["High"].max())
+        drawdown = drawdown_pct_from_52w_high(price, wk_high)
+        if drawdown is None:
+            continue
+        if drawdown < float(drawdown_min_pct) or drawdown > float(drawdown_max_pct):
+            continue
+
+        if rsi > float(rsi_max):
+            continue
+
+        pct_vs_ma200: Optional[float] = None
+        if require_near_ma200:
+            long_hist = fetch_daily_history_min_bars(ticker, 205)
+            if long_hist.empty or len(long_hist) < 200:
+                continue
+            ma200 = float(long_hist["Close"].rolling(200).mean().iloc[-1])
+            if ma200 <= 0:
+                continue
+            pct_vs_ma200 = pct_vs_ma(price, ma200)
+            if pct_vs_ma200 is None:
+                continue
+            if pct_vs_ma200 > float(ma200_tolerance_pct):
+                continue
+
+        rg = fund.get("revenue_growth_pct")
+        note_bits = [
+            f"ROE {roe:.0f}%",
+            f"D/E {de:.2f}" if de is not None else "D/E n/a",
+            f"{drawdown:.0f}% below 52w high",
+            f"RSI {rsi:.0f}",
+        ]
+        if pct_vs_ma200 is not None:
+            note_bits.append(f"{pct_vs_ma200:+.1f}% vs 200-DMA")
+        if rg is not None:
+            note_bits.append(f"rev growth {rg:.0f}%")
+        note = (
+            "Quality name in a dip zone — confirm *why* price fell (temporary vs structural). "
+            + " · ".join(note_bits)
+            + ". Consider 2–3 tranche entries over weeks."
+        )
+
+        ex = dict(ex)
+        ex["pct_vs_ma200"] = pct_vs_ma200
+        ex["drawdown_52w_pct"] = drawdown
+        ex["roe_pct"] = roe
+        ex["debt_equity"] = de
+
+        rank = _healthy_dip_rank_score(
+            drawdown, rsi, roe, drawdown_min_pct, drawdown_max_pct,
+        )
+        results.append((
+            rank,
+            _build_result(
+                ticker,
+                hist,
+                pe,
+                vol_ratio,
+                rsi,
+                rsi_prev,
+                scenario_id="healthy_dip",
+                signal_label="BUY",
+                timeframe="Position · 3–12 months",
+                note=note,
+                sl_lookback=20,
+                target_ratios=(1.0, 2.0, 3.0),
+                extras=ex,
+                bar_interval=interval_key,
+            ),
+        ))
+
+    results.sort(key=lambda pair: pair[0], reverse=True)
+    return [r for _, r in results]
 # Any PE · Vol ≥2× · RSI >75
 # ─────────────────────────────────────────────────────────────
 
@@ -1157,6 +1479,7 @@ def cross_scan_watchlist(
         scan_oversold_bounce,
         scan_breakout_momentum,
         scan_value_technical,
+        scan_healthy_dip,
         scan_overbought_exit,
         scan_extreme_oversold,
         scan_volume_no_confirm,
@@ -1274,6 +1597,20 @@ SCENARIOS = {
         "sl_note":     "Mark levels now so you are ready when confirmation arrives.",
         "target_note": "Pre-calculate trade plan. Act only on confirmed directional move.",
     },
+    "healthy_dip": {
+        "fn":          scan_healthy_dip,
+        "title":       "Healthy Dip",
+        "emoji":       "🩺",
+        "signal":      "BUY",
+        "color":       "#7ec8e3",
+        "badge_bg":    "#0a1e28",
+        "description": "Profitable, lower-leverage names in a 20–40% pullback with oversold RSI and price near the 200-day MA.",
+        "audience": "Beginners and long-term investors hunting quality companies on temporary weakness (Nifty 50/500 or S&P 500).",
+        "purpose": "Combines fundamental health (ROE, debt, PE) with dip signals (52-week drawdown, RSI, 200-DMA) — educational only.",
+        "entry_note":  "Scale in with 2–3 tranches; do not chase the exact bottom.",
+        "sl_note":     "Stop below recent swing low or a level you can hold through another 15–20% drawdown.",
+        "target_note": "Hold 3–5+ years if fundamentals stay intact; trim on euphoric RSI / new highs.",
+    },
 }
 
 
@@ -1285,6 +1622,7 @@ SCENARIO_RESULT_TO_PAGE: dict[str, str] = {
     "overbought": "overbought_exit",
     "extreme_oversold": "extreme_oversold",
     "volume_no_confirm": "volume_no_confirm",
+    "healthy_dip": "healthy_dip",
 }
 
 
