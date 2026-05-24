@@ -39,15 +39,15 @@ cd stocksight2
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the application (from repo root)
-streamlit run Overview.py
+# Run the application
+streamlit run app.py
 ```
 
 ### Deploy to Streamlit Cloud
 
 1. **Push to GitHub**: Ensure your code is in a GitHub repository
 2. **Connect Streamlit Cloud**: Go to [share.streamlit.io](https://share.streamlit.io)
-3. **Deploy**: Select your repo → Set main file to `Overview.py` → Deploy
+3. **Deploy**: Select your repo → Set main file to `app.py` → Deploy
 4. **Access**: Your app will be live at `https://your-app-name.streamlit.app`
 
 ## 📋 How to Use
@@ -100,22 +100,23 @@ Each result includes:
 ## 📁 Project Structure
 
 ```
-repo root/
-├── Overview.py                 # streamlit run Overview.py — st.navigation + grouped sidebar
-├── navigation_pages.py         # st.Page callables → stocksight_page_loader
-├── stocksight_page_loader.py
-├── requirements.txt
-└── stocksight/
-    ├── app.py                  # render_overview() dashboard
-    ├── screener.py
-    ├── signals.py
-    ├── ui_components.py
-    ├── requirements.txt
-    ├── pages/                  # Real Streamlit page scripts (loaded by loader)
-    │   ├── StockSight.py
-    │   ├── Breakout Momentum.py
-    │   └── …
-    └── README.md               # This file
+stocksight/
+├── app.py                      # Main Streamlit application
+├── screener.py                 # Core screening logic & stock universes
+├── signals.py                  # Trading strategy implementations
+├── ui_components.py            # Shared UI components & styling
+├── requirements.txt            # Python dependencies
+├── pages/                      # Individual strategy pages
+│   ├── StockSight.py          # Main screener page
+│   ├── Breakout Momentum.py   # Momentum strategy
+│   ├── Buy Hold Avoid.py      # Decision guidance
+│   ├── Oversold Bounce.py     # Reversal strategy
+│   ├── Overbought Exit.py     # Exit signals
+│   ├── Extreme Oversold.py    # High-risk entries
+│   └── Volume No Confirm.py   # Noise filter
+├── .streamlit/
+│   └── config.toml            # Streamlit configuration
+└── README.md                  # This file
 ```
 
 ## 🔧 Configuration
