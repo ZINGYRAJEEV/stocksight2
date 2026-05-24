@@ -1,8 +1,4 @@
 streamlit>=1.35.0
-flask>=3.0.0
 yfinance>=0.2.40
 pandas>=2.0.0
 numpy>=1.26.0
-plotly>=5.18.0
-# Optional: ICICI Direct Breeze API for NSE/BSE OHLC (charts still use Plotly)
-breeze-connect>=1.0.69
