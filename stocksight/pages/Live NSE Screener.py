@@ -16,7 +16,7 @@ if str(_REPO) not in sys.path:
 
 from live_screener.engine import PRESETS, ScanConfig, run_healthy_dip_scan  # noqa: E402
 from screener import NIFTY_BENCHMARK, index_regime  # noqa: E402
-from ui_components import safe_set_page_config  # noqa: E402
+from ui_components import filter_column_config, safe_set_page_config  # noqa: E402
 
 safe_set_page_config(page_title="Live NSE Screener | StockSight", page_icon="📡", layout="wide")
 
@@ -150,10 +150,29 @@ else:
     )
 
     with st.expander("Raw links & criteria flags"):
+        link_cols = [c for c in ("ticker", "all_conditions_met", "criteria", "yahoo", "research", "chart") if c in df.columns]
+        links_df = df[link_cols].copy()
+        for col in ("yahoo", "research", "chart"):
+            if col in links_df.columns:
+                links_df[col] = links_df[col].apply(
+                    lambda u: u if isinstance(u, str) and u.startswith("http") else None
+                )
+        links_df = links_df.rename(
+            columns={"yahoo": "Yahoo Finance", "research": "Research", "chart": "Chart"},
+        )
+        link_col_cfg = {
+            "ticker": st.column_config.TextColumn("Ticker", width="small"),
+            "all_conditions_met": st.column_config.CheckboxColumn("All pass"),
+            "criteria": st.column_config.TextColumn("Criteria", width="medium"),
+            "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
+            "Research": st.column_config.LinkColumn("Research", display_text="Research ↗"),
+            "Chart": st.column_config.LinkColumn("Chart", display_text="Chart ↗"),
+        }
         st.dataframe(
-            df[["ticker", "all_conditions_met", "criteria", "yahoo", "research", "chart"]],
+            links_df,
             use_container_width=True,
             hide_index=True,
+            column_config=filter_column_config(links_df, link_col_cfg),
         )
 
 st.caption("⚠️ Educational only · Yahoo Finance data · Not financial advice.")
