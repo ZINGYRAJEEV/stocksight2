@@ -22,20 +22,18 @@ safe_set_page_config(page_title="Live NSE Screener | StockSight", page_icon="ðŸ“
 
 st.markdown("""
 <style>
-  section.main, section.main .block-container {
-    background: #0a1210; color: #e8f7ef;
-  }
   .live-title {
     font-family: 'IBM Plex Mono', monospace;
-    font-size: 1.8rem; color: #25d366; font-weight: 700;
+    font-size: 1.8rem; color: #059669; font-weight: 700;
   }
-  .pass-chip {
-    display: inline-block; background: #0f2a22; border: 1px solid #25d366;
-    color: #25d366; border-radius: 4px; padding: 2px 8px; font-size: 0.7rem;
-    margin-right: 4px;
+  /* Styled dataframe: keep cell text readable on pass-row highlight */
+  section.main [data-testid="stDataFrame"] td {
+    color: #111827 !important;
   }
 </style>
 """, unsafe_allow_html=True)
+
+_PASS_ROW_STYLE = "background-color: #d1fae5; color: #064e3b"
 
 if "live_nse_rows" not in st.session_state:
     st.session_state.live_nse_rows = []
@@ -142,7 +140,7 @@ else:
 
     def _highlight(row: pd.Series):
         if bool(df.loc[row.name, "all_conditions_met"]):
-            return ["background-color: #0f2a22"] * len(row)
+            return [_PASS_ROW_STYLE] * len(row)
         return [""] * len(row)
 
     st.dataframe(
