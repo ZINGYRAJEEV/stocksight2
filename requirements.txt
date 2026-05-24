@@ -1,3 +1,0 @@
-# Streamlit Community Cloud installs this file from the repo root.
-# App dependencies live in stocksight/requirements.txt — keep in sync.
--r stocksight/requirements.txt
