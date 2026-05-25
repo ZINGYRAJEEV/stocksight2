@@ -1340,8 +1340,8 @@ def results_table(
                 )
         df = st.session_state[cache_key]
 
-    link_cols_nse = ["Yahoo Finance", "Moneycontrol", "TradingView"]
-    link_cols_us  = ["Yahoo Finance", "MarketWatch",  "TradingView"]
+    link_cols_nse = ["Yahoo Finance", "Google Finance", "Moneycontrol", "TradingView"]
+    link_cols_us  = ["Yahoo Finance", "Google Finance", "MarketWatch",  "TradingView"]
 
     # Add first available link set
     if results:

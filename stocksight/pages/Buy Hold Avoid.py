@@ -256,6 +256,17 @@ else:
         lambda ticker: f"https://www.thehindubusinessline.com/search/?q={quote_plus(ticker.replace('.NS', '').replace('.BO', ''))}"
     )
 
+    def _google_finance_url(ticker: str) -> str:
+        t = str(ticker)
+        clean = t.replace(".NS", "").replace(".BO", "")
+        if t.endswith(".NS"):
+            return f"https://www.google.com/finance/quote/{clean}:NSE"
+        if t.endswith(".BO"):
+            return f"https://www.google.com/finance/quote/{clean}:BOM"
+        return f"https://www.google.com/finance/quote/{clean}:NASDAQ"
+
+    df["Google Finance"] = df["Ticker"].apply(_google_finance_url)
+
     if ticker_filter:
         df = df[df["Ticker"].str.contains(ticker_filter.upper(), na=False)]
 
@@ -310,7 +321,7 @@ else:
                     f'<a href="{html.escape(str(row[col]), quote=True)}" target="_blank" '
                     f'style="color:#4db8ff; font-size:0.72rem; text-decoration:none; border:1px solid #4db8ff33; '
                     f'border-radius:4px; padding:2px 8px;">{html.escape(col)} ↗</a>'
-                    for col in ["Yahoo Finance", "Moneycontrol", "BusinessLine"]
+                    for col in ["Yahoo Finance", "Google Finance", "Moneycontrol", "BusinessLine"]
                     if col in row and pd.notna(row[col]) and row[col]
                 ])
                 safe_ticker = html.escape(str(row["Ticker"]))
@@ -394,7 +405,7 @@ else:
                 "Ticker", "Decision", "Composite", "Matrix note",
                 "Price", "PE Ratio", "Volume Ratio", "RSI", "Score",
                 "Confidence", "Action",
-                "Yahoo Finance", "Moneycontrol", "BusinessLine",
+                "Yahoo Finance", "Google Finance", "Moneycontrol", "BusinessLine",
             ]
             visible_cols = [col for col in display_cols if col in df_table.columns]
 
@@ -408,9 +419,10 @@ else:
                 "RSI": st.column_config.NumberColumn("RSI", format="%.2f"),
                 "Score": st.column_config.NumberColumn("Score", format="%.1f"),
                 "Confidence": st.column_config.TextColumn("Confidence", width="medium"),
-                "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
-                "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="Open ↗"),
-                "BusinessLine": st.column_config.LinkColumn("BusinessLine", display_text="Open ↗"),
+                "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
+                "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
+                "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="MC ↗"),
+                "BusinessLine": st.column_config.LinkColumn("BusinessLine", display_text="BL ↗"),
             }
 
             st.dataframe(
@@ -431,8 +443,15 @@ else:
 
         if selected_ticker:
             clean_ticker = selected_ticker.replace(".NS", "").replace(".BO", "")
+            if selected_ticker.endswith(".NS"):
+                gf_exchange = "NSE"
+            elif selected_ticker.endswith(".BO"):
+                gf_exchange = "BOM"
+            else:
+                gf_exchange = "NASDAQ"
             news_links = {
                 "Yahoo Finance News": f"https://finance.yahoo.com/quote/{clean_ticker}/news",
+                "Google Finance": f"https://www.google.com/finance/quote/{clean_ticker}:{gf_exchange}",
                 "Moneycontrol Search": f"https://www.moneycontrol.com/india/stockpricequote/search?q={quote_plus(clean_ticker)}",
                 "BusinessLine Search": f"https://www.thehindubusinessline.com/search/?q={quote_plus(clean_ticker)}",
             }

@@ -150,21 +150,31 @@ else:
     )
 
     with st.expander("Raw links & criteria flags"):
-        link_cols = [c for c in ("ticker", "all_conditions_met", "criteria", "yahoo", "research", "chart") if c in df.columns]
+        link_cols = [
+            c
+            for c in ("ticker", "all_conditions_met", "criteria", "yahoo", "google", "research", "chart")
+            if c in df.columns
+        ]
         links_df = df[link_cols].copy()
-        for col in ("yahoo", "research", "chart"):
+        for col in ("yahoo", "google", "research", "chart"):
             if col in links_df.columns:
                 links_df[col] = links_df[col].apply(
                     lambda u: u if isinstance(u, str) and u.startswith("http") else None
                 )
         links_df = links_df.rename(
-            columns={"yahoo": "Yahoo Finance", "research": "Research", "chart": "Chart"},
+            columns={
+                "yahoo": "Yahoo Finance",
+                "google": "Google Finance",
+                "research": "Research",
+                "chart": "Chart",
+            },
         )
         link_col_cfg = {
             "ticker": st.column_config.TextColumn("Ticker", width="small"),
             "all_conditions_met": st.column_config.CheckboxColumn("All pass"),
             "criteria": st.column_config.TextColumn("Criteria", width="medium"),
             "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
+            "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
             "Research": st.column_config.LinkColumn("Research", display_text="Research ↗"),
             "Chart": st.column_config.LinkColumn("Chart", display_text="Chart ↗"),
         }

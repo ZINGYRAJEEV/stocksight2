@@ -213,6 +213,7 @@ def signal_result_to_row(r: SignalResult, cfg: dict[str, Any]) -> dict[str, Any]
         "data_flags": flags,
         "links": links,
         "yahoo": links.get("Yahoo Finance"),
+        "google": links.get("Google Finance"),
         "research": links.get("Moneycontrol") or links.get("MarketWatch"),
         "chart": links.get("TradingView"),
     }

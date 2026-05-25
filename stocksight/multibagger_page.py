@@ -245,6 +245,7 @@ Table columns from Yahoo Finance where data exists
                     "52w High Rs.": r.week52_high,
                     "D/E": r.debt_equity,
                     "Yahoo Finance": r.links.get("Yahoo Finance", ""),
+                    "Google Finance": r.links.get("Google Finance", ""),
                 }
             )
 
@@ -263,7 +264,8 @@ Table columns from Yahoo Finance where data exists
                 "Qtr Sales Var %": st.column_config.NumberColumn(format="%.1f"),
                 "52w High Rs.": st.column_config.NumberColumn(format="%.2f"),
                 "D/E": st.column_config.NumberColumn(format="%.3f"),
-                "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
+                "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
+                "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
             },
         )
         st.dataframe(
@@ -469,6 +471,7 @@ def render_proven_multibaggers_section() -> None:
                 "52w High Rs.": r.week52_high,
                 "Fit Score": r.fit_score,
                 "Yahoo Finance": r.links.get("Yahoo Finance", ""),
+                "Google Finance": r.links.get("Google Finance", ""),
             }
         )
 
@@ -488,7 +491,8 @@ def render_proven_multibaggers_section() -> None:
             "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.0f"),
             "52w High Rs.": st.column_config.NumberColumn(format="%.2f"),
             "Fit Score": st.column_config.ProgressColumn("Fit Score", format="%.0f", min_value=0, max_value=100),
-            "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
+            "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
+            "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
         },
     )
     st.dataframe(

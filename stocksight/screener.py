@@ -211,29 +211,48 @@ def get_stock_links(raw_ticker: str) -> dict:
 
     NSE tickers (end with .NS):
       Yahoo Finance  → finance.yahoo.com/quote/RELIANCE.NS
+      Google Finance → google.com/finance/quote/RELIANCE:NSE
       Moneycontrol   → moneycontrol.com search for the symbol
       TradingView    → tradingview.com/symbols/NSE-RELIANCE
 
+    BSE tickers (end with .BO):
+      Google Finance → google.com/finance/quote/<SYM>:BOM
+
     NYSE / NASDAQ tickers (no suffix):
       Yahoo Finance  → finance.yahoo.com/quote/AAPL
+      Google Finance → google.com/finance/quote/AAPL:NASDAQ
       MarketWatch    → marketwatch.com/investing/stock/aapl
       TradingView    → tradingview.com/symbols/AAPL
     """
-    is_nse = raw_ticker.endswith(".NS") or raw_ticker.endswith(".BO")
-    clean  = raw_ticker.replace(".NS", "").replace(".BO", "")
+    is_nse = raw_ticker.endswith(".NS")
+    is_bse = raw_ticker.endswith(".BO")
+    clean = raw_ticker.replace(".NS", "").replace(".BO", "")
 
     if is_nse:
         return {
             "Yahoo Finance":  f"https://finance.yahoo.com/quote/{raw_ticker}",
+            "Google Finance": f"https://www.google.com/finance/quote/{clean}:NSE",
             "Moneycontrol":   f"https://www.moneycontrol.com/india/stockpricequote/search?q={clean}",
             "TradingView":    f"https://www.tradingview.com/symbols/NSE-{clean}/",
         }
-    else:
+    if is_bse:
         return {
-            "Yahoo Finance":  f"https://finance.yahoo.com/quote/{clean}",
-            "MarketWatch":    f"https://www.marketwatch.com/investing/stock/{clean.lower()}",
-            "TradingView":    f"https://www.tradingview.com/symbols/{clean}/",
+            "Yahoo Finance":  f"https://finance.yahoo.com/quote/{raw_ticker}",
+            "Google Finance": f"https://www.google.com/finance/quote/{clean}:BOM",
+            "Moneycontrol":   f"https://www.moneycontrol.com/india/stockpricequote/search?q={clean}",
+            "TradingView":    f"https://www.tradingview.com/symbols/BSE-{clean}/",
         }
+    return {
+        "Yahoo Finance":  f"https://finance.yahoo.com/quote/{clean}",
+        "Google Finance": f"https://www.google.com/finance/quote/{clean}:NASDAQ",
+        "MarketWatch":    f"https://www.marketwatch.com/investing/stock/{clean.lower()}",
+        "TradingView":    f"https://www.tradingview.com/symbols/{clean}/",
+    }
+
+
+def google_finance_url(raw_ticker: str) -> str:
+    """Standalone helper — Google Finance deep link for a yfinance-style ticker."""
+    return get_stock_links(raw_ticker).get("Google Finance", "")
 
 
 # ─────────────────────────────────────────────
@@ -1648,7 +1667,6 @@ def screen_stocks(
             is_nse   = ticker.endswith(".NS") or ticker.endswith(".BO")
             currency = "₹" if is_nse else "$"
             links    = get_stock_links(ticker)
-            lk       = list(links.keys())
 
             row = {
                 "Ticker":        ticker.replace(".NS", "").replace(".BO", ""),
@@ -1674,9 +1692,7 @@ def screen_stocks(
                 "Composite":     score,
                 "Decision":      decision,
                 "Matrix note":   matrix_note,
-                lk[0]:           links[lk[0]],
-                lk[1]:           links[lk[1]],
-                lk[2]:           links[lk[2]],
+                **{name: url for name, url in links.items()},
             }
 
             results.append(row)

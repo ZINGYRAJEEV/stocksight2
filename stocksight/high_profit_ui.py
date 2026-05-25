@@ -66,9 +66,13 @@ def high_profit_rank_table(results: list, scan_date: str | None = None) -> None:
             "Precautions": r.precautions,
         }
         for name, url in r.links.items():
-            short = {"Yahoo Finance": "📊 Yahoo", "Moneycontrol": "📈 MC", "TradingView": "📉 TV"}.get(
-                name, name
-            )
+            short = {
+                "Yahoo Finance": "📊 Yahoo",
+                "Google Finance": "🔎 Google",
+                "Moneycontrol": "📈 MC",
+                "MarketWatch": "📈 MW",
+                "TradingView": "📉 TV",
+            }.get(name, name)
             row[short] = url
         rows.append(row)
 
@@ -86,7 +90,7 @@ def high_profit_rank_table(results: list, scan_date: str | None = None) -> None:
         "Precautions": st.column_config.TextColumn("Precautions", width="large"),
     }
     for col in df.columns:
-        if col.startswith("📊") or col.startswith("📈") or col.startswith("📉"):
+        if col.startswith(("📊", "📈", "📉", "🔎")):
             col_cfg[col] = st.column_config.LinkColumn(col, display_text="Open ↗")
 
     st.caption(scan_date)
