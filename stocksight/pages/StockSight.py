@@ -369,7 +369,13 @@ else:
             ],
         )
 
-    _link_cols = ("Yahoo Finance", "Moneycontrol", "MarketWatch", "TradingView")
+    _link_cols = (
+        "Yahoo Finance",
+        "Google Finance",
+        "Moneycontrol",
+        "MarketWatch",
+        "TradingView",
+    )
     col_cfg = filter_column_config(
         display_df,
         {

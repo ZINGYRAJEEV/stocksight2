@@ -149,6 +149,23 @@ else:
         hide_index=True,
     )
 
+    csv_cols = [c for c in (*show_cols, "yahoo", "google", "research", "chart") if c in df.columns]
+    csv_df = df[csv_cols].rename(
+        columns={
+            "yahoo": "Yahoo Finance",
+            "google": "Google Finance",
+            "research": "Research",
+            "chart": "Chart",
+        }
+    )
+    st.download_button(
+        "⬇ Download Live NSE results CSV",
+        csv_df.to_csv(index=False).encode("utf-8"),
+        file_name=f"stocksight_live_nse_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv",
+        key="live_nse_dl_csv",
+    )
+
     with st.expander("Raw links & criteria flags"):
         link_cols = [
             c

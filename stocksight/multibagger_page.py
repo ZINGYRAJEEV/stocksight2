@@ -246,6 +246,8 @@ Table columns from Yahoo Finance where data exists
                     "D/E": r.debt_equity,
                     "Yahoo Finance": r.links.get("Yahoo Finance", ""),
                     "Google Finance": r.links.get("Google Finance", ""),
+                    "Moneycontrol": r.links.get("Moneycontrol", ""),
+                    "TradingView": r.links.get("TradingView", ""),
                 }
             )
 
@@ -266,6 +268,8 @@ Table columns from Yahoo Finance where data exists
                 "D/E": st.column_config.NumberColumn(format="%.3f"),
                 "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
                 "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
+                "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="MC ↗"),
+                "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
             },
         )
         st.dataframe(
@@ -472,6 +476,8 @@ def render_proven_multibaggers_section() -> None:
                 "Fit Score": r.fit_score,
                 "Yahoo Finance": r.links.get("Yahoo Finance", ""),
                 "Google Finance": r.links.get("Google Finance", ""),
+                "Moneycontrol": r.links.get("Moneycontrol", ""),
+                "TradingView": r.links.get("TradingView", ""),
             }
         )
 
@@ -493,6 +499,8 @@ def render_proven_multibaggers_section() -> None:
             "Fit Score": st.column_config.ProgressColumn("Fit Score", format="%.0f", min_value=0, max_value=100),
             "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
             "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
+            "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="MC ↗"),
+            "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
         },
     )
     st.dataframe(

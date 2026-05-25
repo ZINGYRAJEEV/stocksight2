@@ -787,6 +787,7 @@ def signal_results_download(
     rows = []
     for r in results:
         decision, composite, matrix_note = _decision_for_signal_result(r)
+        links = r.links or {}
         row = {
             "Ticker": r.ticker,
             "Raw": r.raw_ticker,
@@ -822,6 +823,12 @@ def signal_results_download(
             "Stop": r.stop_loss,
             "T2": r.target2,
             "Confidence": r.confidence,
+            # Research / chart deep links — clickable in Excel/Sheets and the in-app table.
+            "Yahoo Finance": links.get("Yahoo Finance", ""),
+            "Google Finance": links.get("Google Finance", ""),
+            "Moneycontrol": links.get("Moneycontrol", ""),
+            "MarketWatch": links.get("MarketWatch", ""),
+            "TradingView": links.get("TradingView", ""),
         }
         if include_scenario:
             row = {

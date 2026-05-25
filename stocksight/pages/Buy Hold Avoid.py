@@ -1,8 +1,10 @@
 """Buy / Hold / Avoid — composite score zones and action rules. Use after other screens; for decision-making, not discovery."""
 import html
+from datetime import datetime
+from urllib.parse import quote_plus
+
 import streamlit as st
 import pandas as pd
-from urllib.parse import quote_plus
 from scan_history_store import append_scan_record
 from screener import UNIVERSES, composite_action_zone, matrix_decision_note, screen_stocks
 from ui_components import (
@@ -431,6 +433,14 @@ else:
                 column_config=filter_column_config(df_table[visible_cols], col_cfg),
                 hide_index=False,
                 height=min(600, 60 + len(df_table) * 38),
+            )
+            csv = df_table[visible_cols].to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇ Download Buy/Hold/Avoid CSV",
+                csv,
+                file_name=f"stocksight_bha_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                key="bha_dl_csv",
             )
             render_decision_matrix_legend()
 

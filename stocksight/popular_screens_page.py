@@ -139,6 +139,8 @@ def _render_run_panel(key: str, reg: dict) -> None:
                     "Score": r.score,
                     "Yahoo Finance": r.links.get("Yahoo Finance", ""),
                     "Google Finance": r.links.get("Google Finance", ""),
+                    "Moneycontrol": r.links.get("Moneycontrol", ""),
+                    "TradingView": r.links.get("TradingView", ""),
                 }
             )
         df = pd.DataFrame(rows)
@@ -153,6 +155,8 @@ def _render_run_panel(key: str, reg: dict) -> None:
                 "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.1f"),
                 "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
                 "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
+                "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="MC ↗"),
+                "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
             },
         )
         st.dataframe(
