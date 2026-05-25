@@ -11,7 +11,9 @@ from multibagger import (
     DEFAULT_FILTERS,
     SCAN_SOURCES,
     MultibaggerFilters,
+    ProvenMultibaggerFilters,
     scan_multibagger,
+    scan_proven_multibaggers,
 )
 from screener import decision_from_metrics
 from scan_history_store import append_scan_record
@@ -284,4 +286,193 @@ Table columns from Yahoo Finance where data exists
         render_decision_matrix_legend()
 
     st.markdown("---")
+    render_proven_multibaggers_section()
+    st.markdown("---")
     st.caption("⚠️ Educational only — confirm fundamentals on Yahoo Finance before investing.")
+
+
+def render_proven_multibaggers_section() -> None:
+    """Find stocks that delivered 500%+ returns historically and are still trending up."""
+    key = "pmb"
+    session_key = f"{key}_results"
+
+    st.markdown("### 🏆 Proven Multibaggers — past 500%+ returns, still healthy")
+    st.caption(
+        "Stocks whose price grew **≥ N×** over the lookback window **and** are still in a healthy "
+        "trend (above 200-DMA, controlled drawdown, RSI in band). Educational only — past returns do not "
+        "guarantee future returns."
+    )
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([1.0, 1.0, 1.0])
+        with c1:
+            ensure_session_choice(f"{key}_universe", list(SCAN_SOURCES), SCAN_SOURCES[0])
+            universe = st.selectbox(
+                "Stock Universe (NSE)",
+                SCAN_SOURCES,
+                key=f"{key}_universe",
+                help="Use **Curated** first for a quick scan; Nifty 500 is several minutes.",
+            )
+            lookback_years = st.slider(
+                "Lookback (years)",
+                3, 10, 5, 1,
+                key=f"{key}_years",
+                help="Total return is measured over this many years of Yahoo daily history.",
+            )
+            min_return = st.slider(
+                "Minimum past return %",
+                100.0, 5000.0, 500.0, 50.0,
+                key=f"{key}_ret",
+                help="500% = 6× the original price (i.e. classic 'multibagger').",
+            )
+        with c2:
+            st.markdown("**Current health gates**")
+            max_dd = st.slider(
+                "Max drawdown from 52w high %",
+                5.0, 50.0, 25.0, 1.0,
+                key=f"{key}_dd",
+                help="Reject names that have already crashed off the 52w high beyond this.",
+            )
+            require_above_ma = st.checkbox(
+                "Require price above 200-DMA",
+                value=True,
+                key=f"{key}_ma200",
+            )
+            rsi_lo, rsi_hi = st.slider(
+                "RSI band (current)",
+                10.0, 90.0, (45.0, 75.0), 1.0,
+                key=f"{key}_rsi",
+                help="Excludes deeply oversold (<rsi_lo) and overheated (>rsi_hi) names.",
+            )
+        with c3:
+            st.markdown("**Quality floors**")
+            min_mcap = st.slider(
+                "Min market cap (₹ crore)",
+                0.0, 50000.0, 500.0, 100.0,
+                key=f"{key}_mcap",
+                help="Filter out micro-cap noise / illiquid names.",
+            )
+
+    run = st.button("▶  SCAN PROVEN MULTIBAGGERS", use_container_width=True, key=f"{key}_scan")
+
+    if run:
+        flt = ProvenMultibaggerFilters(
+            min_past_return_pct=float(min_return),
+            lookback_years=int(lookback_years),
+            max_drawdown_from_52w_high_pct=float(max_dd),
+            rsi_min=float(rsi_lo),
+            rsi_max=float(rsi_hi),
+            require_above_ma200=bool(require_above_ma),
+            min_market_cap_cr=float(min_mcap),
+        )
+        prog = st.progress(0, text="Initialising…")
+
+        def cb(i: int, t: int, s: str) -> None:
+            prog.progress(int(i / max(t, 1) * 100), text=f"Fetching {s}… ({i}/{t})")
+
+        pmb_results = scan_proven_multibaggers(universe, flt, progress_cb=cb)
+        prog.empty()
+        st.session_state[session_key] = pmb_results
+        st.session_state[f"{session_key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")
+        st.session_state[f"{session_key}_universe"] = universe
+
+        try:
+            append_scan_record(
+                "multibagger_proven",
+                universe,
+                [r.raw_ticker for r in pmb_results],
+                meta={
+                    "matches": len(pmb_results),
+                    "filters": flt.__dict__,
+                },
+            )
+        except Exception:
+            pass
+
+    results = st.session_state.get(session_key)
+    scan_at = st.session_state.get(f"{session_key}_at")
+    last_uni = st.session_state.get(f"{session_key}_universe", universe)
+
+    if results is None:
+        st.info(
+            "👆 Adjust filters and click **SCAN PROVEN MULTIBAGGERS**. "
+            "Default: 5-year return ≥ 500%, above 200-DMA, RSI 45–75, drawdown ≤ 25%."
+        )
+        return
+    if not results:
+        st.warning(
+            "No names matched. Try **Curated** universe, longer lookback (7–10 years), "
+            "lower past-return threshold (e.g. 300%), or widen the drawdown/RSI bands."
+        )
+        return
+
+    st.success(
+        f"**{len(results)}** stock(s) gave ≥ {min_return:.0f}% over ~{lookback_years}y "
+        f"and are still in a healthy trend · {last_uni}"
+        + (f" · {scan_at}" if scan_at else "")
+    )
+
+    rows = []
+    for rank, r in enumerate(results, start=1):
+        rows.append(
+            {
+                "S.No.": rank,
+                "Name": r.label,
+                "Ticker": r.ticker,
+                "Sector": r.sector,
+                "CMP Rs.": r.price,
+                f"~{r.lookback_years}y Return %": r.past_return_pct,
+                "↓52w High %": r.drawdown_from_52w_high_pct,
+                "vs 200-DMA %": r.pct_vs_ma200,
+                "RSI": r.rsi,
+                "P/E": r.pe,
+                "ROCE %": r.roce_pct,
+                "Qtr Profit Var %": r.qtr_profit_var_pct,
+                "Mar Cap Rs.Cr.": r.market_cap_cr,
+                "52w High Rs.": r.week52_high,
+                "Fit Score": r.fit_score,
+                "Yahoo Finance": r.links.get("Yahoo Finance", ""),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    return_col = next((c for c in df.columns if c.endswith("y Return %")), "Return %")
+    col_cfg = filter_column_config(
+        df,
+        {
+            "CMP Rs.": st.column_config.NumberColumn(format="%.2f"),
+            return_col: st.column_config.NumberColumn(format="%.0f%%"),
+            "↓52w High %": st.column_config.NumberColumn(format="%.1f"),
+            "vs 200-DMA %": st.column_config.NumberColumn(format="%+.1f"),
+            "RSI": st.column_config.NumberColumn(format="%.1f"),
+            "P/E": st.column_config.NumberColumn(format="%.2f"),
+            "ROCE %": st.column_config.NumberColumn(format="%.1f"),
+            "Qtr Profit Var %": st.column_config.NumberColumn(format="%.1f"),
+            "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.0f"),
+            "52w High Rs.": st.column_config.NumberColumn(format="%.2f"),
+            "Fit Score": st.column_config.ProgressColumn("Fit Score", format="%.0f", min_value=0, max_value=100),
+            "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
+        },
+    )
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config=col_cfg,
+        height=min(560, 48 + len(df) * 38),
+    )
+
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇ Download proven multibaggers CSV",
+        csv,
+        file_name=f"stocksight_proven_multibaggers_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv",
+        key=f"{key}_dl",
+    )
+
+    st.caption(
+        "Past return = total Yahoo close-to-close % over the lookback window (adjusted). "
+        "Healthy trend = above 200-DMA · RSI in band · controlled 52w drawdown. "
+        "Always confirm fundamentals and news before buying — past performance is not a guarantee."
+    )

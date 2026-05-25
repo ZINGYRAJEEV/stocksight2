@@ -18,9 +18,25 @@ import numpy as np
 import yfinance as yf
 
 try:
-    from .screener import UNIVERSES, get_pe, get_stock_links, get_sector_industry, hist_series
+    from .screener import (
+        UNIVERSES,
+        compute_rsi,
+        get_pe,
+        get_sector_industry,
+        get_stock_links,
+        hist_series,
+        pct_vs_ma,
+    )
 except ImportError:
-    from screener import UNIVERSES, get_pe, get_stock_links, get_sector_industry, hist_series
+    from screener import (
+        UNIVERSES,
+        compute_rsi,
+        get_pe,
+        get_sector_industry,
+        get_stock_links,
+        hist_series,
+        pct_vs_ma,
+    )
 
 INR_PER_CRORE = 10_000_000.0
 
@@ -261,6 +277,204 @@ def _fit_score(fund: dict[str, Optional[float]], flt: MultibaggerFilters) -> flo
     cap_s = max(0.0, (flt.max_market_cap_cr - mcap) / max(flt.max_market_cap_cr, 1.0)) if flt.apply_mcap_filter else 0.5
 
     return round((sales_s + prof_s + roce_s * 1.2 + de_s + cap_s) * 16.0, 1)
+
+
+@dataclass
+class ProvenMultibaggerFilters:
+    """Filters for stocks that already became multibaggers and are still healthy."""
+
+    min_past_return_pct: float = 500.0
+    lookback_years: int = 5
+    max_drawdown_from_52w_high_pct: float = 25.0
+    rsi_min: float = 45.0
+    rsi_max: float = 75.0
+    require_above_ma200: bool = True
+    min_market_cap_cr: float = 500.0
+
+
+@dataclass
+class ProvenMultibaggerResult:
+    ticker: str
+    raw_ticker: str
+    label: str
+    sector: str
+    price: float
+    pe: Optional[float]
+    market_cap_cr: Optional[float]
+    past_return_pct: float
+    lookback_years: int
+    drawdown_from_52w_high_pct: Optional[float]
+    pct_vs_ma200: Optional[float]
+    rsi: Optional[float]
+    roce_pct: Optional[float]
+    qtr_profit_var_pct: Optional[float]
+    week52_high: Optional[float]
+    fit_score: float = 0.0
+    links: dict = field(default_factory=dict)
+
+
+def _long_term_return_pct(stock: "yf.Ticker", years: int = 5) -> tuple[Optional[float], int]:
+    """Total return % over `years` using Yahoo daily history.
+
+    Returns (return_pct, actual_years_used). Falls back to max history if shorter.
+    """
+    try:
+        period = f"{max(int(years), 1)}y"
+        hist = stock.history(period=period, interval="1d", auto_adjust=True)
+        if hist is None or hist.empty:
+            hist = stock.history(period="max", interval="1d", auto_adjust=True)
+    except Exception:
+        return None, 0
+    if hist is None or hist.empty:
+        return None, 0
+
+    closes = hist_series(hist, "Close").dropna()
+    if closes.empty or len(closes) < 30:
+        return None, 0
+
+    start_px = float(closes.iloc[0])
+    end_px = float(closes.iloc[-1])
+    if start_px <= 0:
+        return None, 0
+    span_days = (closes.index[-1] - closes.index[0]).days
+    actual_years = max(1, round(span_days / 365.0))
+    return round((end_px / start_px - 1.0) * 100.0, 1), actual_years
+
+
+def _proven_fit_score(
+    past_return: float,
+    pct_vs_ma200: Optional[float],
+    rsi: Optional[float],
+    drawdown: Optional[float],
+    roce: Optional[float],
+) -> float:
+    """0–100 score: rewards big past return + healthy current trend."""
+    ret_s = min(past_return / 1000.0, 1.5)
+    ma_s = 0.5
+    if pct_vs_ma200 is not None:
+        ma_s = max(0.0, min(1.5, (pct_vs_ma200 + 10.0) / 40.0))
+    rsi_s = 0.5
+    if rsi is not None:
+        ideal = 60.0
+        rsi_s = max(0.0, 1.0 - abs(rsi - ideal) / 25.0)
+    dd_s = 0.5
+    if drawdown is not None:
+        dd_s = max(0.0, 1.0 - drawdown / 30.0)
+    roce_s = min((roce or 0.0) / 25.0, 1.0)
+    return round((ret_s * 1.4 + ma_s + rsi_s + dd_s + roce_s) * 18.0, 1)
+
+
+def scan_proven_multibaggers(
+    scan_source: str,
+    filters: ProvenMultibaggerFilters | None = None,
+    progress_cb: Optional[Callable[[int, int, str], None]] = None,
+    *,
+    info_delay_sec: float = 0.10,
+) -> list[ProvenMultibaggerResult]:
+    """Find stocks that already returned ≥ `min_past_return_pct`% and are still healthy.
+
+    "Healthy" today = above 200-DMA, RSI in band, not deeply off 52-week high.
+    Educational only — past returns ≠ future returns.
+    """
+    flt = filters or ProvenMultibaggerFilters()
+    universe = resolve_scan_tickers(scan_source)
+    if not universe:
+        return []
+
+    results: list[ProvenMultibaggerResult] = []
+    total = len(universe)
+
+    for i, (label, raw) in enumerate(universe):
+        if progress_cb:
+            progress_cb(i + 1, total, raw)
+
+        try:
+            stock = yf.Ticker(raw)
+            try:
+                info = stock.info or {}
+            except Exception:
+                info = {}
+            if not info.get("symbol") and not info.get("shortName"):
+                continue
+
+            past_return, years_used = _long_term_return_pct(stock, flt.lookback_years)
+            if past_return is None or past_return < flt.min_past_return_pct:
+                continue
+
+            try:
+                hist = stock.history(period="1y", interval="1d", auto_adjust=True)
+            except Exception:
+                hist = None
+            if hist is None or hist.empty:
+                continue
+            closes = hist_series(hist, "Close").dropna()
+            if closes.empty:
+                continue
+            price = float(closes.iloc[-1])
+
+            wk_high = float(closes.tail(252).max()) if len(closes) >= 5 else None
+            drawdown = None
+            if wk_high and wk_high > 0:
+                drawdown = round((1.0 - price / wk_high) * 100.0, 1)
+                if drawdown > flt.max_drawdown_from_52w_high_pct:
+                    continue
+
+            pct_ma200: Optional[float] = None
+            if len(closes) >= 200:
+                ma200 = float(closes.rolling(200).mean().iloc[-1])
+                if ma200 > 0:
+                    pct_ma200 = pct_vs_ma(price, ma200)
+            if flt.require_above_ma200:
+                if pct_ma200 is None or pct_ma200 < 0:
+                    continue
+
+            rsi_val: Optional[float] = None
+            try:
+                r = compute_rsi(closes)
+                if r is not None and not np.isnan(r):
+                    rsi_val = float(r)
+            except Exception:
+                rsi_val = None
+            if rsi_val is not None and (rsi_val < flt.rsi_min or rsi_val > flt.rsi_max):
+                continue
+
+            fund = extract_multibagger_fundamentals(info)
+            mcap_cr = fund.get("market_cap_cr")
+            if mcap_cr is not None and mcap_cr < flt.min_market_cap_cr:
+                continue
+
+            pe = get_pe(stock)
+            sector, _ = get_sector_industry(stock)
+            disp = raw.replace(".NS", "").replace(".BO", "")
+
+            results.append(
+                ProvenMultibaggerResult(
+                    ticker=disp,
+                    raw_ticker=raw,
+                    label=label if label != disp else disp,
+                    sector=sector or "—",
+                    price=round(price, 2),
+                    pe=round(float(pe), 2) if pe is not None else None,
+                    market_cap_cr=mcap_cr,
+                    past_return_pct=past_return,
+                    lookback_years=years_used,
+                    drawdown_from_52w_high_pct=drawdown,
+                    pct_vs_ma200=pct_ma200,
+                    rsi=round(rsi_val, 1) if rsi_val is not None else None,
+                    roce_pct=fund.get("roce_pct"),
+                    qtr_profit_var_pct=fund.get("qtr_profit_var_pct"),
+                    week52_high=fund.get("week52_high") or wk_high,
+                    fit_score=_proven_fit_score(past_return, pct_ma200, rsi_val, drawdown, fund.get("roce_pct")),
+                    links=get_stock_links(raw),
+                )
+            )
+        except Exception:
+            continue
+
+        if info_delay_sec > 0 and scan_source != "Curated (ROCE export names)":
+            time.sleep(info_delay_sec)
+
+    return sorted(results, key=lambda x: x.past_return_pct, reverse=True)
 
 
 def scan_multibagger(
