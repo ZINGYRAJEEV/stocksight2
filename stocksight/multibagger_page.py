@@ -286,9 +286,46 @@ Table columns from Yahoo Finance where data exists
         render_decision_matrix_legend()
 
     st.markdown("---")
-    render_proven_multibaggers_section()
+    st.info(
+        "Looking for stocks that already delivered **500%+ returns** and are still healthy? "
+        "Open the **🏆 Proven Multibaggers** page from the sidebar."
+    )
     st.markdown("---")
     st.caption("⚠️ Educational only — confirm fundamentals on Yahoo Finance before investing.")
+
+
+def render_proven_multibaggers_page() -> None:
+    """Dedicated page wrapper for the Proven Multibaggers scan."""
+    safe_set_page_config(
+        page_title="Proven Multibaggers | StockSight",
+        page_icon="🏆",
+        layout="wide",
+    )
+    inject_css()
+
+    st.markdown("### 🏆 Proven Multibaggers")
+    page_audience_note(
+        "Long-term investors who want stocks that already became multibaggers and are *still* working.",
+        "Filters Yahoo Finance daily history for **N-year total return ≥ X%** (default **500% over 5 years**), "
+        "then keeps only names that are currently in a healthy trend "
+        "(above 200-DMA · controlled 52w drawdown · RSI in band). Educational only.",
+    )
+
+    st.markdown("""
+<div style='background:#122f25; border:1px solid #1a3b31; border-left:4px solid #25d366;
+            border-radius:8px; padding:16px 20px; margin-bottom:16px;'>
+    <div style='font-size:0.9rem; color:#e8f7ef; line-height:1.65;'>
+        <b>Default screen:</b> 5-year return ≥ 500% (6×) ·
+        price above 200-DMA · drawdown from 52w high ≤ 25% · RSI 45–75 · market cap ≥ ₹500 Cr.
+    </div>
+    <div style='margin-top:10px; font-size:0.75rem; color:#a3d8b8;'>
+        Use <b>Curated</b> first (fast); Nifty 500 takes several minutes.
+        Past performance does <b>not</b> guarantee future returns — always confirm fundamentals and news.
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+    render_proven_multibaggers_section()
 
 
 def render_proven_multibaggers_section() -> None:

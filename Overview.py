@@ -30,6 +30,7 @@ from navigation_pages import (
     page_high_profit_regulatory_moat,
     page_multibagger,
     page_popular_screens,
+    page_proven_multibaggers,
     page_overbought_exit,
     page_oversold_bounce,
     page_portfolio,
@@ -91,6 +92,7 @@ NAV_PAGES = {
     ],
     "🌱 Theme Screens": [
         st.Page(page_multibagger, title="Multibagger Theme", icon="🌱"),
+        st.Page(page_proven_multibaggers, title="Proven Multibaggers (500%+)", icon="🏆"),
     ],
 }
 

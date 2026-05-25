@@ -30,6 +30,8 @@ def exec_stocksight_page(filename: str) -> None:
         "high_profit_page",
         "multibagger",
         "multibagger_page",
+        "scan_history_store",
+        "watchlist_store",
         "popular_screens",
         "popular_screens_page",
         "breeze_data",

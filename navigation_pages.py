@@ -117,6 +117,12 @@ def page_multibagger() -> None:
     exec_stocksight_page("Multibagger.py")
 
 
+def page_proven_multibaggers() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Proven Multibaggers.py")
+
+
 def page_popular_screens() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
