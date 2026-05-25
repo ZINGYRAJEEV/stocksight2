@@ -20,6 +20,7 @@ from ui_components import (
     filter_column_config,
     inject_css,
     page_audience_note,
+    render_clickable_scan_table,
     render_decision_matrix_legend,
     render_watchlist_panel,
     safe_set_page_config,
@@ -159,10 +160,10 @@ def _render_run_panel(key: str, reg: dict) -> None:
                 "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
             },
         )
-        st.dataframe(
+        render_clickable_scan_table(
             df,
-            use_container_width=True,
-            hide_index=True,
+            key_prefix=f"{key}_{picked}_results",
+            universe_name="NSE",
             column_config=col_cfg,
             height=min(560, 48 + len(df) * 36),
         )

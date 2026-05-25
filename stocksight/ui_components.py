@@ -5,6 +5,7 @@ ui_components.py — Shared UI helpers for all signal pages.
 import html
 import hashlib
 from datetime import datetime
+from typing import Optional
 
 import streamlit as st
 import pandas as pd
@@ -728,10 +729,21 @@ def render_watchlist_panel(key_prefix: str) -> None:
                 st.caption("SMTP status: unknown")
 
 
-def render_historical_detail_panel(df: pd.DataFrame) -> None:
-    """Expandable table of Yahoo ~1y historical fields for result rows."""
-    if df is None or df.empty or "Historical detail" not in df.columns:
+def render_historical_detail_panel(
+    df: pd.DataFrame,
+    *,
+    universe_name: str = "",
+    key_prefix: str = "hist",
+    selected_ticker: Optional[str] = None,
+) -> None:
+    """Yahoo ~1y historical fields **and** an interactive Yahoo-Finance-style chart.
+
+    Click a ticker in the picker below the table to load 1M/3M/6M/1Y/2Y/5Y/MAX price chart
+    with 50-DMA / 200-DMA overlays, range slider, and a period-return summary.
+    """
+    if df is None or df.empty:
         return
+    has_history = "Historical detail" in df.columns
     hist_cols = [
         c
         for c in (
@@ -751,19 +763,517 @@ def render_historical_detail_panel(df: pd.DataFrame) -> None:
         )
         if c in df.columns
     ]
-    if len(hist_cols) < 2:
-        return
-    with st.expander("📊 Historical detail (Yahoo ~1y daily)", expanded=False):
-        st.caption("Daily OHLCV-derived stats from Yahoo Finance. Trading-day approximations for return windows.")
-        st.dataframe(
-            df[hist_cols],
-            use_container_width=True,
-            hide_index=False,
-            column_config={
-                "Historical snapshot": st.column_config.TextColumn(width="large"),
-                "Historical detail": st.column_config.TextColumn(width="large"),
-            },
+    label = "📊 Historical detail & interactive chart" if has_history else "📈 Interactive price chart"
+    # Auto-expand when the user has clicked a row so they immediately see the chart for that ticker.
+    with st.expander(label, expanded=bool(selected_ticker)):
+        if has_history and len(hist_cols) >= 2:
+            st.caption("Daily OHLCV-derived stats from Yahoo Finance. Trading-day approximations for return windows.")
+            st.dataframe(
+                df[hist_cols],
+                use_container_width=True,
+                hide_index=False,
+                column_config={
+                    "Historical snapshot": st.column_config.TextColumn(width="large"),
+                    "Historical detail": st.column_config.TextColumn(width="large"),
+                },
+            )
+
+        # Ticker picker → progressive chart (Yahoo Finance style).
+        if "Ticker" not in df.columns:
+            return
+        tickers = [str(t) for t in df["Ticker"].astype(str).tolist() if str(t).strip()]
+        if not tickers:
+            return
+
+        st.markdown("---")
+        st.markdown("#### 🔍 Click a ticker for an interactive price chart")
+        if selected_ticker:
+            st.caption(
+                f"📍 Showing chart for **{html.escape(str(selected_ticker))}** — "
+                "selected from the results table above. Click another row to switch, "
+                "or use the dropdown below."
+            )
+
+        selectbox_key = f"{key_prefix}_chart_ticker"
+        # If the user clicked a different row in the results table, sync the dropdown to it.
+        if selected_ticker and selected_ticker in tickers:
+            if st.session_state.get(selectbox_key) != selected_ticker:
+                st.session_state[selectbox_key] = selected_ticker
+
+        default_choice = st.session_state.get(selectbox_key) or selected_ticker or tickers[0]
+        try:
+            default_idx = tickers.index(str(default_choice))
+        except ValueError:
+            default_idx = 0
+
+        pick = st.selectbox(
+            "Ticker",
+            options=tickers,
+            index=default_idx,
+            key=selectbox_key,
+            help="Click a row in the results table above, or pick a ticker here.",
         )
+        raw = ""
+        if "Raw" in df.columns:
+            try:
+                raw = str(df.loc[df["Ticker"].astype(str) == pick, "Raw"].iloc[0])
+            except Exception:
+                raw = ""
+        if not raw:
+            raw = raw_symbol_from_screen_display(pick, universe_name)
+
+        # Pre-buy research summary (decision, fundamentals, analyst, research links).
+        try:
+            picked_row = df.loc[df["Ticker"].astype(str) == pick].iloc[0]
+        except Exception:
+            picked_row = None
+        if picked_row is not None:
+            _render_pre_buy_research_card(picked_row, raw_ticker=raw)
+
+        render_progressive_history_chart(raw, display_ticker=pick, key=f"{key_prefix}_progchart")
+
+
+def render_clickable_scan_table(
+    df: pd.DataFrame,
+    *,
+    key_prefix: str,
+    universe_name: str = "",
+    column_config=None,
+    height: Optional[int] = None,
+    hide_index: bool = True,
+    caption: Optional[str] = "💡 Click any row to load its interactive chart + pre-buy research below.",
+    show_panel: bool = True,
+    styler=None,
+) -> Optional[str]:
+    """Render a results dataframe with row selection wired to the chart/research panel.
+
+    Replaces an `st.dataframe(...)` call. Captures the row click and renders
+    `render_historical_detail_panel(...)` (chart + pre-buy research card) below.
+
+    Returns the selected display ticker (or None).
+    """
+    if df is None or df.empty:
+        return None
+
+    if caption:
+        st.caption(caption)
+
+    table_arg = styler if styler is not None else df
+    kwargs = {
+        "use_container_width": True,
+        "hide_index": hide_index,
+        "selection_mode": "single-row",
+        "on_select": "rerun",
+        "key": f"{key_prefix}_table",
+    }
+    if column_config is not None:
+        kwargs["column_config"] = column_config
+    if height is not None:
+        kwargs["height"] = height
+
+    event = st.dataframe(table_arg, **kwargs)
+
+    selected_ticker: Optional[str] = None
+    try:
+        sel_rows = event.selection.rows  # type: ignore[union-attr]
+        if sel_rows:
+            row_idx = int(sel_rows[0])
+            if 0 <= row_idx < len(df) and "Ticker" in df.columns:
+                selected_ticker = str(df.iloc[row_idx]["Ticker"])
+    except Exception:
+        selected_ticker = None
+
+    if show_panel:
+        render_historical_detail_panel(
+            df,
+            universe_name=universe_name,
+            key_prefix=f"{key_prefix}_hist",
+            selected_ticker=selected_ticker,
+        )
+
+    return selected_ticker
+
+
+def _fmt_number(val, *, decimals: int = 2, suffix: str = "") -> str:
+    """Format a numeric cell for display, with em-dash fallback."""
+    try:
+        if val is None:
+            return "—"
+        if isinstance(val, str):
+            s = val.strip()
+            if not s or s in ("—", "-", "n/a", "NaN", "nan"):
+                return "—"
+            try:
+                val = float(s.replace(",", "").rstrip("%"))
+            except ValueError:
+                return html.escape(s)
+        if isinstance(val, float) and (val != val):  # NaN check
+            return "—"
+        return f"{float(val):,.{decimals}f}{suffix}"
+    except Exception:
+        return "—"
+
+
+def _fmt_int(val) -> str:
+    try:
+        if val is None or (isinstance(val, float) and val != val):
+            return "—"
+        return f"{int(float(val)):,}"
+    except (TypeError, ValueError):
+        s = str(val).strip()
+        return s if s else "—"
+
+
+def _decision_color(decision: str) -> str:
+    d = str(decision or "").upper()
+    if "STRONG BUY" in d or "BUY" in d:
+        return "#25d366"
+    if "HOLD" in d or "WATCH" in d:
+        return "#f0b429"
+    if "AVOID" in d or "SELL" in d:
+        return "#e05252"
+    return "#7abeac"
+
+
+def _render_pre_buy_research_card(row: pd.Series, *, raw_ticker: str) -> None:
+    """Render a research summary card for the selected ticker — pre-buy checklist data.
+
+    Shows decision/score block, growth, research links and the analyst section.
+    Resilient to missing columns: skips fields that aren't in the row.
+    """
+    if row is None:
+        return
+
+    def _g(col: str, default=None):
+        try:
+            v = row.get(col, default)
+        except Exception:
+            v = default
+        if isinstance(v, float) and (v != v):
+            return default
+        return v
+
+    ticker_label = str(_g("Ticker", raw_ticker) or raw_ticker or "—")
+    decision = str(_g("Decision", "—") or "—")
+    matrix_note = str(_g("Matrix note", "") or "")
+    composite = _g("Composite")
+    score = _g("Score")
+    rev_growth = _g("Rev growth %")
+    sector = str(_g("Sector", "") or "")
+    price = _g("Price")
+    pe = _g("PE Ratio") if _g("PE Ratio") is not None else _g("PE")
+
+    decision_color = _decision_color(decision)
+
+    st.markdown(
+        f"""
+<div style="background:linear-gradient(135deg,#0f2a22 0%,#122f25 100%);
+            border:1px solid #1a3b31; border-left:4px solid {decision_color};
+            border-radius:14px; padding:18px 22px; margin:14px 0 10px 0;
+            font-family:'IBM Plex Mono', monospace;">
+  <div style="display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;">
+    <div style="font-size:1.25rem; color:#e5f7ed; letter-spacing:0.5px;">
+      🎯 Pre-buy research — <b>{html.escape(ticker_label)}</b>
+    </div>
+    {f"<div style='color:#7abeac; font-size:0.82rem;'>{html.escape(sector)}</div>" if sector else ""}
+  </div>
+  <div style="display:flex; gap:18px; margin-top:10px; flex-wrap:wrap; font-size:0.82rem;">
+    <div><span style="color:#7abeac;">DECISION&nbsp;</span>
+         <b style="color:{decision_color};">{html.escape(decision)}</b></div>
+    <div><span style="color:#7abeac;">COMPOSITE&nbsp;</span>
+         <b style="color:#e5f7ed;">{_fmt_number(composite, decimals=1)}</b></div>
+    <div><span style="color:#7abeac;">SCORE&nbsp;</span>
+         <b style="color:#e5f7ed;">{_fmt_number(score, decimals=1)}</b></div>
+    <div><span style="color:#7abeac;">REV GROWTH&nbsp;</span>
+         <b style="color:#e5f7ed;">{_fmt_number(rev_growth, decimals=2, suffix='%')}</b></div>
+    <div><span style="color:#7abeac;">PRICE&nbsp;</span>
+         <b style="color:#e5f7ed;">{_fmt_number(price, decimals=2)}</b></div>
+    <div><span style="color:#7abeac;">PE&nbsp;</span>
+         <b style="color:#e5f7ed;">{_fmt_number(pe, decimals=1)}</b></div>
+  </div>
+  {("<div style='margin-top:10px; color:#a3d8b8; font-size:0.82rem; line-height:1.45;'>"
+    "<span style='color:#7abeac;'>📋 Matrix note&nbsp;</span>" + html.escape(matrix_note) + "</div>") if matrix_note else ""}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    # Research links — clickable chips
+    link_pairs = [
+        ("📊 Yahoo Finance", _g("Yahoo Finance", "")),
+        ("🔎 Google Finance", _g("Google Finance", "")),
+        ("📈 Moneycontrol", _g("Moneycontrol", "")),
+        ("📈 MarketWatch", _g("MarketWatch", "")),
+        ("📉 TradingView", _g("TradingView", "")),
+    ]
+    chips = "".join(
+        (
+            f"<a href='{html.escape(str(url))}' target='_blank' rel='noopener' "
+            "style='display:inline-block; margin:4px 8px 4px 0; padding:6px 12px; "
+            "background:#1a3b31; color:#25d366; text-decoration:none; "
+            "border-radius:8px; font-family:\"IBM Plex Mono\", monospace; "
+            "font-size:0.78rem; border:1px solid #25d36644;'>"
+            f"{html.escape(label)} ↗</a>"
+        )
+        for label, url in link_pairs
+        if url and str(url).strip()
+    )
+    if chips:
+        st.markdown(
+            f"<div style='margin:2px 0 14px 0;'>"
+            f"<span style='color:#7abeac; font-family:\"IBM Plex Mono\",monospace; "
+            f"font-size:0.78rem; margin-right:8px;'>🔗 RESEARCH&nbsp;</span>{chips}</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Analyst section — only show if any analyst column is populated
+    analyst_consensus = _g("Analyst consensus")
+    analyst_mean = _g("Analyst mean (1-5)")
+    analyst_count = _g("Analyst count")
+    target_mean = _g("Analyst target mean")
+    upside_pct = _g("Upside to target %")
+    ratings_mix = str(_g("Analyst ratings mix", "") or "")
+    recommendation = str(_g("Analyst recommendation", "") or "")
+
+    has_analyst = any(
+        v not in (None, "", "—") for v in (analyst_consensus, analyst_mean, analyst_count, target_mean, upside_pct)
+    ) or bool(ratings_mix) or (recommendation and recommendation != "—")
+
+    if not has_analyst:
+        return
+
+    upside_color = "#25d366"
+    try:
+        if upside_pct is not None and float(upside_pct) < 0:
+            upside_color = "#e05252"
+    except (TypeError, ValueError):
+        pass
+
+    st.markdown(
+        f"""
+<div style="background:#0f2a22; border:1px solid #1a3b31; border-radius:12px;
+            padding:14px 18px; margin:4px 0 10px 0;
+            font-family:'IBM Plex Mono', monospace;">
+  <div style="color:#e5f7ed; font-size:0.95rem; margin-bottom:8px;">
+    👥 Analyst consensus
+  </div>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));
+              gap:10px 18px; font-size:0.8rem;">
+    <div><span style="color:#7abeac;">Consensus&nbsp;</span>
+         <b style="color:#e5f7ed;">{html.escape(str(analyst_consensus) if analyst_consensus is not None else "—")}</b></div>
+    <div><span style="color:#7abeac;">Mean (1-5)&nbsp;</span>
+         <b style="color:#e5f7ed;">{_fmt_number(analyst_mean, decimals=2)}</b></div>
+    <div><span style="color:#7abeac;">Analysts&nbsp;</span>
+         <b style="color:#e5f7ed;">{_fmt_int(analyst_count)}</b></div>
+    <div><span style="color:#7abeac;">Target mean&nbsp;</span>
+         <b style="color:#e5f7ed;">{_fmt_number(target_mean, decimals=2)}</b></div>
+    <div><span style="color:#7abeac;">Upside&nbsp;</span>
+         <b style="color:{upside_color};">{_fmt_number(upside_pct, decimals=2, suffix='%')}</b></div>
+  </div>
+  {("<div style='margin-top:10px; color:#a3d8b8; font-size:0.78rem; line-height:1.45;'>"
+    "<span style='color:#7abeac;'>📊 Ratings mix&nbsp;</span>" + html.escape(ratings_mix) + "</div>") if ratings_mix else ""}
+  {("<div style='margin-top:6px; color:#a3d8b8; font-size:0.78rem; line-height:1.45;'>"
+    "<span style='color:#7abeac;'>📝 Recommendation&nbsp;</span>" + html.escape(recommendation) + "</div>") if recommendation and recommendation != "—" else ""}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+@st.cache_data(ttl=600)
+def _cached_period_history(raw_ticker: str, period: str) -> Optional[pd.DataFrame]:
+    """Yahoo Finance daily history for a given period code. Cached 10 min."""
+    try:
+        import yfinance as yf
+    except ImportError:
+        return None
+    try:
+        stk = yf.Ticker(raw_ticker)
+        df = stk.history(period=period, interval="1d", auto_adjust=True)
+        if df is None or df.empty:
+            return None
+        return df
+    except Exception:
+        return None
+
+
+def render_progressive_history_chart(
+    raw_ticker: str,
+    *,
+    display_ticker: str = "",
+    key: str = "progchart",
+    default_period_label: str = "1Y",
+) -> None:
+    """Yahoo-Finance-like progressive chart: range pills, area line, 50/200-DMA, range slider."""
+    if not raw_ticker:
+        return
+    label = display_ticker or raw_ticker
+
+    periods = [
+        ("1mo", "1M"),
+        ("3mo", "3M"),
+        ("6mo", "6M"),
+        ("1y", "1Y"),
+        ("2y", "2Y"),
+        ("5y", "5Y"),
+        ("max", "MAX"),
+    ]
+    period_labels = [lbl for _, lbl in periods]
+    try:
+        default_idx = period_labels.index(default_period_label)
+    except ValueError:
+        default_idx = 3
+
+    st.markdown(
+        f"<div style='font-family:IBM Plex Mono, monospace; font-size:1.05rem; "
+        f"color:#25d366; margin: 6px 0;'>📈 {html.escape(label)} — interactive chart "
+        f"<span style='color:#7abeac; font-size:0.78rem;'>({html.escape(raw_ticker)})</span></div>",
+        unsafe_allow_html=True,
+    )
+    selected = st.radio(
+        "Range",
+        period_labels,
+        index=default_idx,
+        horizontal=True,
+        key=f"{key}_period",
+        label_visibility="collapsed",
+    )
+    period_value = next(p for p, lbl in periods if lbl == selected)
+
+    hist = _cached_period_history(raw_ticker, period_value)
+    if hist is None or hist.empty:
+        st.warning(f"No Yahoo Finance history available for **{raw_ticker}** at range **{selected}**.")
+        return
+
+    closes = hist["Close"].astype(float)
+    start_px = float(closes.iloc[0])
+    end_px = float(closes.iloc[-1])
+    ret_pct = (end_px / start_px - 1.0) * 100.0 if start_px > 0 else 0.0
+    period_high = float(closes.max())
+    period_low = float(closes.min())
+    drawdown_from_high = (1.0 - end_px / period_high) * 100.0 if period_high > 0 else 0.0
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Price", f"{end_px:,.2f}")
+    m2.metric(f"{selected} return", f"{ret_pct:+.2f}%")
+    m3.metric(f"{selected} high", f"{period_high:,.2f}")
+    m4.metric(f"{selected} low", f"{period_low:,.2f}")
+    m5.metric("↓ from high", f"-{drawdown_from_high:.1f}%")
+
+    if go is None:
+        st.line_chart(closes)
+        return
+
+    color = "#25d366" if ret_pct >= 0 else "#e05252"
+    fill = "rgba(37, 211, 102, 0.18)" if ret_pct >= 0 else "rgba(224, 82, 82, 0.18)"
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=hist.index,
+            y=closes,
+            mode="lines",
+            line=dict(color=color, width=2),
+            fill="tozeroy",
+            fillcolor=fill,
+            name="Close",
+            hovertemplate="%{x|%d %b %Y}<br><b>%{y:,.2f}</b><extra></extra>",
+        )
+    )
+
+    if len(closes) >= 50:
+        ma50 = closes.rolling(50).mean()
+        fig.add_trace(
+            go.Scatter(
+                x=hist.index,
+                y=ma50,
+                mode="lines",
+                line=dict(color="#f0b429", width=1.2, dash="dot"),
+                name="50-DMA",
+                hovertemplate="50-DMA: %{y:,.2f}<extra></extra>",
+            )
+        )
+    if len(closes) >= 200:
+        ma200 = closes.rolling(200).mean()
+        fig.add_trace(
+            go.Scatter(
+                x=hist.index,
+                y=ma200,
+                mode="lines",
+                line=dict(color="#4db8ff", width=1.2, dash="dash"),
+                name="200-DMA",
+                hovertemplate="200-DMA: %{y:,.2f}<extra></extra>",
+            )
+        )
+
+    # Anchor a y-axis range that doesn't drop to 0 (area fills stay readable).
+    y_pad = max((period_high - period_low) * 0.10, 0.01)
+    y_min = max(0.0, period_low - y_pad)
+    y_max = period_high + y_pad
+
+    fig.update_layout(
+        template="plotly_white",
+        height=420,
+        margin=dict(l=10, r=10, t=30, b=10),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+        xaxis=dict(
+            rangeslider=dict(visible=True, thickness=0.06),
+            type="date",
+            showgrid=True,
+            gridcolor="#eef2f7",
+        ),
+        yaxis=dict(
+            title="Price",
+            range=[y_min, y_max],
+            showgrid=True,
+            gridcolor="#eef2f7",
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True, key=f"{key}_plot")
+
+    # Volume sub-chart (cleaner separately so the price area stays prominent).
+    if "Volume" in hist.columns and hist["Volume"].notna().any():
+        vol_fig = go.Figure(
+            go.Bar(
+                x=hist.index,
+                y=hist["Volume"].astype(float),
+                marker_color="#7abeac",
+                name="Volume",
+                hovertemplate="%{x|%d %b %Y}<br>Volume: %{y:,.0f}<extra></extra>",
+            )
+        )
+        vol_fig.update_layout(
+            template="plotly_white",
+            height=150,
+            margin=dict(l=10, r=10, t=10, b=10),
+            showlegend=False,
+            xaxis=dict(type="date", showgrid=False),
+            yaxis=dict(title="Volume", gridcolor="#eef2f7"),
+        )
+        st.plotly_chart(vol_fig, use_container_width=True, key=f"{key}_vol")
+
+    summary = pd.DataFrame(
+        {
+            "Start date": [hist.index[0].strftime("%d %b %Y")],
+            "End date": [hist.index[-1].strftime("%d %b %Y")],
+            "Bars": [int(len(hist))],
+            "Start price": [round(start_px, 2)],
+            "End price": [round(end_px, 2)],
+            "Return %": [round(ret_pct, 2)],
+            f"{selected} high": [round(period_high, 2)],
+            f"{selected} low": [round(period_low, 2)],
+            "Avg volume": [
+                int(hist["Volume"].mean()) if "Volume" in hist.columns and hist["Volume"].notna().any() else None
+            ],
+        }
+    )
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.caption(
+        f"Source: Yahoo Finance ({raw_ticker}) · adjusted daily closes · "
+        f"50/200-DMA overlays are computed on the visible range."
+    )
 
 
 def signal_results_download(
@@ -1387,12 +1897,29 @@ def results_table(
         if text_col in df.columns:
             col_cfg[text_col] = st.column_config.TextColumn(text_col, width="large")
 
-    render_historical_detail_panel(df)
-    st.dataframe(
+    st.caption("💡 Click any row to load its interactive chart in the panel below.")
+    table_event = st.dataframe(
         df, use_container_width=True,
         column_config=filter_column_config(df, col_cfg),
         hide_index=True,
         height=min(500, 50 + len(df) * 38),
+        selection_mode="single-row",
+        on_select="rerun",
+        key=f"{scenario_id}_results_table",
+    )
+    selected_ticker = None
+    try:
+        sel_rows = table_event.selection.rows  # type: ignore[union-attr]
+        if sel_rows:
+            row_idx = int(sel_rows[0])
+            if 0 <= row_idx < len(df) and "Ticker" in df.columns:
+                selected_ticker = str(df.iloc[row_idx]["Ticker"])
+    except Exception:
+        selected_ticker = None
+    render_historical_detail_panel(
+        df,
+        key_prefix=f"{scenario_id}_tbl_hist",
+        selected_ticker=selected_ticker,
     )
     render_decision_matrix_legend()
 

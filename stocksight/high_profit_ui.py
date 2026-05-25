@@ -10,6 +10,7 @@ import streamlit as st
 
 from high_profit import ARCHETYPES, nav_title
 from screener import composite_action_zone, matrix_decision_note
+from ui_components import render_clickable_scan_table
 
 
 def high_profit_header(archetype_id: str) -> None:
@@ -42,7 +43,12 @@ def high_profit_header(archetype_id: str) -> None:
     """)
 
 
-def high_profit_rank_table(results: list, scan_date: str | None = None) -> None:
+def high_profit_rank_table(
+    results: list,
+    scan_date: str | None = None,
+    *,
+    archetype_id: str = "hp",
+) -> None:
     if not results:
         return
     if scan_date is None:
@@ -74,6 +80,8 @@ def high_profit_rank_table(results: list, scan_date: str | None = None) -> None:
                 "TradingView": "📉 TV",
             }.get(name, name)
             row[short] = url
+            # Plain canonical link name (hidden in table) — used by pre-buy research card.
+            row[name] = url
         rows.append(row)
 
     df = pd.DataFrame(rows)
@@ -93,10 +101,16 @@ def high_profit_rank_table(results: list, scan_date: str | None = None) -> None:
         if col.startswith(("📊", "📈", "📉", "🔎")):
             col_cfg[col] = st.column_config.LinkColumn(col, display_text="Open ↗")
 
+    # Hide the canonical link columns (kept in the df for the pre-buy research card).
+    for canonical in ("Yahoo Finance", "Google Finance", "Moneycontrol", "MarketWatch", "TradingView"):
+        if canonical in df.columns:
+            col_cfg[canonical] = None  # type: ignore[assignment]
+
     st.caption(scan_date)
-    st.dataframe(
+    render_clickable_scan_table(
         df,
-        use_container_width=True,
+        key_prefix=f"hp_{archetype_id}_rank",
+        universe_name="NSE",
         column_config=col_cfg,
         hide_index=True,
         height=min(520, 48 + len(df) * 42),

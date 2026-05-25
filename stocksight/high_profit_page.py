@@ -177,7 +177,7 @@ def render_high_profit_page(archetype_id: str) -> None:
     else:
         src_note = f" · {last_source}" if last_source else ""
         st.caption(f"Showing {len(results)} match(es){src_note}")
-        high_profit_rank_table(results, scan_at)
+        high_profit_rank_table(results, scan_at, archetype_id=archetype_id)
         render_decision_matrix_legend()
         st.markdown("---")
         st.markdown(f"### 📋 {len(results)} name(s) — Detail cards")

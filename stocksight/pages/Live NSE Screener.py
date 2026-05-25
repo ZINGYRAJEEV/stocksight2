@@ -16,7 +16,11 @@ if str(_REPO) not in sys.path:
 
 from live_screener.engine import PRESETS, ScanConfig, run_healthy_dip_scan  # noqa: E402
 from screener import NIFTY_BENCHMARK, index_regime  # noqa: E402
-from ui_components import filter_column_config, safe_set_page_config  # noqa: E402
+from ui_components import (  # noqa: E402
+    filter_column_config,
+    render_clickable_scan_table,
+    safe_set_page_config,
+)
 
 safe_set_page_config(page_title="Live NSE Screener | StockSight", page_icon="📡", layout="wide")
 
@@ -138,15 +142,35 @@ else:
         "Why it fell", "Sector",
     ][: len(show_cols)]
 
+    # Enrich display with canonical link columns + matrix note so the pre-buy
+    # research card can render clickable chips. These columns are hidden in the
+    # visible table via column_config={col: None}.
+    hidden_cols: list[str] = []
+    for src, dst in (
+        ("yahoo", "Yahoo Finance"),
+        ("google", "Google Finance"),
+        ("research", "Moneycontrol"),
+        ("chart", "TradingView"),
+        ("decision", "Decision"),
+        ("matrix_note", "Matrix note"),
+    ):
+        if src in df.columns and dst not in display.columns:
+            display[dst] = df[src].values
+            hidden_cols.append(dst)
+    hide_cfg = {c: None for c in hidden_cols}
+
     def _highlight(row: pd.Series):
         if bool(df.loc[row.name, "all_conditions_met"]):
             return [_PASS_ROW_STYLE] * len(row)
         return [""] * len(row)
 
-    st.dataframe(
-        display.style.apply(_highlight, axis=1),  # type: ignore[arg-type]
-        use_container_width=True,
+    render_clickable_scan_table(
+        display,
+        key_prefix="live_nse_results",
+        universe_name="NSE",
         hide_index=True,
+        column_config=hide_cfg or None,
+        styler=display.style.apply(_highlight, axis=1),  # type: ignore[arg-type]
     )
 
     csv_cols = [c for c in (*show_cols, "yahoo", "google", "research", "chart") if c in df.columns]

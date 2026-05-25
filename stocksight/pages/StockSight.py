@@ -444,14 +444,34 @@ else:
         if text_col in show_df.columns:
             table_col_cfg[text_col] = st.column_config.TextColumn(text_col, width="large")
 
-    st.dataframe(
+    st.caption("💡 Click any row to load its interactive chart in the panel below.")
+    table_event = st.dataframe(
         show_df,
         use_container_width=True,
         hide_index=False,
         column_config=filter_column_config(show_df, table_col_cfg),
         height=min(620, 60 + len(show_df) * 40),
+        selection_mode="single-row",
+        on_select="rerun",
+        key="app1_results_table",
     )
-    render_historical_detail_panel(export_df if want_yahoo else display_df)
+
+    selected_ticker = None
+    try:
+        sel_rows = table_event.selection.rows  # type: ignore[union-attr]
+        if sel_rows:
+            row_idx = int(sel_rows[0])
+            if 0 <= row_idx < len(show_df) and "Ticker" in show_df.columns:
+                selected_ticker = str(show_df.iloc[row_idx]["Ticker"])
+    except Exception:
+        selected_ticker = None
+
+    render_historical_detail_panel(
+        export_df if want_yahoo else display_df,
+        universe_name=universe,
+        key_prefix="app1_hist",
+        selected_ticker=selected_ticker,
+    )
     csv = export_df.to_csv(index=True if export_df.index.name else False)
     st.download_button(
         label="⬇ Download Results as CSV",

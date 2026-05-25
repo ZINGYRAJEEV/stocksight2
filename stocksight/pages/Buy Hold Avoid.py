@@ -12,6 +12,7 @@ from ui_components import (
     inject_css,
     notify_watchlist_alerts_screen_df,
     page_audience_note,
+    render_clickable_scan_table,
     render_decision_matrix_legend,
     render_watchlist_panel,
     safe_set_page_config,
@@ -427,9 +428,10 @@ else:
                 "BusinessLine": st.column_config.LinkColumn("BusinessLine", display_text="BL ↗"),
             }
 
-            st.dataframe(
+            render_clickable_scan_table(
                 df_table[visible_cols],
-                use_container_width=True,
+                key_prefix="bha_results",
+                universe_name="NSE",
                 column_config=filter_column_config(df_table[visible_cols], col_cfg),
                 hide_index=False,
                 height=min(600, 60 + len(df_table) * 38),

@@ -23,6 +23,7 @@ from ui_components import (
     inject_css,
     notify_watchlist_alerts_from_metrics,
     page_audience_note,
+    render_clickable_scan_table,
     render_decision_matrix_legend,
     render_watchlist_panel,
     safe_set_page_config,
@@ -272,10 +273,10 @@ Table columns from Yahoo Finance where data exists
                 "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
             },
         )
-        st.dataframe(
+        render_clickable_scan_table(
             df,
-            use_container_width=True,
-            hide_index=True,
+            key_prefix=f"{key}_results",
+            universe_name="NSE",
             column_config=col_cfg,
             height=min(560, 48 + len(df) * 38),
         )
@@ -503,10 +504,10 @@ def render_proven_multibaggers_section() -> None:
             "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
         },
     )
-    st.dataframe(
+    render_clickable_scan_table(
         df,
-        use_container_width=True,
-        hide_index=True,
+        key_prefix=f"{key}_results",
+        universe_name="NSE",
         column_config=col_cfg,
         height=min(560, 48 + len(df) * 38),
     )
