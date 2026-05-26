@@ -9,9 +9,11 @@ import streamlit as st
 
 from multibagger import (
     DEFAULT_FILTERS,
+    LEGACY_CURATED_KEY,
     SCAN_SOURCES,
     MultibaggerFilters,
     ProvenMultibaggerFilters,
+    is_us_source,
     scan_multibagger,
     scan_proven_multibaggers,
 )
@@ -40,12 +42,13 @@ def render_multibagger_page() -> None:
 
     st.markdown("### 🌱 Multibagger theme")
     page_audience_note(
-        "Fundamental investors hunting high growth + quality on NSE (small/mid cap or ROCE-led lists).",
+        "Fundamental investors hunting high growth + quality on **NSE or US** universes (small/mid cap or ROCE-led).",
         "Filters on quarterly sales/profit growth, ROCE, optional debt and market-cap gates; "
-        "outputs a ranked table with Yahoo links. Use **ROCE leaders** preset first, then **Small-cap strict** if needed.",
+        "outputs a ranked table with Yahoo / Google / research links. "
+        "Use **ROCE leaders** preset first, then **Small-cap strict** if needed.",
     )
     st.caption(
-        "Columns: **Qtr Sales Var %**, **Qtr Profit Var %**, **ROCE %**, **Mar Cap (cr)** — Yahoo proxies."
+        "Columns: **Qtr Sales Var %**, **Qtr Profit Var %**, **ROCE %**, **Mar Cap** (₹ Cr for NSE, $ B for US) — Yahoo proxies."
     )
 
     st.markdown("""
@@ -54,10 +57,10 @@ def render_multibagger_page() -> None:
     <div style='font-size:0.9rem; color:#e8f7ef; line-height:1.65;'>
         <b>Default reference filters</b><br>
         Qtr Sales Var &gt; 30% · Qtr Profit Var &gt; 40% · ROCE &gt; 15% ·
-        optional: D/E &lt; 0.5 · Mkt cap &lt; ₹5,000 cr
+        optional: D/E &lt; 0.5 · Mkt cap &lt; ₹5,000 cr (NSE) / $100 B (US)
     </div>
     <div style='margin-top:10px; font-size:0.75rem; color:#a3d8b8;'>
-        Large caps (e.g. Nestle, ICICI AMC) pass ROCE-led preset — turn off
+        Large caps (e.g. Nestle, ICICI AMC, AAPL, MSFT) pass ROCE-led preset — turn off
         <b>Apply market cap filter</b> for the small-cap preset.
     </div>
 </div>
@@ -88,11 +91,16 @@ def render_multibagger_page() -> None:
         c1, c2, c3 = st.columns([1.0, 1.05, 1.2])
         with c1:
             st.markdown("#### Settings")
-            ensure_session_choice(f"{key}_universe", list(SCAN_SOURCES), SCAN_SOURCES[0])
+            # Migrate any legacy curated-key in session state to the new label.
+            uni_key = f"{key}_universe"
+            if st.session_state.get(uni_key) == LEGACY_CURATED_KEY:
+                st.session_state[uni_key] = SCAN_SOURCES[0]
+            ensure_session_choice(uni_key, list(SCAN_SOURCES), SCAN_SOURCES[0])
             universe = st.selectbox(
-                "Stock Universe (NSE)",
+                "Stock Universe (NSE / US)",
                 SCAN_SOURCES,
-                key=f"{key}_universe",
+                key=uni_key,
+                help="Pick an NSE list (curated / Nifty) or a US list (curated / S&P 500).",
             )
         with c2:
             st.markdown("#### Criteria")
@@ -107,6 +115,7 @@ Table columns from Yahoo Finance where data exists
             )
         with c3:
             st.markdown("#### Filters")
+            us_universe = is_us_source(universe)
             min_sales = st.slider(
                 "Min Qtr Sales Var %",
                 0.0,
@@ -136,15 +145,29 @@ Table columns from Yahoo Finance where data exists
                 value=small_cap,
                 key=f"{key}_mcap_on",
             )
-            max_cap = st.slider(
-                "Max market cap (₹ crore)",
-                500.0,
-                300000.0,
-                float(DEFAULT_FILTERS["max_market_cap_cr"]),
-                500.0,
-                key=f"{key}_cap",
-                disabled=not apply_mcap,
-            )
+            if us_universe:
+                max_cap_usd_bn = st.slider(
+                    "Max market cap ($ billion)",
+                    1.0,
+                    5000.0,
+                    float(DEFAULT_FILTERS["max_market_cap_usd_bn"]),
+                    1.0,
+                    key=f"{key}_cap_usd",
+                    disabled=not apply_mcap,
+                    help="US universe — caps measured in USD billions (e.g. AAPL ≈ $3 T, COST ≈ $400 B).",
+                )
+                max_cap = float(DEFAULT_FILTERS["max_market_cap_cr"])
+            else:
+                max_cap = st.slider(
+                    "Max market cap (₹ crore)",
+                    500.0,
+                    300000.0,
+                    float(DEFAULT_FILTERS["max_market_cap_cr"]),
+                    500.0,
+                    key=f"{key}_cap",
+                    disabled=not apply_mcap,
+                )
+                max_cap_usd_bn = float(DEFAULT_FILTERS["max_market_cap_usd_bn"])
             apply_de = st.checkbox(
                 "Apply debt/equity filter",
                 value=small_cap,
@@ -173,6 +196,7 @@ Table columns from Yahoo Finance where data exists
         min_qtr_profit_var_pct=min_prof,
         max_debt_equity=max_de,
         max_market_cap_cr=max_cap,
+        max_market_cap_usd_bn=max_cap_usd_bn,
         min_roce_pct=min_roce,
         apply_mcap_filter=apply_mcap,
         apply_de_filter=apply_de,
@@ -228,55 +252,68 @@ Table columns from Yahoo Finance where data exists
             decision, composite, matrix_note = decision_from_metrics(
                 r.pe, None, None, score=fit, signal_label="BUY", scenario_id="multibagger"
             )
-            rows.append(
-                {
-                    "S.No.": rank,
-                    "Name": r.label,
-                    "Ticker": r.ticker,
-                    "Decision": decision,
-                    "Composite": composite if composite == composite else fit,
-                    "Matrix note": matrix_note,
-                    "CMP Rs.": r.price,
-                    "P/E": r.pe,
-                    "Mar Cap Rs.Cr.": r.market_cap_cr,
-                    "Div Yld %": r.div_yield_pct,
-                    "Qtr Profit Var %": r.qtr_profit_var_pct,
-                    "Qtr Sales Var %": r.qtr_sales_var_pct,
-                    "ROCE %": roce_lbl,
-                    "52w High Rs.": r.week52_high,
-                    "D/E": r.debt_equity,
-                    "Yahoo Finance": r.links.get("Yahoo Finance", ""),
-                    "Google Finance": r.links.get("Google Finance", ""),
-                    "Moneycontrol": r.links.get("Moneycontrol", ""),
-                    "TradingView": r.links.get("TradingView", ""),
-                }
-            )
+            row = {
+                "S.No.": rank,
+                "Name": r.label,
+                "Ticker": r.ticker,
+                "Raw": r.raw_ticker,
+                "Currency": r.currency or "INR",
+                "Decision": decision,
+                "Composite": composite if composite == composite else fit,
+                "Matrix note": matrix_note,
+                "CMP": r.price,
+                "P/E": r.pe,
+                "Mar Cap": r.market_cap_display or "",
+                "Mar Cap Rs.Cr.": r.market_cap_cr,
+                "Mar Cap $B": r.market_cap_usd_bn,
+                "Div Yld %": r.div_yield_pct,
+                "Qtr Profit Var %": r.qtr_profit_var_pct,
+                "Qtr Sales Var %": r.qtr_sales_var_pct,
+                "ROCE %": roce_lbl,
+                "52w High": r.week52_high,
+                "D/E": r.debt_equity,
+            }
+            # Include only the links available for this ticker (Moneycontrol for NSE, MarketWatch for US).
+            for link_name, link_url in (r.links or {}).items():
+                row[link_name] = link_url
+            rows.append(row)
 
         df = pd.DataFrame(rows)
+        # Drop fully-empty columns (e.g. "Mar Cap Rs.Cr." disappears for a US-only scan).
+        df = df.dropna(axis=1, how="all")
+        for empty_str_col in ("Mar Cap",):
+            if empty_str_col in df.columns and not df[empty_str_col].astype(str).str.strip().any():
+                df = df.drop(columns=[empty_str_col])
+
         col_cfg = filter_column_config(
             df,
             {
                 "Decision": st.column_config.TextColumn("Decision", width="medium"),
                 "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
                 "Composite": st.column_config.NumberColumn(format="%.1f"),
-                "CMP Rs.": st.column_config.NumberColumn(format="%.2f"),
+                "CMP": st.column_config.NumberColumn(format="%.2f"),
                 "P/E": st.column_config.NumberColumn(format="%.2f"),
-                "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.2f"),
+                "Mar Cap": st.column_config.TextColumn("Mar Cap", help="Market cap in native units (₹ Cr / $ B / $ T)."),
+                "Mar Cap Rs.Cr.": st.column_config.NumberColumn("Mar Cap (₹ Cr)", format="%.2f"),
+                "Mar Cap $B": st.column_config.NumberColumn("Mar Cap ($ B)", format="%.2f"),
                 "Div Yld %": st.column_config.NumberColumn(format="%.2f"),
                 "Qtr Profit Var %": st.column_config.NumberColumn(format="%.1f"),
                 "Qtr Sales Var %": st.column_config.NumberColumn(format="%.1f"),
-                "52w High Rs.": st.column_config.NumberColumn(format="%.2f"),
+                "52w High": st.column_config.NumberColumn(format="%.2f"),
                 "D/E": st.column_config.NumberColumn(format="%.3f"),
+                "Currency": st.column_config.TextColumn("Cur", width="small"),
+                "Raw": None,  # hide internal raw-ticker column from the table
                 "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
                 "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
                 "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="MC ↗"),
+                "MarketWatch": st.column_config.LinkColumn("MarketWatch", display_text="MW ↗"),
                 "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
             },
         )
         render_clickable_scan_table(
             df,
             key_prefix=f"{key}_results",
-            universe_name="NSE",
+            universe_name=last_uni,
             column_config=col_cfg,
             height=min(560, 48 + len(df) * 38),
         )
@@ -312,7 +349,7 @@ def render_proven_multibaggers_page() -> None:
 
     st.markdown("### 🏆 Proven Multibaggers")
     page_audience_note(
-        "Long-term investors who want stocks that already became multibaggers and are *still* working.",
+        "Long-term investors who want **NSE or US** stocks that already became multibaggers and are *still* working.",
         "Filters Yahoo Finance daily history for **N-year total return ≥ X%** (default **500% over 5 years**), "
         "then keeps only names that are currently in a healthy trend "
         "(above 200-DMA · controlled 52w drawdown · RSI in band). Educational only.",
@@ -323,10 +360,11 @@ def render_proven_multibaggers_page() -> None:
             border-radius:8px; padding:16px 20px; margin-bottom:16px;'>
     <div style='font-size:0.9rem; color:#e8f7ef; line-height:1.65;'>
         <b>Default screen:</b> 5-year return ≥ 500% (6×) ·
-        price above 200-DMA · drawdown from 52w high ≤ 25% · RSI 45–75 · market cap ≥ ₹500 Cr.
+        price above 200-DMA · drawdown from 52w high ≤ 25% · RSI 45–75 ·
+        market cap ≥ ₹500 Cr (NSE) / ≥ $1 B (US).
     </div>
     <div style='margin-top:10px; font-size:0.75rem; color:#a3d8b8;'>
-        Use <b>Curated</b> first (fast); Nifty 500 takes several minutes.
+        Use <b>Curated NSE</b> or <b>Curated US</b> first (fast). Nifty 500 / S&P 500 take several minutes.
         Past performance does <b>not</b> guarantee future returns — always confirm fundamentals and news.
     </div>
 </div>
@@ -350,13 +388,17 @@ def render_proven_multibaggers_section() -> None:
     with st.container(border=True):
         c1, c2, c3 = st.columns([1.0, 1.0, 1.0])
         with c1:
-            ensure_session_choice(f"{key}_universe", list(SCAN_SOURCES), SCAN_SOURCES[0])
+            uni_key = f"{key}_universe"
+            if st.session_state.get(uni_key) == LEGACY_CURATED_KEY:
+                st.session_state[uni_key] = SCAN_SOURCES[0]
+            ensure_session_choice(uni_key, list(SCAN_SOURCES), SCAN_SOURCES[0])
             universe = st.selectbox(
-                "Stock Universe (NSE)",
+                "Stock Universe (NSE / US)",
                 SCAN_SOURCES,
-                key=f"{key}_universe",
-                help="Use **Curated** first for a quick scan; Nifty 500 is several minutes.",
+                key=uni_key,
+                help="NSE: Curated, Nifty 50, Nifty 500. US: Curated mega/large-cap or S&P 500.",
             )
+            us_universe = is_us_source(universe)
             lookback_years = st.slider(
                 "Lookback (years)",
                 3, 10, 5, 1,
@@ -390,12 +432,22 @@ def render_proven_multibaggers_section() -> None:
             )
         with c3:
             st.markdown("**Quality floors**")
-            min_mcap = st.slider(
-                "Min market cap (₹ crore)",
-                0.0, 50000.0, 500.0, 100.0,
-                key=f"{key}_mcap",
-                help="Filter out micro-cap noise / illiquid names.",
-            )
+            if us_universe:
+                min_mcap_usd_bn = st.slider(
+                    "Min market cap ($ billion)",
+                    0.0, 500.0, 1.0, 0.5,
+                    key=f"{key}_mcap_usd",
+                    help="US universe — filter out micro-caps. 1 = $1 B floor.",
+                )
+                min_mcap = 0.0
+            else:
+                min_mcap = st.slider(
+                    "Min market cap (₹ crore)",
+                    0.0, 50000.0, 500.0, 100.0,
+                    key=f"{key}_mcap",
+                    help="Filter out micro-cap noise / illiquid names.",
+                )
+                min_mcap_usd_bn = 1.0
 
     run = st.button("▶  SCAN PROVEN MULTIBAGGERS", use_container_width=True, key=f"{key}_scan")
 
@@ -408,6 +460,7 @@ def render_proven_multibaggers_section() -> None:
             rsi_max=float(rsi_hi),
             require_above_ma200=bool(require_above_ma),
             min_market_cap_cr=float(min_mcap),
+            min_market_cap_usd_bn=float(min_mcap_usd_bn),
         )
         prog = st.progress(0, text="Initialising…")
 
@@ -458,36 +511,44 @@ def render_proven_multibaggers_section() -> None:
 
     rows = []
     for rank, r in enumerate(results, start=1):
-        rows.append(
-            {
-                "S.No.": rank,
-                "Name": r.label,
-                "Ticker": r.ticker,
-                "Sector": r.sector,
-                "CMP Rs.": r.price,
-                f"~{r.lookback_years}y Return %": r.past_return_pct,
-                "↓52w High %": r.drawdown_from_52w_high_pct,
-                "vs 200-DMA %": r.pct_vs_ma200,
-                "RSI": r.rsi,
-                "P/E": r.pe,
-                "ROCE %": r.roce_pct,
-                "Qtr Profit Var %": r.qtr_profit_var_pct,
-                "Mar Cap Rs.Cr.": r.market_cap_cr,
-                "52w High Rs.": r.week52_high,
-                "Fit Score": r.fit_score,
-                "Yahoo Finance": r.links.get("Yahoo Finance", ""),
-                "Google Finance": r.links.get("Google Finance", ""),
-                "Moneycontrol": r.links.get("Moneycontrol", ""),
-                "TradingView": r.links.get("TradingView", ""),
-            }
-        )
+        row = {
+            "S.No.": rank,
+            "Name": r.label,
+            "Ticker": r.ticker,
+            "Raw": r.raw_ticker,
+            "Currency": r.currency or "INR",
+            "Sector": r.sector,
+            "CMP": r.price,
+            f"~{r.lookback_years}y Return %": r.past_return_pct,
+            "↓52w High %": r.drawdown_from_52w_high_pct,
+            "vs 200-DMA %": r.pct_vs_ma200,
+            "RSI": r.rsi,
+            "P/E": r.pe,
+            "ROCE %": r.roce_pct,
+            "Qtr Profit Var %": r.qtr_profit_var_pct,
+            "Mar Cap": r.market_cap_display or "",
+            "Mar Cap Rs.Cr.": r.market_cap_cr,
+            "Mar Cap $B": r.market_cap_usd_bn,
+            "52w High": r.week52_high,
+            "Fit Score": r.fit_score,
+        }
+        for link_name, link_url in (r.links or {}).items():
+            row[link_name] = link_url
+        rows.append(row)
 
     df = pd.DataFrame(rows)
+    df = df.dropna(axis=1, how="all")
+    for empty_str_col in ("Mar Cap",):
+        if empty_str_col in df.columns and not df[empty_str_col].astype(str).str.strip().any():
+            df = df.drop(columns=[empty_str_col])
+
     return_col = next((c for c in df.columns if c.endswith("y Return %")), "Return %")
     col_cfg = filter_column_config(
         df,
         {
-            "CMP Rs.": st.column_config.NumberColumn(format="%.2f"),
+            "CMP": st.column_config.NumberColumn(format="%.2f"),
+            "Currency": st.column_config.TextColumn("Cur", width="small"),
+            "Raw": None,
             return_col: st.column_config.NumberColumn(format="%.0f%%"),
             "↓52w High %": st.column_config.NumberColumn(format="%.1f"),
             "vs 200-DMA %": st.column_config.NumberColumn(format="%+.1f"),
@@ -495,19 +556,22 @@ def render_proven_multibaggers_section() -> None:
             "P/E": st.column_config.NumberColumn(format="%.2f"),
             "ROCE %": st.column_config.NumberColumn(format="%.1f"),
             "Qtr Profit Var %": st.column_config.NumberColumn(format="%.1f"),
-            "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.0f"),
-            "52w High Rs.": st.column_config.NumberColumn(format="%.2f"),
+            "Mar Cap": st.column_config.TextColumn("Mar Cap", help="Native units (₹ Cr / $ B / $ T)."),
+            "Mar Cap Rs.Cr.": st.column_config.NumberColumn("Mar Cap (₹ Cr)", format="%.0f"),
+            "Mar Cap $B": st.column_config.NumberColumn("Mar Cap ($ B)", format="%.2f"),
+            "52w High": st.column_config.NumberColumn(format="%.2f"),
             "Fit Score": st.column_config.ProgressColumn("Fit Score", format="%.0f", min_value=0, max_value=100),
             "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
             "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
             "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="MC ↗"),
+            "MarketWatch": st.column_config.LinkColumn("MarketWatch", display_text="MW ↗"),
             "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
         },
     )
     render_clickable_scan_table(
         df,
         key_prefix=f"{key}_results",
-        universe_name="NSE",
+        universe_name=last_uni,
         column_config=col_cfg,
         height=min(560, 48 + len(df) * 38),
     )
