@@ -127,3 +127,21 @@ def page_popular_screens() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
     exec_stocksight_page("Popular Screens.py")
+
+
+def page_intraday_screener() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Intraday Screener.py")
+
+
+def page_gap_scanner() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Gap Scanner.py")
+
+
+def page_intraday_guide() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Intraday Guide.py")

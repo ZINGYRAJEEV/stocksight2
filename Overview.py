@@ -23,11 +23,14 @@ from navigation_pages import (
     page_breakout_momentum,
     page_buy_hold_avoid,
     page_extreme_oversold,
+    page_gap_scanner,
     page_high_profit_category_leader,
     page_high_profit_duopoly,
     page_high_profit_monopoly,
     page_high_profit_platform,
     page_high_profit_regulatory_moat,
+    page_intraday_guide,
+    page_intraday_screener,
     page_multibagger,
     page_popular_screens,
     page_proven_multibaggers,
@@ -93,6 +96,11 @@ NAV_PAGES = {
     "🌱 Theme Screens": [
         st.Page(page_multibagger, title="Multibagger Theme", icon="🌱"),
         st.Page(page_proven_multibaggers, title="Proven Multibaggers (500%+)", icon="🏆"),
+    ],
+    "⚡ Intraday": [
+        st.Page(page_gap_scanner, title="Gap Scanner (pre-market)", icon="🌅"),
+        st.Page(page_intraday_screener, title="Intraday Screener (4 strategies)", icon="📡"),
+        st.Page(page_intraday_guide, title="Intraday Guide", icon="📚"),
     ],
 }
 

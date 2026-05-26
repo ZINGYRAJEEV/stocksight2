@@ -34,6 +34,8 @@ def exec_stocksight_page(filename: str) -> None:
         "watchlist_store",
         "popular_screens",
         "popular_screens_page",
+        "intraday",
+        "intraday_page",
         "breeze_data",
     ):
         sys.modules.pop(_m, None)
