@@ -424,9 +424,14 @@ def _results_to_df(results: list[IntradayResult]) -> pd.DataFrame:
     for rank, r in enumerate(results, start=1):
         row = {
             "S.No.": rank,
+            "Rank": f"#{rank}",
             "Ticker": r.ticker,
             "Raw": r.raw_ticker,
             "Strategy": STRATEGY_LABEL.get(r.strategy, r.strategy),
+            "Score /120": r.score_120,
+            "Tier": r.rank_tier or "—",
+            "Size": r.position_size or "—",
+            "Rank Why": r.rank_why or "—",
             "Prediction": r.prediction or "—",
             "Sess vol %": r.session_vol_pct,
             "Sector": r.sector,
@@ -488,7 +493,24 @@ def _intraday_col_cfg(df: pd.DataFrame) -> dict:
     return filter_column_config(
         df,
         {
+            "Rank": st.column_config.TextColumn("Rank", width="small"),
             "Strategy": st.column_config.TextColumn("Strategy", width="medium"),
+            "Score /120": st.column_config.NumberColumn(
+                "Score /120",
+                format="%d",
+                help="7-rule intraday quality score. Higher = cleaner setup.",
+            ),
+            "Tier": st.column_config.TextColumn("Tier", width="small"),
+            "Size": st.column_config.TextColumn(
+                "Size",
+                width="small",
+                help="Position size suggestion from score tier (100%, 75%, 50%, Skip).",
+            ),
+            "Rank Why": st.column_config.TextColumn(
+                "Rank Why",
+                width="large",
+                help="Rule contribution breakdown + timing quality adjustment used for ranking.",
+            ),
             "Prediction": st.column_config.TextColumn(
                 "Prediction",
                 width="large",
@@ -582,6 +604,7 @@ def _render_diagnostic_panel(stats: IntradayScanStats, *, key_prefix: str) -> No
         ("Volume ratio too low", stats.failed_volume_ratio),
         ("RSI outside band", stats.failed_rsi),
         ("|Change %| below minimum", stats.failed_min_change),
+        ("Hard reject rules triggered", stats.failed_hard_reject),
         ("Passed filters but no strategy match", stats.no_strategy_match),
     ]
     fail_rows = [(label, n) for label, n in rows if n > 0]
@@ -631,6 +654,30 @@ def render_intraday_screener_page() -> None:
         "⚙ **Recommended for results:** Vol ratio **1.0×** · RSI **40–80** · "
         "enable **🔍 Broad Movers** · Min change % = **0** · start with **Nifty 50**."
     )
+    with st.expander("🏅 Ranking scorebook (7 rules · max 120)", expanded=False):
+        st.markdown(
+            """
+| Rule | Max points | Best condition |
+|------|------------|----------------|
+| Volume ratio | +30 | Vol ≥ 5× |
+| Gap quality | +20 | Gap ≥ 3% |
+| Day change | +20 | Change ≥ 5% |
+| RSI sweet spot | +15 | RSI 50–65 |
+| Near 52-week high | +15 | Within -2% of 52w high |
+| VWAP proximity | +10 | Within ±0.5% of VWAP |
+| Trend alignment | +10 | Above both 50-DMA and 200-DMA |
+
+Negative scoring is applied for weak/contra signals (e.g. gap-down, negative day, RSI>72, far below 52w high, too far from VWAP).
+
+Tier + action:
+- **≥ 80** → 🏆 Best (100% planned size)
+- **50–79** → ✅ Good (75%)
+- **25–49** → 🟡 OK (50%)
+- **< 25** → ⚠️ Avoid (Skip)
+
+Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best/good/mixed/avoid/dangerous).
+"""
+        )
 
     key = "id"
     market = _market_picker(key)

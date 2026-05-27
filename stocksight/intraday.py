@@ -160,6 +160,7 @@ class IntradayScanStats:
     failed_volume_ratio: int = 0
     failed_rsi: int = 0
     failed_min_change: int = 0
+    failed_hard_reject: int = 0
     no_strategy_match: int = 0
     tickers_matched: int = 0
     result_rows: int = 0
@@ -199,6 +200,10 @@ class IntradayResult:
     links: dict = field(default_factory=dict)
     session_vol_pct: Optional[int] = None       # typical session volume % at scan time
     prediction: str = ""                        # time-of-day volume quality + stock vol hint
+    score_120: int = 0                          # 7-rule score out of 120
+    rank_tier: str = ""                         # Elite / Strong / Watchlist / Avoid
+    rank_why: str = ""                          # short reason for ranking
+    position_size: str = ""                     # suggested position size by tier
 
 
 @dataclass
@@ -495,6 +500,11 @@ def _build_context(raw_ticker: str) -> Optional[dict]:
     vwap_series = compute_vwap(session)
     vwap_now = float(vwap_series.iloc[-1]) if vwap_series is not None and not vwap_series.empty else None
     pct_vs_vwap = _safe_pct(price, vwap_now) if vwap_now else None
+    ema9 = None
+    pct_ema9 = None
+    if len(closes_5m) >= 9:
+        ema9 = float(closes_5m.ewm(span=9, adjust=False).mean().iloc[-1])
+        pct_ema9 = _safe_pct(price, ema9) if ema9 > 0 else None
 
     # Daily MA context
     pct_ma50 = pct_ma200 = None
@@ -548,6 +558,7 @@ def _build_context(raw_ticker: str) -> Optional[dict]:
         "vol_ratio": vol_ratio,
         "vwap": vwap_now,
         "pct_vs_vwap": pct_vs_vwap,
+        "pct_vs_ema9": pct_ema9,
         "pct_vs_ma50d": pct_ma50,
         "pct_vs_ma200d": pct_ma200,
         "pct_vs_52w_high": pct_vs_52w,
@@ -603,6 +614,178 @@ def _compose_row_prediction(
     return f"{base} · Stock vol {stock_vol_ratio:.1f}×"
 
 
+def _timing_weight_from_prediction(pred_text: str) -> int:
+    s = (pred_text or "").lower()
+    if "best time" in s:
+        return 3
+    if "good" in s and "afternoon" in s:
+        return 2
+    if "too wild" in s:
+        return -1
+    if "fake" in s or "avoid" in s:
+        return -3
+    if "dangerous" in s or "forced" in s:
+        return -4
+    if "closed" in s:
+        return -2
+    return 0
+
+
+def _hard_reject_reasons(ctx: dict) -> list[str]:
+    """Immediate long-side disqualifiers from the rulebook."""
+    out: list[str] = []
+    rsi = ctx.get("rsi")
+    pct_vwap = ctx.get("pct_vs_vwap")
+    day_chg = float(ctx.get("pct_change") or 0.0)
+    gap = float(ctx.get("gap_pct") or 0.0)
+    pct_52w = ctx.get("pct_vs_52w_high")
+    vr = float(ctx.get("vol_ratio") or 0.0)
+
+    if rsi is not None and float(rsi) > 72.0:
+        out.append("RSI>72")
+    if pct_vwap is not None and float(pct_vwap) > 2.0:
+        out.append("vsVWAP>+2%")
+    if day_chg < 0:
+        out.append("day<0")
+    if gap < -3.0:
+        out.append("gap<-3%")
+    if pct_52w is not None and float(pct_52w) < -40.0:
+        out.append("52W<-40%")
+    if vr < 1.0:
+        out.append("vol<1.0x")
+    return out
+
+
+def _score_intraday_rules(ctx: dict, *, strategy_hits: int, hard_rejects: list[str]) -> dict:
+    """7-rule scoring engine (max 120 points) with penalties and tier mapping."""
+    vr = float(ctx.get("vol_ratio") or 0.0)
+    gap = float(ctx.get("gap_pct") or 0.0)
+    gap_abs = abs(gap)
+    day_chg = float(ctx.get("pct_change") or 0.0)
+    rsi = ctx.get("rsi")
+    pct_52w = ctx.get("pct_vs_52w_high")
+    pct_vwap = ctx.get("pct_vs_vwap")
+    pct_ma50 = ctx.get("pct_vs_ma50d")
+    pct_ma200 = ctx.get("pct_vs_ma200d")
+
+    # 1) Volume ratio (max +30)
+    if vr >= 5.0:
+        p_vol = 30
+    elif vr >= 3.0:
+        p_vol = 20
+    elif vr >= 1.0:
+        p_vol = 10
+    else:
+        p_vol = 0
+
+    # 2) Gap quality (-25 to +20)
+    if gap >= 3.0:
+        p_gap = 20
+    elif gap >= 1.0:
+        p_gap = 12
+    elif gap >= 0.0:
+        p_gap = 5
+    elif gap <= -3.0:
+        p_gap = -25
+    elif gap <= -1.0:
+        p_gap = -15
+    else:
+        p_gap = 0
+
+    # 3) Day change quality (-20 to +20)
+    if day_chg >= 5.0:
+        p_day = 20
+    elif day_chg >= 2.0:
+        p_day = 12
+    elif day_chg >= 1.0:
+        p_day = 5
+    elif day_chg < 0:
+        p_day = -20
+    else:
+        p_day = 0
+
+    # 4) RSI sweet spot (-10 to +15)
+    p_rsi = 0
+    if rsi is not None:
+        r = float(rsi)
+        if 50.0 <= r <= 65.0:
+            p_rsi = 15
+        elif 40.0 <= r <= 49.0:
+            p_rsi = 8
+        elif 66.0 <= r <= 72.0:
+            p_rsi = 5
+        elif r > 72.0:
+            p_rsi = -10
+        elif r < 40.0:
+            p_rsi = -5
+
+    # 5) Near 52-week high (-10 to +15)
+    p_52w = 0
+    if pct_52w is not None:
+        d = float(pct_52w)
+        if d >= -2.0:
+            p_52w = 15
+        elif d >= -10.0:
+            p_52w = 5
+        elif d >= -30.0:
+            p_52w = 0
+        else:
+            p_52w = -10
+
+    # 6) VWAP proximity (-5 to +10)
+    p_vwap = 0
+    if pct_vwap is not None:
+        av = abs(float(pct_vwap))
+        if av <= 0.5:
+            p_vwap = 10
+        elif av <= 1.0:
+            p_vwap = 5
+        elif av <= 1.5:
+            p_vwap = 5
+        elif av >= 2.0:
+            p_vwap = -5
+
+    # 7) Trend alignment (max +10)
+    above50 = pct_ma50 is not None and float(pct_ma50) > 0
+    above200 = pct_ma200 is not None and float(pct_ma200) > 0
+    p_trend = 10 if (above50 and above200) else (5 if (above50 or above200) else 0)
+
+    score = int(p_vol + p_gap + p_day + p_rsi + p_52w + p_vwap + p_trend)
+    if score >= 80:
+        tier = "🏆 Best"
+        pos_size = "100%"
+    elif score >= 50:
+        tier = "✅ Good"
+        pos_size = "75%"
+    elif score >= 25:
+        tier = "🟡 OK"
+        pos_size = "50%"
+    else:
+        tier = "⚠️ Avoid"
+        pos_size = "Skip"
+
+    # Penalize/flag weak signal overlap or hard reject logic.
+    if strategy_hits <= 1:
+        pos_size = "50%" if pos_size not in ("Skip",) else pos_size
+    if hard_rejects:
+        tier = "⚠️ Avoid"
+        pos_size = "Skip"
+
+    reason = (
+        f"Vol {p_vol}/30 · Gap {p_gap:+d}/20 · Day {p_day:+d}/20 · RSI {p_rsi:+d}/15 · "
+        f"52W {p_52w:+d}/15 · VWAP {p_vwap:+d}/10 · Trend {p_trend}/10 · "
+        f"Signals {strategy_hits}"
+    )
+    if hard_rejects:
+        reason += " · Reject: " + ", ".join(hard_rejects)
+    return {
+        "score_120": score,
+        "tier": tier,
+        "position_size": pos_size,
+        "reason": reason,
+    }
+
+
 def _make_result(
     raw: str,
     strategy: str,
@@ -611,6 +794,7 @@ def _make_result(
     note: str,
     *,
     session_pred: Optional["VolumeTimePrediction"] = None,
+    score_pack: Optional[dict] = None,
 ) -> IntradayResult:
     note_str, entry, stop, target = _suggest_setup(
         strategy,
@@ -629,9 +813,19 @@ def _make_result(
 
     pred_text = ""
     sess_pct: Optional[int] = None
+    timing_w = 0
     if session_pred is not None:
         sess_pct = session_pred.session_vol_pct
         pred_text = _compose_row_prediction(session_pred, ctx.get("vol_ratio"))
+        timing_w = _timing_weight_from_prediction(session_pred.prediction)
+
+    score_pack = score_pack or _score_intraday_rules(ctx, strategy_hits=0, hard_rejects=[])
+    score_120 = int(score_pack.get("score_120", 0))
+    tier = str(score_pack.get("tier", ""))
+    pos_size = str(score_pack.get("position_size", ""))
+    base_reason = str(score_pack.get("reason", ""))
+    timing_note = f" · Timing {timing_w:+d}" if timing_w else " · Timing 0"
+    rank_why = base_reason + timing_note
 
     return IntradayResult(
         ticker=raw.replace(".NS", "").replace(".BO", ""),
@@ -661,6 +855,10 @@ def _make_result(
         links=get_stock_links(raw),
         session_vol_pct=sess_pct,
         prediction=pred_text,
+        score_120=score_120,
+        rank_tier=tier,
+        rank_why=rank_why,
+        position_size=pos_size,
     )
 
 
@@ -672,6 +870,7 @@ def _evaluate(strategy: str, ctx: dict, flt: IntradayFilters) -> Optional[str]:
     rsi = ctx["rsi"]
     vr = ctx["vol_ratio"]
     pct_vwap = ctx["pct_vs_vwap"]
+    pct_ema9 = ctx.get("pct_vs_ema9")
     pct_52w = ctx["pct_vs_52w_high"]
     pct_ma50 = ctx["pct_vs_ma50d"]
     pct_ma200 = ctx["pct_vs_ma200d"]
@@ -686,43 +885,53 @@ def _evaluate(strategy: str, ctx: dict, flt: IntradayFilters) -> Optional[str]:
         move_note = f"{pct_chg:+.2f}% vs prev close"
         return f"Broad mover · {move_note} · vol {vr:.1f}× · RSI {rsi:.1f}"
 
-    if strategy == "MOMENTUM":
-        if rsi < 55.0:
-            return None
-        if price <= open_px:
-            return None
-        if pct_52w is not None and pct_52w < -15.0:
-            return None
-        return "RSI≥55 · price>open · vol≥{:.1f}×".format(vr)
-
     if strategy == "VWAP":
-        if pct_ma200 is not None and pct_ma200 < -2.0:
+        if pct_ma200 is None or pct_ma200 <= 0:
             return None
-        if not (40.0 <= rsi <= 65.0):
+        if not (42.0 <= rsi <= 65.0):
             return None
         if pct_vwap is None or abs(pct_vwap) > 1.0:
             return None
-        return f"near VWAP · RSI {rsi:.1f} · vol {vr:.1f}×"
+        if vr < 1.0:
+            return None
+        return f"price>200DMA · RSI {rsi:.1f} · near VWAP ±1% · vol {vr:.1f}×"
 
     if strategy == "ORB":
         if not orb_h:
             return None
-        if price <= orb_h * 0.999:
+        if price <= orb_h:
             return None
-        if vr < 1.2:
+        if vr < 1.5:
             return None
-        if rsi < 50.0:
+        if gap <= -2.0:
             return None
-        return f"break > ORB {orb_h:.2f} · vol≥{vr:.1f}× · RSI {rsi:.1f}"
+        return f"break > ORB {orb_h:.2f} · vol≥{vr:.1f}× · gap>{gap:+.2f}%"
 
     if strategy == "GAP":
         if gap < 0.5:
             return None
-        if price <= open_px and gap > 0:
+        if price <= open_px:
             return None
-        if gap > 0 and rsi < 45.0:
+        if vr < 1.2:
             return None
-        return f"gap {gap:+.2f}% · RSI {rsi:.1f} · vol {vr:.1f}×"
+        if rsi <= 50.0:
+            return None
+        if pct_ma50 is None or pct_ma50 <= 0:
+            return None
+        return f"gap {gap:+.2f}% holding open · RSI {rsi:.1f} · vol {vr:.1f}× · price>50DMA"
+
+    if strategy == "MOMENTUM":
+        if rsi < 55.0:
+            return None
+        if pct_ema9 is None or pct_ema9 <= 0:
+            return None
+        if vr < 1.2:
+            return None
+        if pct_chg <= 0:
+            return None
+        if pct_52w is None or pct_52w < -2.0:
+            return None
+        return f"RSI≥55 · price>9EMA · day>0 · near 52W high · vol {vr:.1f}×"
 
     return None
 
@@ -794,16 +1003,35 @@ def scan_intraday(
         except Exception:
             sector = "—"
 
-        matched_this = False
+        reject_reasons = _hard_reject_reasons(ctx)
+        if reject_reasons:
+            stats.failed_hard_reject += 1
+            continue
+
+        matched_notes: dict[str, str] = {}
         for strategy in strategies:
             note = _evaluate(strategy, ctx, flt)
             if note:
-                results.append(
-                    _make_result(
-                        raw, strategy, ctx, sector, note, session_pred=session_pred
-                    )
+                matched_notes[strategy] = note
+
+        matched_this = bool(matched_notes)
+        score_pack = _score_intraday_rules(
+            ctx,
+            strategy_hits=len(matched_notes),
+            hard_rejects=reject_reasons,
+        )
+        for strategy, note in matched_notes.items():
+            results.append(
+                _make_result(
+                    raw,
+                    strategy,
+                    ctx,
+                    sector,
+                    note,
+                    session_pred=session_pred,
+                    score_pack=score_pack,
                 )
-                matched_this = True
+            )
 
         if matched_this:
             stats.tickers_matched += 1
@@ -814,7 +1042,14 @@ def scan_intraday(
             time.sleep(info_delay_sec)
 
     stats.result_rows = len(results)
-    results.sort(key=lambda r: (-(r.vol_ratio or 0.0), -(r.rr_ratio or 0.0)))
+    results.sort(
+        key=lambda r: (
+            -(r.score_120 + _timing_weight_from_prediction(r.prediction)),
+            -r.score_120,
+            -(r.vol_ratio or 0.0),
+            -(r.rr_ratio or 0.0),
+        )
+    )
     return results, stats
 
 
