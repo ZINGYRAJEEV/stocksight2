@@ -53,9 +53,12 @@ MARKET_LABEL = {
 
 # ── NSE universes (Indian market hours).
 NIFTY_500 = NIFTY_50 + NIFTY_500_EXTRA
+# Nifty 100 ≈ first 100 unique names from the Nifty 500 composition list.
+NIFTY_100: list[str] = list(dict.fromkeys(NIFTY_500))[:100]
 
 NSE_INTRADAY_UNIVERSES: dict[str, list[str]] = {
     "Nifty 50 (fast)": NIFTY_50,
+    "Nifty 100 (medium)": NIFTY_100,
     "Nifty 500 (broad, slow)": NIFTY_500,
 }
 
@@ -95,9 +98,10 @@ INTRADAY_UNIVERSES_BY_MARKET: dict[str, dict[str, list[str]]] = {
 # Back-compat alias used by older code that imports INTRADAY_UNIVERSES directly.
 INTRADAY_UNIVERSES: dict[str, list[str]] = dict(NSE_INTRADAY_UNIVERSES)
 
-STRATEGIES = ("MOMENTUM", "VWAP", "ORB", "GAP")
+STRATEGIES = ("BROAD", "MOMENTUM", "VWAP", "ORB", "GAP")
 
 STRATEGY_LABEL = {
+    "BROAD":    "🔍 Broad Movers (widest net)",
     "MOMENTUM": "🔥 Momentum Breakout",
     "VWAP":     "📈 VWAP Pullback",
     "ORB":      "🕯️ Opening Range Breakout",
@@ -109,12 +113,14 @@ STRATEGY_LABEL = {
 # in Central Europe.
 STRATEGY_BEST_TIME_BY_MARKET: dict[str, dict[str, str]] = {
     "NSE": {
+        "BROAD":    "Any session window  ·  use when you want the widest list",
         "MOMENTUM": "9:30 – 11:00 AM IST  ·  6:00 – 7:30 AM CEST",
         "VWAP":     "10:30 AM – 1:00 PM IST  ·  7:00 – 9:30 AM CEST",
         "ORB":      "9:45 – 10:15 AM IST only  ·  6:15 – 6:45 AM CEST",
         "GAP":      "Pre-open + 9:15 – 9:30 AM IST  ·  5:45 – 6:00 AM CEST",
     },
     "US": {
+        "BROAD":    "Any session window  ·  use when you want the widest list",
         "MOMENTUM": "9:45 – 11:00 AM ET  ·  3:45 – 5:00 PM CEST",
         "VWAP":     "11:00 AM – 1:30 PM ET  ·  5:00 – 7:30 PM CEST",
         "ORB":      "9:45 – 10:00 AM ET only  ·  3:45 – 4:00 PM CEST",
@@ -136,9 +142,29 @@ class IntradayFilters:
     min_avg_volume_20d: float = 500_000.0
     min_market_cap_cr: float = 5000.0          # ₹ crore
     apply_mcap_filter: bool = False            # off by default for speed
-    min_volume_ratio: float = 1.5              # current vs 20-bar avg
-    min_rsi: float = 30.0
+    min_volume_ratio: float = 1.0              # current vs 20-bar avg (relaxed default)
+    min_rsi: float = 40.0
     max_rsi: float = 80.0
+    min_pct_change: float = 0.0                # |% vs prev close|; 0 = off
+
+
+@dataclass
+class IntradayScanStats:
+    """Per-scan funnel counts — powers the diagnostic panel in the UI."""
+    total_scanned: int = 0
+    no_data: int = 0
+    failed_price: int = 0
+    failed_avg_volume: int = 0
+    failed_no_rsi: int = 0
+    failed_no_volume_ratio: int = 0
+    failed_volume_ratio: int = 0
+    failed_rsi: int = 0
+    failed_min_change: int = 0
+    no_strategy_match: int = 0
+    tickers_matched: int = 0
+    result_rows: int = 0
+    bars_5m: int = 0
+    bars_15m: int = 0
 
 
 # ─────────────────────────────────────────────────────────────
@@ -171,6 +197,8 @@ class IntradayResult:
     rr_ratio: Optional[float] = None
     sector: str = "—"
     links: dict = field(default_factory=dict)
+    session_vol_pct: Optional[int] = None       # typical session volume % at scan time
+    prediction: str = ""                        # time-of-day volume quality + stock vol hint
 
 
 @dataclass
@@ -270,6 +298,16 @@ def _suggest_setup(strategy: str, price: float, intraday_low: Optional[float],
                     prev_close: float, gap_pct: float
                   ) -> tuple[str, Optional[float], Optional[float], Optional[float]]:
     """Return (setup_note, entry, stop, target) for a strategy."""
+    if strategy == "BROAD":
+        entry = round(price * 1.001, 2)
+        stop = round(min(intraday_low or price * 0.992, price * 0.992), 2)
+        risk = entry - stop
+        if risk <= 0:
+            return ("Broad mover: define stop manually.", None, None, None)
+        target = round(entry + 1.5 * risk, 2)
+        return ("Active mover with volume — confirm direction on 5m chart · 1:1.5 R:R",
+                entry, stop, target)
+
     if strategy == "MOMENTUM":
         entry = round(price * 1.001, 2)
         stop = round(min(price * 0.995, intraday_low or price * 0.985), 2)
@@ -320,19 +358,38 @@ def _suggest_setup(strategy: str, price: float, intraday_low: Optional[float],
 
 
 # ─────────────────────────────────────────────────────────────
-# Data fetch (per ticker, with retries / backoff handled by yfinance)
+# Data fetch (per ticker) — 5m first, auto-fallback to 15m when market is closed
 # ─────────────────────────────────────────────────────────────
-def _fetch_intraday_5m(ticker: str) -> Optional[pd.DataFrame]:
-    """Today's 5-minute OHLCV bars. Returns None if empty / weekend."""
+def _fetch_intraday_bars(ticker: str) -> tuple[Optional[pd.DataFrame], str]:
+    """Fetch intraday OHLCV. Tries 5m then 15m (better when session is closed).
+
+    Returns (dataframe, interval_label) where interval_label is '5m', '15m', or ''.
+    """
+    attempts = (
+        ("5m", "1d"),
+        ("5m", "2d"),
+        ("5m", "5d"),
+        ("15m", "5d"),
+        ("15m", "10d"),
+    )
     try:
         stk = yf.Ticker(ticker)
-        df = stk.history(period="1d", interval="5m", auto_adjust=False)
-        if df is None or df.empty:
-            # Fallback to last 2d 5-min to handle pre-open scans (no today data yet)
-            df = stk.history(period="2d", interval="5m", auto_adjust=False)
-        return df if df is not None and not df.empty else None
+        for interval, period in attempts:
+            try:
+                df = stk.history(period=period, interval=interval, auto_adjust=False)
+                if df is not None and not df.empty and len(df) >= 3:
+                    return df, interval
+            except Exception:
+                continue
     except Exception:
-        return None
+        pass
+    return None, ""
+
+
+def _fetch_intraday_5m(ticker: str) -> Optional[pd.DataFrame]:
+    """Back-compat wrapper — returns bars only (any interval)."""
+    df, _ = _fetch_intraday_bars(ticker)
+    return df
 
 
 def _fetch_daily(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
@@ -343,19 +400,21 @@ def _fetch_daily(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
         return None
 
 
-def _orb_levels(today_5m: pd.DataFrame) -> tuple[Optional[float], Optional[float]]:
-    """First 15-min (three 5-min bars) high and low for the most recent session."""
-    if today_5m is None or today_5m.empty:
+def _orb_levels(bars: pd.DataFrame, interval: str = "5m") -> tuple[Optional[float], Optional[float]]:
+    """First 15-min range high/low for the most recent session."""
+    if bars is None or bars.empty:
         return None, None
     # Restrict to the latest session date
     try:
-        last_date = today_5m.index[-1].date()
-        session = today_5m[today_5m.index.date == last_date]
+        last_date = bars.index[-1].date()
+        session = bars[bars.index.date == last_date]
     except Exception:
-        session = today_5m
+        session = bars
     if session.empty:
         return None, None
-    head = session.head(3)
+    # 5m → 3 bars = 15 min; 15m → 1 bar = 15 min
+    n_bars = 1 if interval == "15m" else 3
+    head = session.head(n_bars)
     if len(head) < 1:
         return None, None
     try:
@@ -372,7 +431,7 @@ def _orb_levels(today_5m: pd.DataFrame) -> tuple[Optional[float], Optional[float
 # ─────────────────────────────────────────────────────────────
 def _build_context(raw_ticker: str) -> Optional[dict]:
     """Heavy-lift context block reused by every strategy for a ticker."""
-    bars = _fetch_intraday_5m(raw_ticker)
+    bars, bar_interval = _fetch_intraday_bars(raw_ticker)
     if bars is None or bars.empty:
         return None
     daily = _fetch_daily(raw_ticker, "1y")
@@ -406,7 +465,7 @@ def _build_context(raw_ticker: str) -> Optional[dict]:
     gap_pct = _safe_pct(open_px, prev_close) or 0.0
     pct_change = _safe_pct(price, prev_close) or 0.0
 
-    # 5m RSI from the session
+    # Intraday RSI (needs fewer bars early in session — use last 14+ closes)
     rsi_val: Optional[float] = None
     try:
         if len(closes_5m) >= 15:
@@ -416,12 +475,21 @@ def _build_context(raw_ticker: str) -> Optional[dict]:
     except Exception:
         rsi_val = None
 
-    # Volume ratio: latest 5m bar vs 20-bar average
+    # Volume ratio: latest bar vs prior-bar average.
+    # Off-hours the *last* bar is often stale (vol≈0) — fall back to session mean bar vol.
     vol_ratio: Optional[float] = None
-    if len(vols_5m) >= 21:
-        avg = float(vols_5m.iloc[-21:-1].mean())
+    if len(vols_5m) >= 6:
+        lookback = min(20, len(vols_5m) - 1)
+        prior = vols_5m.iloc[-(lookback + 1):-1]
+        avg = float(prior.mean()) if len(prior) else 0.0
+        latest = float(vols_5m.iloc[-1])
         if avg > 0:
-            vol_ratio = round(float(vols_5m.iloc[-1]) / avg, 2)
+            vol_ratio = round(latest / avg, 2)
+            if vol_ratio < 1.0:
+                recent = vols_5m.iloc[-lookback:]
+                bar_avg = float(recent.mean()) if len(recent) else 0.0
+                if bar_avg > 0:
+                    vol_ratio = max(vol_ratio, round(bar_avg / avg, 2))
 
     # VWAP for the session
     vwap_series = compute_vwap(session)
@@ -445,10 +513,28 @@ def _build_context(raw_ticker: str) -> Optional[dict]:
     daily_vol = hist_series(daily, "Volume").astype(float).dropna()
     avg_dvol = float(daily_vol.tail(20).mean()) if len(daily_vol) >= 5 else 0.0
 
-    orb_h, orb_l = _orb_levels(bars)
+    # Session participation vs typical (works when last intraday bar is stale / market closed).
+    if avg_dvol > 0 and not session.empty:
+        try:
+            sess_vol = float(hist_series(session, "Volume").astype(float).sum())
+            bars_per_day = 78.0 if bar_interval == "5m" else 26.0
+            expected_per_bar = avg_dvol / bars_per_day
+            n_sess = max(len(session), 1)
+            if expected_per_bar > 0:
+                session_vr = round((sess_vol / n_sess) / expected_per_bar, 2)
+                if vol_ratio is None or vol_ratio < session_vr:
+                    vol_ratio = session_vr
+                # Meaningful session turnover → don't reject on a stale last bar alone.
+                if sess_vol >= 0.15 * avg_dvol and n_sess >= 8:
+                    vol_ratio = max(vol_ratio or 0.0, 1.0)
+        except Exception:
+            pass
+
+    orb_h, orb_l = _orb_levels(bars, bar_interval)
 
     return {
         "bars": bars,
+        "bar_interval": bar_interval,
         "session": session,
         "daily": daily,
         "price": price,
@@ -471,16 +557,61 @@ def _build_context(raw_ticker: str) -> Optional[dict]:
     }
 
 
-def _passes_universal(ctx: dict, flt: IntradayFilters) -> bool:
+def _universal_fail_reason(ctx: dict, flt: IntradayFilters) -> Optional[str]:
+    """Return failure reason for price/liquidity filters, or None if passed."""
     p = ctx["price"]
     if p < flt.min_price or p > flt.max_price:
-        return False
+        return "price"
     if ctx["avg_dvol"] and ctx["avg_dvol"] < flt.min_avg_volume_20d:
-        return False
-    return True
+        return "avg_volume"
+    return None
 
 
-def _make_result(raw: str, strategy: str, ctx: dict, sector: str, note: str) -> IntradayResult:
+def _passes_universal(ctx: dict, flt: IntradayFilters) -> bool:
+    return _universal_fail_reason(ctx, flt) is None
+
+
+def _signal_fail_reason(ctx: dict, flt: IntradayFilters) -> Optional[str]:
+    """RSI / volume-ratio / min-change gates applied before strategy rules."""
+    rsi = ctx["rsi"]
+    vr = ctx["vol_ratio"]
+    if rsi is None:
+        return "no_rsi"
+    if vr is None:
+        return "no_volume_ratio"
+    if vr < flt.min_volume_ratio:
+        return "volume_ratio"
+    if not (flt.min_rsi <= rsi <= flt.max_rsi):
+        return "rsi"
+    if flt.min_pct_change > 0 and abs(ctx.get("pct_change") or 0.0) < flt.min_pct_change:
+        return "min_change"
+    return None
+
+
+def _compose_row_prediction(
+    session_pred: "VolumeTimePrediction",
+    stock_vol_ratio: Optional[float],
+) -> str:
+    """Blend session time-of-day volume quality with per-stock volume ratio."""
+    base = session_pred.prediction
+    if stock_vol_ratio is None:
+        return base
+    if stock_vol_ratio < 1.0:
+        return f"{base} · Stock vol {stock_vol_ratio:.1f}× thin"
+    if stock_vol_ratio >= 1.5:
+        return f"{base} · Stock vol {stock_vol_ratio:.1f}× confirms"
+    return f"{base} · Stock vol {stock_vol_ratio:.1f}×"
+
+
+def _make_result(
+    raw: str,
+    strategy: str,
+    ctx: dict,
+    sector: str,
+    note: str,
+    *,
+    session_pred: Optional["VolumeTimePrediction"] = None,
+) -> IntradayResult:
     note_str, entry, stop, target = _suggest_setup(
         strategy,
         ctx["price"],
@@ -495,6 +626,13 @@ def _make_result(raw: str, strategy: str, ctx: dict, sector: str, note: str) -> 
     rr = None
     if entry is not None and stop is not None and target is not None and (entry - stop) > 0:
         rr = round((target - entry) / (entry - stop), 2)
+
+    pred_text = ""
+    sess_pct: Optional[int] = None
+    if session_pred is not None:
+        sess_pct = session_pred.session_vol_pct
+        pred_text = _compose_row_prediction(session_pred, ctx.get("vol_ratio"))
+
     return IntradayResult(
         ticker=raw.replace(".NS", "").replace(".BO", ""),
         raw_ticker=raw,
@@ -521,11 +659,16 @@ def _make_result(raw: str, strategy: str, ctx: dict, sector: str, note: str) -> 
         rr_ratio=rr,
         sector=sector or "—",
         links=get_stock_links(raw),
+        session_vol_pct=sess_pct,
+        prediction=pred_text,
     )
 
 
 def _evaluate(strategy: str, ctx: dict, flt: IntradayFilters) -> Optional[str]:
-    """Return matching note string or None if the strategy doesn't match."""
+    """Return matching note string or None if the strategy doesn't match.
+
+    Assumes universal + signal filters (RSI, volume ratio) already passed.
+    """
     rsi = ctx["rsi"]
     vr = ctx["vol_ratio"]
     pct_vwap = ctx["pct_vs_vwap"]
@@ -533,60 +676,53 @@ def _evaluate(strategy: str, ctx: dict, flt: IntradayFilters) -> Optional[str]:
     pct_ma50 = ctx["pct_vs_ma50d"]
     pct_ma200 = ctx["pct_vs_ma200d"]
     gap = ctx["gap_pct"]
+    pct_chg = ctx["pct_change"]
     price = ctx["price"]
     open_px = ctx["open_px"]
     orb_h = ctx["orb_high"]
 
-    if rsi is None or vr is None:
-        return None
-    if vr < flt.min_volume_ratio:
-        return None
-    if not (flt.min_rsi <= rsi <= flt.max_rsi):
-        return None
+    if strategy == "BROAD":
+        # Widest net: meaningful move + volume (signal filters already applied).
+        move_note = f"{pct_chg:+.2f}% vs prev close"
+        return f"Broad mover · {move_note} · vol {vr:.1f}× · RSI {rsi:.1f}"
 
     if strategy == "MOMENTUM":
-        # RSI > 60 strong momentum, near 52w high, green candle proxy: price > open
-        if rsi < 60.0:
+        if rsi < 55.0:
             return None
         if price <= open_px:
             return None
-        if pct_52w is None or pct_52w < -10.0:
+        if pct_52w is not None and pct_52w < -15.0:
             return None
-        return "RSI>60 · price>open · within 10% of 52w high · vol≥{:.1f}×".format(vr)
+        return "RSI≥55 · price>open · vol≥{:.1f}×".format(vr)
 
     if strategy == "VWAP":
-        # Above 200-DMA uptrend, RSI 45–62, small candle body near VWAP, vol > 1.5x
-        if pct_ma200 is None or pct_ma200 < 0:
+        if pct_ma200 is not None and pct_ma200 < -2.0:
             return None
-        if not (45.0 <= rsi <= 62.0):
+        if not (40.0 <= rsi <= 65.0):
             return None
-        if pct_vwap is None or abs(pct_vwap) > 0.5:
+        if pct_vwap is None or abs(pct_vwap) > 1.0:
             return None
-        if vr < 1.5:
-            return None
-        return f"above 200-DMA · RSI {rsi:.1f} · within ±0.5% of VWAP"
+        return f"near VWAP · RSI {rsi:.1f} · vol {vr:.1f}×"
 
     if strategy == "ORB":
         if not orb_h:
             return None
-        if price <= orb_h:
+        if price <= orb_h * 0.999:
             return None
-        if vr < 2.0:
+        if vr < 1.2:
             return None
-        if rsi < 55.0:
+        if rsi < 50.0:
             return None
         return f"break > ORB {orb_h:.2f} · vol≥{vr:.1f}× · RSI {rsi:.1f}"
 
     if strategy == "GAP":
-        if gap < 1.0:
+        if gap < 0.5:
             return None
-        if price <= open_px:
-            return None  # gap-up but losing the open → not holding
-        if pct_ma50 is None or pct_ma50 < 0:
+        if price <= open_px and gap > 0:
             return None
-        if rsi < 55.0:
+        if gap > 0 and rsi < 45.0:
             return None
-        return f"gap+{gap:.2f}% · holding above open · above 50-DMA · RSI {rsi:.1f}"
+        return f"gap {gap:+.2f}% · RSI {rsi:.1f} · vol {vr:.1f}×"
 
     return None
 
@@ -600,34 +736,86 @@ def scan_intraday(
     filters: Optional[IntradayFilters] = None,
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
     *,
+    market: str = "NSE",
     info_delay_sec: float = 0.05,
-) -> list[IntradayResult]:
-    """Run all selected strategies across a list of raw NSE tickers."""
+) -> tuple[list[IntradayResult], IntradayScanStats]:
+    """Run all selected strategies across a ticker list.
+
+    Returns (results, stats) where stats powers the diagnostic funnel panel.
+    """
     flt = filters or IntradayFilters()
     results: list[IntradayResult] = []
+    stats = IntradayScanStats(total_scanned=len(raw_tickers))
     total = len(raw_tickers)
+    session_pred = compute_volume_time_prediction(market)
+
     for i, raw in enumerate(raw_tickers):
         if progress_cb:
             progress_cb(i + 1, total, raw)
         ctx = _build_context(raw)
         if ctx is None:
+            stats.no_data += 1
             continue
-        if not _passes_universal(ctx, flt):
+
+        interval = ctx.get("bar_interval") or ""
+        if interval == "5m":
+            stats.bars_5m += 1
+        elif interval == "15m":
+            stats.bars_15m += 1
+
+        uni_fail = _universal_fail_reason(ctx, flt)
+        if uni_fail == "price":
+            stats.failed_price += 1
             continue
+        if uni_fail == "avg_volume":
+            stats.failed_avg_volume += 1
+            continue
+
+        sig_fail = _signal_fail_reason(ctx, flt)
+        if sig_fail == "no_rsi":
+            stats.failed_no_rsi += 1
+            continue
+        if sig_fail == "no_volume_ratio":
+            stats.failed_no_volume_ratio += 1
+            continue
+        if sig_fail == "volume_ratio":
+            stats.failed_volume_ratio += 1
+            continue
+        if sig_fail == "rsi":
+            stats.failed_rsi += 1
+            continue
+        if sig_fail == "min_change":
+            stats.failed_min_change += 1
+            continue
+
         sector = "—"
         try:
             sector, _ = get_sector_industry(yf.Ticker(raw))
         except Exception:
             sector = "—"
+
+        matched_this = False
         for strategy in strategies:
             note = _evaluate(strategy, ctx, flt)
             if note:
-                results.append(_make_result(raw, strategy, ctx, sector, note))
+                results.append(
+                    _make_result(
+                        raw, strategy, ctx, sector, note, session_pred=session_pred
+                    )
+                )
+                matched_this = True
+
+        if matched_this:
+            stats.tickers_matched += 1
+        else:
+            stats.no_strategy_match += 1
+
         if info_delay_sec > 0:
             time.sleep(info_delay_sec)
-    # Sort: momentum-first by vol_ratio, then by RR
+
+    stats.result_rows = len(results)
     results.sort(key=lambda r: (-(r.vol_ratio or 0.0), -(r.rr_ratio or 0.0)))
-    return results
+    return results, stats
 
 
 # ─────────────────────────────────────────────────────────────
@@ -647,7 +835,7 @@ def scan_gaps(
         if progress_cb:
             progress_cb(i + 1, total, raw)
         try:
-            bars = _fetch_intraday_5m(raw)
+            bars, _interval = _fetch_intraday_bars(raw)
             daily = _fetch_daily(raw, "10d")
             if bars is None or bars.empty or daily is None or daily.empty:
                 continue
@@ -681,11 +869,11 @@ def scan_gaps(
             else:
                 holding = False
 
-            # Vol ratio on 5m
             vols = hist_series(bars, "Volume").astype(float).dropna()
             vol_ratio: Optional[float] = None
-            if len(vols) >= 21:
-                avg = float(vols.iloc[-21:-1].mean())
+            if len(vols) >= 6:
+                lookback = min(20, len(vols) - 1)
+                avg = float(vols.iloc[-(lookback + 1):-1].mean())
                 if avg > 0:
                     vol_ratio = round(float(vols.iloc[-1]) / avg, 2)
 
@@ -764,6 +952,119 @@ def resolve_universe(name: str, market: str = "NSE") -> list[str]:
             return [t for t in tickers if not t.endswith((".NS", ".BO"))]
         return [t for t in tickers if t.endswith((".NS", ".BO"))]
     return []
+
+
+# ─────────────────────────────────────────────────────────────
+# Time-of-day volume prediction (session volume curve)
+# Price moves only when volume is there — no volume = fake moves.
+# ─────────────────────────────────────────────────────────────
+@dataclass
+class VolumeTimePrediction:
+    """Session volume % and tradeability label at scan time."""
+    session_vol_pct: int
+    prediction: str
+    market_local_time: str
+    mins_since_open: int
+    is_session_open: bool
+
+
+# (minutes since regular open, typical session volume %)
+_NSE_VOL_CURVE: list[tuple[int, int]] = [
+    (0, 100),     # 9:15 AM — real but wild
+    (45, 80),     # 10:00 AM — best window
+    (165, 20),    # 12:00 PM — lunch fake moves
+    (315, 60),    # 2:30 PM — afternoon good
+    (370, 90),    # 3:25 PM — forced / dangerous
+    (375, 85),    # 3:30 PM close
+]
+
+_US_VOL_CURVE: list[tuple[int, int]] = [
+    (0, 100),     # 9:30 AM ET
+    (30, 80),     # 10:00 AM ET
+    (150, 20),    # 12:00 PM ET
+    (300, 60),    # 2:30 PM ET
+    (355, 90),    # 3:25 PM ET
+    (390, 85),    # 4:00 PM ET close
+]
+
+
+def _interp_session_vol_pct(mins_since_open: float, curve: list[tuple[int, int]]) -> int:
+    if mins_since_open <= curve[0][0]:
+        return curve[0][1]
+    if mins_since_open >= curve[-1][0]:
+        return curve[-1][1]
+    for i in range(len(curve) - 1):
+        m0, p0 = curve[i]
+        m1, p1 = curve[i + 1]
+        if m0 <= mins_since_open <= m1:
+            t = (mins_since_open - m0) / max(m1 - m0, 1)
+            return int(round(p0 + t * (p1 - p0)))
+    return curve[-1][1]
+
+
+def _volume_prediction_label(pct: int, mins: int, *, is_open: bool) -> str:
+    """Map interpolated session volume % to the playbook labels."""
+    if not is_open and mins < 0:
+        return "⏸ Pre-market · session volume building"
+    if not is_open:
+        return "🔴 Market closed · volume curve resets next session"
+
+    # Anchor windows (minutes since open) — NSE/US share the same playbook shape.
+    if mins <= 25 and pct >= 90:
+        return f"⚡ Real moves · Too wild ({pct}% vol) — wait for 10:00 window"
+    if 25 <= mins <= 75 and pct >= 65:
+        return f"✅ Real moves · Best time ({pct}% vol)"
+    if 120 <= mins <= 210 and pct <= 35:
+        return f"❌ Fake moves · Avoid ({pct}% vol) — lunch lull"
+    if 270 <= mins <= 330 and 45 <= pct <= 75:
+        return f"✅ Real moves · Good ({pct}% vol) — afternoon session"
+    if mins >= 340 and pct >= 82:
+        return f"❌ Forced moves · Dangerous ({pct}% vol) — square off soon"
+
+    if pct <= 30:
+        return f"❌ Fake moves likely ({pct}% vol) — low participation"
+    if pct >= 85:
+        return f"⚠ Forced / climax risk ({pct}% vol) — tighten risk"
+    if pct >= 55:
+        return f"✅ Real moves ({pct}% vol) — price more trustworthy"
+    return f"⚠ Mixed quality ({pct}% vol) — use smaller size"
+
+
+def compute_volume_time_prediction(market: str = "NSE") -> VolumeTimePrediction:
+    """Estimate typical session volume % and tradeability at the current clock time."""
+    mkt = (market or "NSE").upper()
+    if mkt == "US":
+        now = _now_tz(US_TZ)
+        open_mins = US_OPEN_HOUR * 60 + US_OPEN_MIN
+        close_mins = US_CLOSE_HOUR * 60 + US_CLOSE_MIN
+        curve = _US_VOL_CURVE
+        tz_label = "ET"
+    else:
+        now = _now_tz(NSE_TZ)
+        open_mins = NSE_OPEN_HOUR * 60 + NSE_OPEN_MIN
+        close_mins = NSE_CLOSE_HOUR * 60 + NSE_CLOSE_MIN
+        curve = _NSE_VOL_CURVE
+        tz_label = "IST"
+
+    clock_mins = now.hour * 60 + now.minute
+    mins_since_open = clock_mins - open_mins
+    is_open = open_mins <= clock_mins < close_mins
+
+    if is_open:
+        pct = _interp_session_vol_pct(mins_since_open, curve)
+    elif mins_since_open < 0:
+        pct = curve[0][1]
+    else:
+        pct = curve[-1][1]
+
+    label = _volume_prediction_label(pct, max(mins_since_open, 0), is_open=is_open)
+    return VolumeTimePrediction(
+        session_vol_pct=pct,
+        prediction=label,
+        market_local_time=now.strftime(f"%H:%M {tz_label}"),
+        mins_since_open=mins_since_open,
+        is_session_open=is_open,
+    )
 
 
 # ─────────────────────────────────────────────────────────────

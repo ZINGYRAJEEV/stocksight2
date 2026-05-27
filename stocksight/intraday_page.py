@@ -14,6 +14,7 @@ from typing import Optional
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from intraday import (
     INTRADAY_UNIVERSES_BY_MARKET,
@@ -27,7 +28,9 @@ from intraday import (
     GapResult,
     IntradayFilters,
     IntradayResult,
+    IntradayScanStats,
     compute_market_mood,
+    compute_volume_time_prediction,
     market_session_window,
     resolve_universe,
     scan_gaps,
@@ -41,6 +44,167 @@ from ui_components import (
     render_clickable_scan_table,
     safe_set_page_config,
 )
+
+
+# ─────────────────────────────────────────────────────────────
+# Trading schedules (CEST · market-local) — educational reference
+# ─────────────────────────────────────────────────────────────
+NSE_DAY_SCHEDULE: list[tuple[str, str, str]] = [
+    ("5:30 AM", "8:00 AM", "☕ Wake up, check SGX Nifty trend, US closing"),
+    ("5:45 AM", "9:15 AM", "🌅 **RUN GAP SCANNER** — see who gapped up/down"),
+    ("5:50 AM", "9:20 AM", "Read market mood banner, shortlist top 3 stocks"),
+    ("6:00 AM", "9:30 AM", "📡 **RUN INTRADAY SCANNER** — find breakout setups"),
+    ("6:15 AM", "9:45 AM", "✅ Place your trades (ORB / Momentum setups)"),
+    ("7:00 AM", "10:30 AM", "📡 Run scanner again for VWAP pullback setups"),
+    ("9:00 AM", "12:30 PM", "⚠️ Lunch zone — low volume, avoid new trades"),
+    ("11:00 AM", "2:30 PM", "📡 Run scanner again for afternoon momentum"),
+    ("11:45 AM", "3:15 PM", "🔴 Square off **ALL** positions — no open trades at close"),
+    ("12:00 PM", "3:30 PM", "NSE closes"),
+]
+
+US_DAY_SCHEDULE: list[tuple[str, str, str]] = [
+    ("3:00 PM", "9:00 AM", "🌅 **RUN GAP SCANNER** — pre-market gaps forming"),
+    ("3:30 PM", "9:30 AM", "US Market opens"),
+    ("3:35 PM", "9:35 AM", "⚠️ Wait — first 5 min too volatile, do **NOT** trade"),
+    ("3:45 PM", "9:45 AM", "📡 **RUN INTRADAY SCANNER** — ORB setups ready"),
+    ("4:00 PM", "10:00 AM", "✅ Place your trades"),
+    ("5:30 PM", "11:30 AM", "📡 Run scanner again for VWAP pullbacks"),
+    ("7:00 PM", "1:00 PM", "⚠️ Lunch lull — avoid new trades"),
+    ("9:00 PM", "3:00 PM", "📡 Power hour — run scanner for afternoon momentum"),
+    ("9:45 PM", "3:45 PM", "🔴 Start squaring off all positions"),
+    ("10:00 PM", "4:00 PM", "US market closes"),
+]
+
+QUICK_TRADING_RULES: list[tuple[str, str]] = [
+    ("Never trade first 5 min on US stocks", "Too wild, algos are testing levels"),
+    ("Always run **Gap Scanner** BEFORE Intraday Scanner", "Gap tells you market mood first"),
+    ("Stop trading after **2 losses** in a day", "Protects your capital"),
+    ("Square off **15 min** before close", "Avoid last-minute panic moves"),
+]
+
+
+def _schedule_rows_to_md(rows: list[tuple[str, str, str]], local_col: str) -> str:
+    lines = [
+        f"| Your time (CEST) | {local_col} | Action |",
+        "|------------------|-------------|--------|",
+    ]
+    for cest, local, action in rows:
+        lines.append(f"| {cest} | {local} | {action} |")
+    return "\n".join(lines)
+
+
+def _live_market_clocks() -> None:
+    """Client-side live clocks for IST, CEST, and US Eastern (ET/EST) — no server rerun."""
+    components.html(
+        """
+<div id="ss-clocks" style="font-family:'IBM Plex Mono',Consolas,monospace;
+     background:linear-gradient(135deg,#0a1f1a 0%,#0f2a22 100%);
+     border:1px solid #1a3b31; border-radius:12px; padding:14px 18px; margin:0 0 12px 0;">
+  <div style="color:#7abeac; font-size:0.72rem; letter-spacing:0.06em; margin-bottom:10px;">
+    🕐 LIVE MARKET CLOCKS · updates every second
+  </div>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:12px;">
+    <div style="text-align:center; padding:10px; background:#122f25; border-radius:8px; border:1px solid #1a3b31;">
+      <div style="color:#a3d8b8; font-size:0.72rem;">🇮🇳 IST · NSE</div>
+      <div id="ss-ist" style="color:#25d366; font-size:1.35rem; font-weight:700; margin-top:4px;">--:--:--</div>
+      <div id="ss-nse-status" style="font-size:0.68rem; margin-top:4px; color:#7abeac;">—</div>
+    </div>
+    <div style="text-align:center; padding:10px; background:#122f25; border-radius:8px; border:1px solid #1a3b31;">
+      <div style="color:#a3d8b8; font-size:0.72rem;">🇪🇺 CEST · your time</div>
+      <div id="ss-cest" style="color:#f0b429; font-size:1.35rem; font-weight:700; margin-top:4px;">--:--:--</div>
+      <div style="font-size:0.68rem; margin-top:4px; color:#7abeac;">Europe/Berlin</div>
+    </div>
+    <div style="text-align:center; padding:10px; background:#122f25; border-radius:8px; border:1px solid #1a3b31;">
+      <div style="color:#a3d8b8; font-size:0.72rem;">🇺🇸 ET · NYSE/NASDAQ</div>
+      <div id="ss-et" style="color:#4db8ff; font-size:1.35rem; font-weight:700; margin-top:4px;">--:--:--</div>
+      <div id="ss-us-status" style="font-size:0.68rem; margin-top:4px; color:#7abeac;">—</div>
+    </div>
+  </div>
+  <div style="color:#5a8f7a; font-size:0.65rem; margin-top:10px; text-align:center;">
+    US clock follows Eastern Time (ET/EST) · auto-adjusts for daylight saving
+  </div>
+</div>
+<script>
+(function() {
+  const tz = { ist: 'Asia/Kolkata', cest: 'Europe/Berlin', et: 'America/New_York' };
+  const fmt = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
+  function minsInTz(id, h, m) {
+    const p = new Intl.DateTimeFormat('en-US', { timeZone: id, hour: 'numeric', minute: 'numeric', hour12: false });
+    const parts = p.formatToParts(new Date());
+    let hh = 0, mm = 0;
+    for (const x of parts) {
+      if (x.type === 'hour') hh = parseInt(x.value, 10);
+      if (x.type === 'minute') mm = parseInt(x.value, 10);
+    }
+    return hh * 60 + mm;
+  }
+  function sessionStatus(tzId, openM, closeM) {
+    const m = minsInTz(tzId);
+    if (m >= openM && m < closeM) return { t: 'OPEN', c: '#25d366' };
+    return { t: 'CLOSED', c: '#7abeac' };
+  }
+  function tick() {
+    const now = new Date();
+    document.getElementById('ss-ist').textContent =
+      now.toLocaleTimeString('en-IN', { ...fmt, timeZone: tz.ist });
+    document.getElementById('ss-cest').textContent =
+      now.toLocaleTimeString('de-DE', { ...fmt, timeZone: tz.cest });
+    document.getElementById('ss-et').textContent =
+      now.toLocaleTimeString('en-US', { ...fmt, timeZone: tz.et });
+    const nse = sessionStatus(tz.ist, 9*60+15, 15*60+30);
+    const us = sessionStatus(tz.et, 9*60+30, 16*60);
+    const ns = document.getElementById('ss-nse-status');
+    ns.textContent = 'NSE ' + nse.t;
+    ns.style.color = nse.c;
+    const usEl = document.getElementById('ss-us-status');
+    usEl.textContent = 'US ' + us.t;
+    usEl.style.color = us.c;
+  }
+  tick();
+  setInterval(tick, 1000);
+})();
+</script>
+        """,
+        height=175,
+    )
+
+
+def _render_market_schedule(market: str, *, expanded: bool = False) -> None:
+    """Market-specific day schedule (CEST + IST or ET)."""
+    mkt = (market or "NSE").upper()
+    if mkt == "US":
+        title = "🇺🇸 US Market (NYSE/NASDAQ) schedule · CEST & ET"
+        body = _schedule_rows_to_md(US_DAY_SCHEDULE, "US Time (ET)")
+        hint = "🌅 Run Gap Scanner at **3:00 PM CEST** (9:00 AM ET) · Intraday Scanner at **3:45 PM CEST** (9:45 AM ET)."
+    else:
+        title = "🇮🇳 Indian Market (NSE) schedule · CEST & IST"
+        body = _schedule_rows_to_md(NSE_DAY_SCHEDULE, "India Time (IST)")
+        hint = "🌅 Run Gap Scanner at **5:45 AM CEST** (9:15 AM IST) · Intraday Scanner at **6:00 AM CEST** (9:30 AM IST)."
+    with st.expander(title, expanded=expanded):
+        st.markdown(body)
+        st.caption(hint)
+
+
+def _render_full_day_glance() -> None:
+    st.markdown("#### 📅 Your full day at a glance (CEST)")
+    st.code(
+        """5:30 AM  ── 🇮🇳 NSE Gap Scanner
+6:00 AM  ── 🇮🇳 NSE Intraday Scanner
+12:00 PM ── 🇮🇳 NSE closes (Indian trading done)
+
+3:00 PM  ── 🇺🇸 US Gap Scanner
+3:45 PM  ── 🇺🇸 US Intraday Scanner
+10:00 PM ── 🇺🇸 US closes (US trading done)""",
+        language="text",
+    )
+
+
+def _render_quick_rules() -> None:
+    st.markdown("#### ⚡ Quick rules to remember")
+    lines = ["| Rule | Why |", "|------|-----|"]
+    for rule, why in QUICK_TRADING_RULES:
+        lines.append(f"| {rule} | {why} |")
+    st.markdown("\n".join(lines))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -223,17 +387,23 @@ def _filters_panel(key_prefix: str, market: str = "NSE") -> IntradayFilters:
                 help=cfg["avg_vol_help"],
             )
             min_vr = st.slider(
-                "Min 5-min volume ratio (× 20-bar avg)",
-                0.5, 5.0, 1.5, 0.1,
+                "Min volume ratio (× 20-bar avg)",
+                0.5, 5.0, 1.0, 0.1,
                 key=f"{key_prefix}_{suffix}_min_vr",
-                help="Ratio of last 5-min bar volume vs. its 20-bar average. ≥ 1.5 = above-average participation.",
+                help="Ratio of latest bar volume vs. its 20-bar average. **1.0×** = relaxed default.",
             )
         with c3:
             min_rsi, max_rsi = st.slider(
                 "RSI band",
-                10.0, 90.0, (30.0, 80.0), 1.0,
+                10.0, 90.0, (40.0, 80.0), 1.0,
                 key=f"{key_prefix}_{suffix}_rsi_band",
-                help="Skip too-oversold (<30) and too-overbought (>80) names by default.",
+                help="Relaxed default **40–80**. Tighten for fewer, higher-conviction names.",
+            )
+            min_chg = st.number_input(
+                "Min |change %| vs prev close (0 = off)",
+                min_value=0.0, max_value=10.0, value=0.0, step=0.1,
+                key=f"{key_prefix}_{suffix}_min_chg",
+                help="Optional. Set 0.3–0.5 to skip flat names. **0** = no minimum move filter.",
             )
 
     return IntradayFilters(
@@ -243,6 +413,7 @@ def _filters_panel(key_prefix: str, market: str = "NSE") -> IntradayFilters:
         min_volume_ratio=float(min_vr),
         min_rsi=float(min_rsi),
         max_rsi=float(max_rsi),
+        min_pct_change=float(min_chg),
     )
 
 
@@ -256,6 +427,8 @@ def _results_to_df(results: list[IntradayResult]) -> pd.DataFrame:
             "Ticker": r.ticker,
             "Raw": r.raw_ticker,
             "Strategy": STRATEGY_LABEL.get(r.strategy, r.strategy),
+            "Prediction": r.prediction or "—",
+            "Sess vol %": r.session_vol_pct,
             "Sector": r.sector,
             "Price": r.price,
             "% chg": r.pct_change,
@@ -316,6 +489,16 @@ def _intraday_col_cfg(df: pd.DataFrame) -> dict:
         df,
         {
             "Strategy": st.column_config.TextColumn("Strategy", width="medium"),
+            "Prediction": st.column_config.TextColumn(
+                "Prediction",
+                width="large",
+                help="Time-of-day volume quality · price moves only when volume is real.",
+            ),
+            "Sess vol %": st.column_config.NumberColumn(
+                "Sess vol %",
+                format="%d%%",
+                help="Typical session volume participation at scan time (market clock).",
+            ),
             "Setup": st.column_config.TextColumn("Setup", width="large"),
             "Price": st.column_config.NumberColumn(format="%.2f"),
             "% chg": st.column_config.NumberColumn(format="%+.2f"),
@@ -365,6 +548,57 @@ def _gap_col_cfg(df: pd.DataFrame) -> dict:
     )
 
 
+def _render_diagnostic_panel(stats: IntradayScanStats, *, key_prefix: str) -> None:
+    """Funnel breakdown — why stocks passed or failed the scan."""
+    if stats.total_scanned <= 0:
+        return
+
+    passed = stats.tickers_matched
+    st.markdown("#### 🔍 Scan diagnostics")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Scanned", stats.total_scanned)
+    c2.metric("Matched (tickers)", passed)
+    c3.metric("Result rows", stats.result_rows)
+    data_note = []
+    if stats.bars_5m:
+        data_note.append(f"{stats.bars_5m} on 5m bars")
+    if stats.bars_15m:
+        data_note.append(f"{stats.bars_15m} on 15m fallback")
+    c4.metric("Data source", " · ".join(data_note) if data_note else "—")
+
+    if stats.bars_15m and stats.total_scanned:
+        st.caption(
+            f"ℹ **{stats.bars_15m}** ticker(s) used **15-min fallback** data "
+            "(market closed or thin 5m feed). Results are still usable for planning; "
+            "re-scan during live hours for best accuracy."
+        )
+
+    rows = [
+        ("No intraday data (Yahoo)", stats.no_data),
+        ("Failed price filter", stats.failed_price),
+        ("Failed 20-day avg volume", stats.failed_avg_volume),
+        ("No RSI (not enough bars)", stats.failed_no_rsi),
+        ("No volume ratio (not enough bars)", stats.failed_no_volume_ratio),
+        ("Volume ratio too low", stats.failed_volume_ratio),
+        ("RSI outside band", stats.failed_rsi),
+        ("|Change %| below minimum", stats.failed_min_change),
+        ("Passed filters but no strategy match", stats.no_strategy_match),
+    ]
+    fail_rows = [(label, n) for label, n in rows if n > 0]
+    if fail_rows:
+        diag_df = pd.DataFrame(fail_rows, columns=["Reason", "Count"])
+        diag_df["% of universe"] = (diag_df["Count"] / stats.total_scanned * 100).round(1).astype(str) + "%"
+        st.dataframe(diag_df, use_container_width=True, hide_index=True, key=f"{key_prefix}_diag_tbl")
+    else:
+        st.success("All scanned tickers either matched or had no recorded failure bucket.")
+
+    if passed == 0 and stats.total_scanned > 0:
+        st.warning(
+            "**Tips to get results:** Vol ratio **1.0×** · RSI **40–80** · enable **🔍 Broad Movers** · "
+            "lower min price / avg volume · run during market hours · try **Nifty 50** first."
+        )
+
+
 def _csv_download(df: pd.DataFrame, *, label: str, file_prefix: str, key: str) -> None:
     if df is None or df.empty:
         return
@@ -385,31 +619,38 @@ def render_intraday_screener_page() -> None:
     safe_set_page_config(page_title="Intraday Screener | StockSight", page_icon="📡", layout="wide")
     inject_css()
 
-    st.markdown("### 📡 Intraday Screener — 4 strategies, NSE or US")
+    st.markdown("### 📡 Intraday Screener — 5 strategies, NSE or US")
     page_audience_note(
         "Active intraday traders on **NSE (India)** or **US (NYSE & NASDAQ)** who want "
         "pre-screened candidates with Entry / Stop / Target attached.",
-        "Scans Yahoo Finance 5-minute bars + 1-year daily history. Tags each match with its strategy "
-        "(Momentum / VWAP Pullback / ORB / Gap-Up) and outputs a clickable table with R:R suggestions. "
+        "Scans Yahoo Finance intraday bars (5m, auto-fallback to 15m when closed) + daily history. "
+        "Includes **Broad Movers** for the widest net. Diagnostic panel shows why names failed. "
         "**Educational only — confirm risk before trading.**",
+    )
+    st.info(
+        "⚙ **Recommended for results:** Vol ratio **1.0×** · RSI **40–80** · "
+        "enable **🔍 Broad Movers** · Min change % = **0** · start with **Nifty 50**."
     )
 
     key = "id"
     market = _market_picker(key)
+    _live_market_clocks()
     _session_banner(market)
+    _render_market_schedule(market)
 
     with st.container(border=True):
         c1, c2 = st.columns([1.1, 1.0])
         with c1:
             uni_label, raw_tickers = _universe_picker(key, market)
         with c2:
+            _default_strats = [s for s in ("BROAD", "MOMENTUM", "VWAP", "ORB", "GAP") if s in STRATEGIES]
             strategies_picked: list[str] = st.multiselect(
                 "Strategies to scan",
                 STRATEGIES,
-                default=list(STRATEGIES),
+                default=_default_strats,
                 format_func=lambda s: STRATEGY_LABEL.get(s, s),
                 key=f"{key}_strats",
-                help="Each strategy has a best time-of-day. Hover the legend below.",
+                help="Enable **Broad Movers** for the widest net. Pattern strategies are stricter.",
             )
             with st.expander(f"ℹ Best time-of-day per strategy ({MARKET_LABEL.get(market, market)})", expanded=False):
                 times = STRATEGY_BEST_TIME_BY_MARKET.get(market, STRATEGY_BEST_TIME_BY_MARKET["NSE"])
@@ -419,10 +660,18 @@ def render_intraday_screener_page() -> None:
     flt = _filters_panel(key, market)
 
     run = st.button("▶  RUN INTRADAY SCAN", use_container_width=True, key=f"{key}_run")
-    st.caption(
-        f"Universe: **{uni_label}** ({len(raw_tickers)} tickers) · "
-        "Yahoo 5-min data — runs slow during off-hours."
-    )
+    if market == "US":
+        st.caption(
+            f"Universe: **{uni_label}** ({len(raw_tickers)} tickers). "
+            "Best run at **3:45 PM CEST** (9:45 AM ET) for ORB/momentum · "
+            "**5:30 PM CEST** (11:30 AM ET) for VWAP pullbacks."
+        )
+    else:
+        st.caption(
+            f"Universe: **{uni_label}** ({len(raw_tickers)} tickers). "
+            "Best run at **6:00 AM CEST** (9:30 AM IST) for breakouts · "
+            "**7:00 AM CEST** (10:30 AM IST) for VWAP pullbacks."
+        )
 
     if run:
         if not raw_tickers:
@@ -436,22 +685,62 @@ def render_intraday_screener_page() -> None:
         def cb(i: int, t: int, s: str) -> None:
             prog.progress(int(i / max(t, 1) * 100), text=f"Scanning {s}… ({i}/{t})")
 
-        results = scan_intraday(raw_tickers, tuple(strategies_picked), flt, progress_cb=cb)
+        results, scan_stats = scan_intraday(
+            raw_tickers,
+            tuple(strategies_picked),
+            flt,
+            progress_cb=cb,
+            market=market,
+        )
         prog.empty()
         st.session_state[f"{key}_results"] = results
+        st.session_state[f"{key}_stats"] = scan_stats
         st.session_state[f"{key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")
         st.session_state[f"{key}_universe"] = uni_label
         st.session_state[f"{key}_scan_market"] = market
 
     results: list[IntradayResult] = st.session_state.get(f"{key}_results", [])
+    scan_stats: Optional[IntradayScanStats] = st.session_state.get(f"{key}_stats")
     scan_at = st.session_state.get(f"{key}_at")
     last_uni = st.session_state.get(f"{key}_universe", "")
+
+    if scan_stats is not None:
+        _render_diagnostic_panel(scan_stats, key_prefix=key)
+
+    scan_market = st.session_state.get(f"{key}_scan_market", market)
+    vol_pred = compute_volume_time_prediction(scan_market)
+    st.markdown(
+        f"""
+<div style='background:#122f25; border:1px solid #1a3b31; border-left:4px solid #4db8ff;
+            border-radius:8px; padding:12px 16px; margin:8px 0 12px 0;
+            font-family:"IBM Plex Mono",monospace; font-size:0.82rem; color:#a3d8b8;'>
+  <b style='color:#e8f7ef;'>📊 Volume is everything</b> · Now <b>{html.escape(vol_pred.market_local_time)}</b>
+  · Session vol ~<b>{vol_pred.session_vol_pct}%</b><br>
+  <span style='color:#e5f7ed;'>{html.escape(vol_pred.prediction)}</span>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    with st.expander("ℹ Session volume playbook (why Prediction matters)", expanded=False):
+        st.markdown(
+            """
+| Clock (NSE) | Session vol | Moves |
+|-------------|-------------|--------|
+| 9:15 AM | ~100% | Real — but **too wild** |
+| 10:00 AM | ~80% | Real — **best time** |
+| 12:00 PM | ~20% | **Fake** — avoid new trades |
+| 2:30 PM | ~60% | Real — **good** afternoon window |
+| 3:25 PM | ~90% | **Forced** — dangerous, square off |
+
+*US session uses the same shape on ET (9:30 open). Each result row also notes if **that stock's** volume (Vol×) confirms or looks thin.*
+"""
+        )
 
     if not results:
         if scan_at:
             st.warning(
-                "No matches with current filters. Loosen volume ratio (try 1.0×), "
-                "widen RSI band, or pick a larger universe."
+                "No matches with current filters — see **Scan diagnostics** above for why. "
+                "Try Vol ratio **1.0×**, RSI **40–80**, enable **Broad Movers**, or **Nifty 50**."
             )
         else:
             st.info("👆 Pick universe + strategies and click **RUN INTRADAY SCAN**.")
@@ -634,7 +923,9 @@ def render_gap_scanner_page() -> None:
 
     key = "gap"
     market = _market_picker(key)
+    _live_market_clocks()
     _session_banner(market)
+    _render_market_schedule(market)
 
     with st.container(border=True):
         c1, c2 = st.columns([1.2, 1.0])
@@ -652,12 +943,12 @@ def render_gap_scanner_page() -> None:
     if market == "US":
         st.caption(
             f"Universe: **{uni_label}** ({len(raw_tickers)} tickers). "
-            "Run at 9:00–9:45 AM ET (3:00–3:45 PM CEST) for maximum signal."
+            "Run at **3:00 PM CEST** (9:00 AM ET) — pre-market gaps forming."
         )
     else:
         st.caption(
             f"Universe: **{uni_label}** ({len(raw_tickers)} tickers). "
-            "Run at 8:30–9:30 AM IST (5:00–6:00 AM CEST) for maximum signal."
+            "Run at **5:45 AM CEST** (9:15 AM IST) — see who gapped up/down before the open."
         )
 
     if run:
@@ -735,6 +1026,8 @@ def render_intraday_guide_page() -> None:
         "screener rules and pre-trade checklist. Not financial advice.",
     )
 
+    _live_market_clocks()
+
     # Show both market banners side-by-side so European traders see local time for each session.
     bnr_col1, bnr_col2 = st.columns(2)
     with bnr_col1:
@@ -799,6 +1092,14 @@ Paper trade (3–6 months)
     st.markdown("## 🔥 Screener rules (battle-tested)")
     st.markdown(
         """
+### Strategy 0 — Broad Movers · *any session*
+```
+Vol ratio ≥ 1.0× (adjustable)
+RSI between 40–80 (adjustable)
+Any meaningful % move vs prev close (min change % = 0 by default)
+```
+*Widest net — use when pattern strategies return too few names.*
+
 ### Strategy 1 — Momentum Breakout · *9:30–11:00 AM*
 ```
 RSI(14) > 60
@@ -849,46 +1150,26 @@ Beta > 0.8                   ← Must move with market
     )
 
     st.markdown("---")
-    st.markdown("## ⏰ Time-based scan schedule")
+    st.markdown("## ⏰ Time-based trading schedule")
 
-    tab_nse, tab_us = st.tabs(["🇮🇳 NSE (India)", "🇺🇸 US (NYSE / NASDAQ)"])
+    tab_nse, tab_us = st.tabs(["🇮🇳 Indian Market (NSE)", "🇺🇸 US Market (NYSE/NASDAQ)"])
 
     with tab_nse:
         st.caption("NSE regular session: **9:15 AM – 3:30 PM IST** · **5:45 AM – 12:00 PM CEST** (summer)")
-        st.markdown(
-            """
-| IST | CEST | What to scan |
-|-----|------|--------------|
-| 8:30–9:10 AM | 5:00–5:40 AM | Gap-up / Gap-down candidates |
-| 9:15–9:30 AM | 5:45–6:00 AM | ORB setup stocks |
-| 9:30–10:30 AM | 6:00–7:00 AM | Momentum breakouts |
-| 10:30 AM–1:00 PM | 7:00–9:30 AM | VWAP pullbacks |
-| 1:00–2:00 PM | 9:30–10:30 AM | **Avoid** (lunch lull) |
-| 2:00–3:15 PM | 10:30 AM–11:45 AM | End-of-day momentum plays |
-| 3:30 PM | 12:00 PM | Session close — square off all positions |
-"""
-        )
+        st.markdown(_schedule_rows_to_md(NSE_DAY_SCHEDULE, "India Time (IST)"))
 
     with tab_us:
         st.caption("US regular session: **9:30 AM – 4:00 PM ET** · **3:30 PM – 10:00 PM CEST** (summer)")
-        st.markdown(
-            """
-| ET | CEST | What to scan |
-|----|------|--------------|
-| 7:00–9:30 AM | 1:00–3:30 PM | Pre-market gap scan + watchlist build |
-| 9:30–9:45 AM | 3:30–3:45 PM | ORB high/low forming · no entries yet |
-| 9:45–11:00 AM | 3:45–5:00 PM | Opening hour: ORB breaks + momentum |
-| 11:00 AM–1:30 PM | 5:00–7:30 PM | VWAP pullbacks · fewer, cleaner trades |
-| 1:30–3:00 PM | 7:30–9:00 PM | Mid-day chop · **avoid noise** |
-| 3:00–4:00 PM | 9:00–10:00 PM | 💥 Power hour — strong moves, close before 3:55 PM ET |
-| 4:00 PM | 10:00 PM | Session close — square off, no overnight |
-"""
-        )
+        st.markdown(_schedule_rows_to_md(US_DAY_SCHEDULE, "US Time (ET)"))
         st.info(
-            "🇪🇺 **Tip for European day traders:** The US session aligns nicely with European afternoons/evenings. "
-            "Pre-market scan ~3:00 PM CEST, opening volatility 3:30–5:00 PM CEST, power hour 9:00–10:00 PM CEST. "
-            "DST shifts move CEST↔CET by 1 hour twice a year — the app's clocks auto-adjust."
+            "🇪🇺 **Tip for European day traders:** Run the US Gap Scanner at **3:00 PM CEST**, "
+            "Intraday Scanner at **3:45 PM CEST**, square off by **9:45 PM CEST**. "
+            "Never trade the first 5 minutes after the US open (9:30–9:35 AM ET)."
         )
+
+    st.markdown("---")
+    _render_full_day_glance()
+    _render_quick_rules()
 
     st.markdown("---")
     st.markdown("## ✅ Pre-trade checklist")
@@ -902,34 +1183,6 @@ Beta > 0.8                   ← Must move with market
 - [ ] Stop-loss level clearly defined?
 """
     )
-
-    st.markdown("---")
-    st.markdown("## 📅 Your daily routine")
-    rc1, rc2 = st.columns(2)
-    with rc1:
-        st.markdown("**🇮🇳 NSE day (IST · CEST in parens)**")
-        st.code(
-            """8:30 AM IST  (5:00 AM CEST) → Check gaps, note market mood
-9:00 AM IST  (5:30 AM CEST) → Run Intraday Screener, shortlist 3–5
-9:15 AM IST  (5:45 AM CEST) → Mark ORB high/low, do NOT trade yet
-9:30 AM IST  (6:00 AM CEST) → Start trading (ORB / VWAP)
-11:00 AM IST (7:30 AM CEST) → Stop if 2 losses hit
-2:00 PM IST  (10:30 AM CEST)→ One more session if trending
-3:00 PM IST  (11:30 AM CEST)→ Square off ALL positions""",
-            language="text",
-        )
-    with rc2:
-        st.markdown("**🇺🇸 US day (ET · CEST in parens)**")
-        st.code(
-            """9:00 AM ET   (3:00 PM CEST) → Check gaps, note market mood
-9:15 AM ET   (3:15 PM CEST) → Run Intraday Screener, shortlist 3–5
-9:30 AM ET   (3:30 PM CEST) → Mark ORB high/low, do NOT trade yet
-9:45 AM ET   (3:45 PM CEST) → Start trading (ORB / momentum)
-11:00 AM ET  (5:00 PM CEST) → Stop if 2 losses hit
-3:00 PM ET   (9:00 PM CEST) → Power hour — last session
-3:55 PM ET   (9:55 PM CEST) → Square off ALL positions""",
-            language="text",
-        )
 
     st.info(
         "📈 The **most reliable signals** appear when a stock shows up in **both** the Gap Scanner "

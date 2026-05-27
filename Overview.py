@@ -99,7 +99,7 @@ NAV_PAGES = {
     ],
     "⚡ Intraday": [
         st.Page(page_gap_scanner, title="Gap Scanner (pre-market)", icon="🌅"),
-        st.Page(page_intraday_screener, title="Intraday Screener (4 strategies)", icon="📡"),
+        st.Page(page_intraday_screener, title="Intraday Screener (5 strategies)", icon="📡"),
         st.Page(page_intraday_guide, title="Intraday Guide", icon="📚"),
     ],
 }
