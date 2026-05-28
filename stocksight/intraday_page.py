@@ -36,11 +36,18 @@ from intraday import (
     scan_gaps,
     scan_intraday,
 )
+from market_sentiment import add_market_sentiment_columns
+try:
+    from news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker
+except ImportError:
+    from .news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker  # type: ignore[no-redef]
 from ui_components import (
+    SCAN_RESULTS_NEWS_COL,
     ensure_session_choice,
     filter_column_config,
     inject_css,
     page_audience_note,
+    prepare_scan_results_df,
     render_clickable_scan_table,
     safe_set_page_config,
 )
@@ -81,6 +88,99 @@ QUICK_TRADING_RULES: list[tuple[str, str]] = [
     ("Stop trading after **2 losses** in a day", "Protects your capital"),
     ("Square off **15 min** before close", "Avoid last-minute panic moves"),
 ]
+
+
+def _news_universe_for_market(market: str) -> str:
+    return "S&P 500 (NYSE)" if str(market).upper() == "US" else "Nifty 500 (NSE)"
+
+
+def _add_intraday_news_scanner_columns(
+    df: pd.DataFrame,
+    *,
+    market: str = "NSE",
+    max_rows: int = 80,
+) -> pd.DataFrame:
+    """Add News Scanner confirmation columns to intraday/gap tables."""
+    if df is None or df.empty:
+        return df
+    if "News score" in df.columns:
+        return df
+
+    enabled = bool(st.session_state.get("intraday_news_confirm_enabled", True))
+    if not enabled:
+        return df
+
+    max_rows = int(st.session_state.get("intraday_news_confirm_max_rows", max_rows))
+    out = df.copy()
+    universe_name = _news_universe_for_market(market)
+    cache: dict[str, object] = st.session_state.setdefault("_intraday_news_scanner_cache", {})
+
+    news_scores: list[Optional[int]] = []
+    top_tiers: list[str] = []
+    tier_refs: list[str] = []
+    top_headlines: list[str] = []
+    confirm_actions: list[str] = []
+
+    for i, (_, row) in enumerate(out.iterrows()):
+        if i >= max_rows:
+            news_scores.append(None)
+            top_tiers.append("—")
+            tier_refs.append("—")
+            top_headlines.append("—")
+            confirm_actions.append("— (narrow list for full news scoring)")
+            continue
+
+        raw = str(row.get("Raw") or row.get("Ticker") or "").strip()
+        if not raw:
+            news_scores.append(None)
+            top_tiers.append("—")
+            tier_refs.append("—")
+            top_headlines.append("—")
+            confirm_actions.append("—")
+            continue
+
+        ckey = f"{universe_name}|{raw.upper()}"
+        summary = cache.get(ckey)
+        if summary is None:
+            summary = analyze_ticker(raw, universe_name=universe_name)
+            cache[ckey] = summary
+
+        score = int(getattr(summary, "news_score", 0) or 0)
+        top_tier = int(getattr(summary, "top_tier", 4) or 4)
+        headline = str(getattr(summary, "top_headline", "") or "").strip()
+        action = str(getattr(summary, "action", "") or "").strip()
+
+        news_scores.append(score)
+        top_tiers.append(f"{TIER_EMOJI.get(top_tier, '•')} T{top_tier}")
+        tier_refs.append(f"{TIER_EMOJI.get(top_tier, '•')} {TIER_LABELS.get(top_tier, f'Tier {top_tier}')}")
+        top_headlines.append(headline[:95] if headline else "—")
+        confirm_actions.append(action[:95] if action else "—")
+
+    out["News score"] = news_scores
+    out["Top tier"] = top_tiers
+    out["Tier reference"] = tier_refs
+    out["Top headline"] = top_headlines
+    out["Confirm action"] = confirm_actions
+    return out
+
+
+def _news_confirmation_controls() -> None:
+    with st.expander("📰 News confirmation settings", expanded=False):
+        st.checkbox(
+            "Enable News Scanner confirmation columns",
+            value=bool(st.session_state.get("intraday_news_confirm_enabled", True)),
+            key="intraday_news_confirm_enabled",
+            help="Adds News score / Top tier / Tier reference / Top headline / Confirm action.",
+        )
+        st.slider(
+            "Max rows for news scoring",
+            min_value=20,
+            max_value=300,
+            value=int(st.session_state.get("intraday_news_confirm_max_rows", 80)),
+            step=10,
+            key="intraday_news_confirm_max_rows",
+            help="Higher values provide broader scoring but take longer.",
+        )
 
 
 def _schedule_rows_to_md(rows: list[tuple[str, str, str]], local_col: str) -> str:
@@ -417,7 +517,7 @@ def _filters_panel(key_prefix: str, market: str = "NSE") -> IntradayFilters:
     )
 
 
-def _results_to_df(results: list[IntradayResult]) -> pd.DataFrame:
+def _results_to_df(results: list[IntradayResult], *, market: str = "NSE") -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
     rows = []
@@ -456,10 +556,14 @@ def _results_to_df(results: list[IntradayResult]) -> pd.DataFrame:
             row[name] = url
         rows.append(row)
     df = pd.DataFrame(rows)
-    return df.dropna(axis=1, how="all")
+    df = df.dropna(axis=1, how="all")
+    if not df.empty:
+        df = add_market_sentiment_columns(df, market=market, insert_after="Ticker")
+        df = _add_intraday_news_scanner_columns(df, market=market)
+    return df
 
 
-def _gap_results_to_df(gaps: list[GapResult]) -> pd.DataFrame:
+def _gap_results_to_df(gaps: list[GapResult], *, market: str = "NSE") -> pd.DataFrame:
     if not gaps:
         return pd.DataFrame()
     rows = []
@@ -486,7 +590,11 @@ def _gap_results_to_df(gaps: list[GapResult]) -> pd.DataFrame:
             row[name] = url
         rows.append(row)
     df = pd.DataFrame(rows)
-    return df.dropna(axis=1, how="all")
+    df = df.dropna(axis=1, how="all")
+    if not df.empty:
+        df = add_market_sentiment_columns(df, market=market, insert_after="Ticker")
+        df = _add_intraday_news_scanner_columns(df, market=market)
+    return df
 
 
 def _intraday_col_cfg(df: pd.DataFrame) -> dict:
@@ -494,6 +602,14 @@ def _intraday_col_cfg(df: pd.DataFrame) -> dict:
         df,
         {
             "Rank": st.column_config.TextColumn("Rank", width="small"),
+            "Market sentiment": st.column_config.TextColumn("Market sentiment", width="medium"),
+            "Sentiment why": st.column_config.TextColumn("Sentiment why", width="large"),
+            SCAN_RESULTS_NEWS_COL: st.column_config.TextColumn(SCAN_RESULTS_NEWS_COL, width="large"),
+            "News score": st.column_config.ProgressColumn("News score", min_value=0, max_value=100, format="%d"),
+            "Top tier": st.column_config.TextColumn("Top tier", width="small"),
+            "Tier reference": st.column_config.TextColumn("Tier reference", width="medium"),
+            "Top headline": st.column_config.TextColumn("Top headline", width="large"),
+            "Confirm action": st.column_config.TextColumn("Confirm action", width="medium"),
             "Strategy": st.column_config.TextColumn("Strategy", width="medium"),
             "Score /120": st.column_config.NumberColumn(
                 "Score /120",
@@ -550,6 +666,14 @@ def _gap_col_cfg(df: pd.DataFrame) -> dict:
     return filter_column_config(
         df,
         {
+            "Market sentiment": st.column_config.TextColumn("Market sentiment", width="medium"),
+            "Sentiment why": st.column_config.TextColumn("Sentiment why", width="large"),
+            SCAN_RESULTS_NEWS_COL: st.column_config.TextColumn(SCAN_RESULTS_NEWS_COL, width="large"),
+            "News score": st.column_config.ProgressColumn("News score", min_value=0, max_value=100, format="%d"),
+            "Top tier": st.column_config.TextColumn("Top tier", width="small"),
+            "Tier reference": st.column_config.TextColumn("Tier reference", width="medium"),
+            "Top headline": st.column_config.TextColumn("Top headline", width="large"),
+            "Confirm action": st.column_config.TextColumn("Confirm action", width="medium"),
             "Dir": st.column_config.TextColumn("Dir", width="small"),
             "Size": st.column_config.TextColumn("Size", width="small"),
             "Prev Close": st.column_config.NumberColumn(format="%.2f"),
@@ -622,9 +746,24 @@ def _render_diagnostic_panel(stats: IntradayScanStats, *, key_prefix: str) -> No
         )
 
 
-def _csv_download(df: pd.DataFrame, *, label: str, file_prefix: str, key: str) -> None:
+def _csv_download(
+    df: pd.DataFrame,
+    *,
+    label: str,
+    file_prefix: str,
+    key: str,
+    universe_name: str = "",
+    market: str = "NSE",
+) -> None:
     if df is None or df.empty:
         return
+    df = prepare_scan_results_df(
+        df,
+        market=market,
+        universe_name=universe_name,
+        cache_key_prefix=f"csv_{key}",
+        raw_ticker_col="Raw" if "Raw" in df.columns else None,
+    )
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button(
         label,
@@ -705,6 +844,7 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
                     st.markdown(f"- **{STRATEGY_LABEL[s]}** — {times.get(s, '')}")
 
     flt = _filters_panel(key, market)
+    _news_confirmation_controls()
 
     run = st.button("▶  RUN INTRADAY SCAN", use_container_width=True, key=f"{key}_run")
     if market == "US":
@@ -878,7 +1018,7 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
         + (f" · {scan_at}" if scan_at else "")
     )
 
-    df_all = _results_to_df(results)
+    df_all = _results_to_df(results, market=scan_market)
     tab_labels = ["📋 All matches"] + [STRATEGY_LABEL[s] for s in STRATEGIES if counts.get(s, 0)]
     tabs = st.tabs(tab_labels)
 
@@ -887,11 +1027,18 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
             df_all,
             key_prefix=f"{key}_all",
             universe_name=last_uni,
+            market=scan_market,
             column_config=_intraday_col_cfg(df_all),
             height=min(620, 48 + len(df_all) * 36),
         )
-        _csv_download(df_all, label="⬇ Download All matches CSV",
-                       file_prefix="stocksight_intraday_all", key=f"{key}_dl_all")
+        _csv_download(
+            df_all,
+            label="⬇ Download All matches CSV",
+            file_prefix="stocksight_intraday_all",
+            key=f"{key}_dl_all",
+            universe_name=last_uni,
+            market=scan_market,
+        )
 
     tab_idx = 1
     scan_market = st.session_state.get(f"{key}_scan_market", market)
@@ -901,18 +1048,24 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
             continue
         with tabs[tab_idx]:
             sub_results = [r for r in results if r.strategy == s]
-            sub_df = _results_to_df(sub_results)
+            sub_df = _results_to_df(sub_results, market=scan_market)
             st.caption(f"Best time-of-day: **{best_times.get(s, '')}**")
             render_clickable_scan_table(
                 sub_df,
                 key_prefix=f"{key}_{s.lower()}",
                 universe_name=last_uni,
+                market=scan_market,
                 column_config=_intraday_col_cfg(sub_df),
                 height=min(560, 48 + len(sub_df) * 36),
             )
-            _csv_download(sub_df, label=f"⬇ Download {STRATEGY_LABEL[s]} CSV",
-                           file_prefix=f"stocksight_intraday_{s.lower()}",
-                           key=f"{key}_dl_{s.lower()}")
+            _csv_download(
+                sub_df,
+                label=f"⬇ Download {STRATEGY_LABEL[s]} CSV",
+                file_prefix=f"stocksight_intraday_{s.lower()}",
+                key=f"{key}_dl_{s.lower()}",
+                universe_name=last_uni,
+                market=scan_market,
+            )
         tab_idx += 1
 
 
@@ -985,6 +1138,7 @@ def render_gap_scanner_page() -> None:
                 key=f"{key}_min_gap",
                 help="Filter out micro-gaps. Default 1% catches most actionable setups.",
             )
+    _news_confirmation_controls()
 
     run = st.button("▶  SCAN GAPS NOW", use_container_width=True, key=f"{key}_run")
     if market == "US":
@@ -1031,16 +1185,24 @@ def render_gap_scanner_page() -> None:
 
     st.success(f"**{len(gaps)}** gaps ≥ {min_gap}% · {last_uni}" + (f" · {scan_at}" if scan_at else ""))
 
-    df = _gap_results_to_df(gaps)
+    gap_market = st.session_state.get(f"{key}_scan_market", "NSE")
+    df = _gap_results_to_df(gaps, market=gap_market)
     render_clickable_scan_table(
         df,
         key_prefix=f"{key}_results",
         universe_name=last_uni,
+        market=gap_market,
         column_config=_gap_col_cfg(df),
         height=min(600, 48 + len(df) * 36),
     )
-    _csv_download(df, label="⬇ Download Gap Scanner CSV",
-                   file_prefix="stocksight_gaps", key=f"{key}_dl")
+    _csv_download(
+        df,
+        label="⬇ Download Gap Scanner CSV",
+        file_prefix="stocksight_gaps",
+        key=f"{key}_dl",
+        universe_name=last_uni,
+        market=gap_market,
+    )
 
     st.markdown("---")
     st.markdown(

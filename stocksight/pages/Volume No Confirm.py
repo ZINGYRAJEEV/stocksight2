@@ -5,7 +5,7 @@ from signals import scan_volume_no_confirm
 from ui_components import (
     inject_css,
     scenario_header,
-    trade_plan_card,
+    render_trade_plan_cards,
     results_table,
     no_results_state,
     safe_set_page_config,
@@ -82,7 +82,7 @@ if run:
         progress_cb=cb,
         **scan_kw,
     )
-    maybe_enrich_news(results, adv.get("fetch_news", False))
+    maybe_enrich_news(results, adv.get("fetch_news", True))
     log_scenario_scan(SCENARIO, universe, results)
     notify_watchlist_alerts(results, scenario_page_alert_hint(SCENARIO))
     prog.empty()
@@ -110,8 +110,12 @@ else:
     st.markdown("---")
 
     if view == "Cards":
-        for r in results:
-            trade_plan_card(r, SCENARIO, portfolio_value=pf_sz, risk_pct=float(adv.get("risk_pct_per_trade", 1.0) or 1.0))
+        render_trade_plan_cards(
+            results,
+            SCENARIO,
+            portfolio_value=pf_sz,
+            risk_pct=float(adv.get("risk_pct_per_trade", 1.0) or 1.0),
+        )
     else:
         results_table(results, SCENARIO)
 

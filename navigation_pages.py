@@ -145,3 +145,9 @@ def page_intraday_guide() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
     exec_stocksight_page("Intraday Guide.py")
+
+
+def page_news_scanner() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("News Scanner.py")

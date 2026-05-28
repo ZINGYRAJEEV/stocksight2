@@ -160,6 +160,13 @@ def _render_run_panel(key: str, reg: dict) -> None:
                 "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
             },
         )
+        from ui_components import prepare_scan_results_df
+
+        df = prepare_scan_results_df(
+            df,
+            universe_name="NSE",
+            cache_key_prefix=f"{key}_{picked}",
+        )
         render_clickable_scan_table(
             df,
             key_prefix=f"{key}_{picked}_results",

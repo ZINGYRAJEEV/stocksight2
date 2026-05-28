@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from high_profit import ARCHETYPES, nav_title
-from screener import composite_action_zone, matrix_decision_note
+from screener import composite_action_zone, fetch_recent_quote_news, matrix_decision_note
 from ui_components import render_clickable_scan_table
 
 
@@ -187,6 +187,18 @@ def high_profit_detail_card(r, rank: int) -> None:
         </div>
         """
 
+    news_html = ""
+    if getattr(r, "news_headlines", None):
+        lis = "".join(
+            f"<li style='margin:3px 0;'>{html.escape(t)}</li>"
+            for t in r.news_headlines[:5]
+        )
+        news_html = (
+            "<div style='margin-top:12px;font-size:0.72rem;color:#c8d8e8;'>"
+            "<b>Recent news (last 4 days)</b>"
+            f"<ul style='margin:6px 0 0 18px;'>{lis}</ul></div>"
+        )
+
     links_html = " &nbsp;".join([
         f'<a href="{html.escape(url, quote=True)}" target="_blank" style="color:{color}; '
         f'font-size:0.72rem; text-decoration:none; border:1px solid {color}33; '
@@ -284,6 +296,8 @@ def high_profit_detail_card(r, rank: int) -> None:
                 <div style='display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;'>{flags_html}</div>
             </div>
         </div>
+        {news_html}
+
         <div style='margin-top:14px;'>{links_html}</div>
     </div>
     """)

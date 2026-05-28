@@ -31,6 +31,8 @@ try:
         matrix_decision_note,
         rsi_series_wilder,
         compute_vwap,
+        enrich_dataframe_recent_news,
+        format_recent_news_cell,
     )
     from .signals import SignalResult, SCENARIOS, enrich_results_news, scenario_display_title
     from .scan_history_store import append_scan_record, build_first_seen_map
@@ -42,6 +44,7 @@ try:
         set_email_watchlist_alerts,
         upsert_watchlist_fields,
     )
+    from .market_sentiment import add_market_sentiment_columns, market_from_universe
 except ImportError:
     from screener import (
         DECISION_ZONES,
@@ -52,6 +55,8 @@ except ImportError:
         matrix_decision_note,
         rsi_series_wilder,
         compute_vwap,
+        enrich_dataframe_recent_news,
+        format_recent_news_cell,
     )
     from signals import SignalResult, SCENARIOS, enrich_results_news, scenario_display_title
     from scan_history_store import append_scan_record, build_first_seen_map
@@ -63,6 +68,7 @@ except ImportError:
         set_email_watchlist_alerts,
         upsert_watchlist_fields,
     )
+    from market_sentiment import add_market_sentiment_columns, market_from_universe  # type: ignore[no-redef]
 
 
 INTERVAL_LABELS = {"1d": "Daily", "1h": "1 Hour", "15m": "15 Minute"}
@@ -422,8 +428,8 @@ def scenario_advanced_panel(key_prefix: str) -> dict:
             key=f"{key_prefix}_nodivbear",
         )
         fetch_news = st.checkbox(
-            "Fetch recent Yahoo headlines for matches (extra calls)",
-            value=False,
+            "Fetch recent Yahoo headlines for matches (last 4 days, extra calls)",
+            value=True,
             key=f"{key_prefix}_news",
         )
         portfolio_for_sizing = st.number_input(
@@ -489,13 +495,103 @@ def scenario_advanced_panel(key_prefix: str) -> dict:
     }
 
 
-def maybe_enrich_news(results: list[SignalResult], enabled: bool, max_names: int = 35) -> None:
+SCAN_RESULTS_NEWS_COL = "Recent news (<4d)"
+
+
+def maybe_enrich_news(
+    results: list[SignalResult],
+    enabled: bool = True,
+    max_names: int = 35,
+) -> None:
+    """Fetch dated Yahoo headlines (last 4 days) for cards and fall-context helpers."""
     if not enabled or not results:
         return
     if len(results) > max_names:
-        st.warning(f"Headlines skipped — more than {max_names} matches (too many Yahoo calls). Narrow filters or disable headlines.")
+        st.warning(
+            f"Headlines skipped — more than {max_names} matches (too many Yahoo calls). "
+            "Narrow filters or disable headlines in Advanced."
+        )
         return
     enrich_results_news(results)
+
+
+def ensure_scan_results_news(results: list[SignalResult], max_names: int = 35) -> None:
+    """Always enrich scan matches with recent headlines when the list is small enough."""
+    maybe_enrich_news(results, enabled=True, max_names=max_names)
+
+
+def render_trade_plan_cards(
+    results: list[SignalResult],
+    scenario_id: str,
+    *,
+    portfolio_value: float = 0.0,
+    risk_pct: float = 1.0,
+) -> None:
+    """Render trade-plan cards with recent news prefetched for sentiment context."""
+    ensure_scan_results_news(results)
+    for r in results:
+        trade_plan_card(
+            r,
+            scenario_id,
+            portfolio_value=portfolio_value,
+            risk_pct=risk_pct,
+        )
+
+
+def _scan_table_news_column_config() -> dict:
+    return {
+        "Market sentiment": st.column_config.TextColumn("Market sentiment", width="medium"),
+        "Sentiment why": st.column_config.TextColumn("Sentiment why", width="large"),
+        SCAN_RESULTS_NEWS_COL: st.column_config.TextColumn(SCAN_RESULTS_NEWS_COL, width="large"),
+    }
+
+
+def prepare_scan_results_df(
+    df: pd.DataFrame,
+    *,
+    market: Optional[str] = None,
+    universe_name: str = "",
+    cache_key_prefix: str = "",
+    max_news_rows: int = 50,
+    raw_ticker_col: Optional[str] = None,
+) -> pd.DataFrame:
+    """Add market sentiment + recent news columns for any scan results table."""
+    if df is None or df.empty:
+        return df
+
+    mkt = market or market_from_universe(universe_name)
+    insert_after = next((c for c in ("Ticker", "Name", "ticker") if c in df.columns), "Ticker")
+
+    if "Market sentiment" not in df.columns:
+        df = add_market_sentiment_columns(df, market=mkt, insert_after=insert_after)
+
+    if SCAN_RESULTS_NEWS_COL in df.columns:
+        return df
+
+    raw_col = raw_ticker_col
+    if raw_col is None and "Raw" in df.columns:
+        raw_col = "Raw"
+
+    ticker_key = "Ticker" if "Ticker" in df.columns else ("ticker" if "ticker" in df.columns else df.columns[0])
+    news_cache_key = (
+        f"scan_news_{cache_key_prefix}_{universe_name}_{mkt}_"
+        f"{hash(tuple(df[ticker_key].astype(str).tolist()))}"
+    )
+
+    if len(df) <= max_news_rows:
+        if news_cache_key not in st.session_state:
+            with st.spinner("Loading recent headlines (last 4 days)…"):
+                st.session_state[news_cache_key] = enrich_dataframe_recent_news(
+                    df,
+                    universe_name=universe_name,
+                    raw_ticker_col=raw_col,
+                    insert_after="Sentiment why" if "Sentiment why" in df.columns else insert_after,
+                )
+        return st.session_state[news_cache_key]
+
+    out = df.copy()
+    out[SCAN_RESULTS_NEWS_COL] = f"— (narrow to ≤{max_news_rows} rows for headlines)"
+    return out
 
 
 def maybe_enrich_healthy_dip_context(results: list[SignalResult], enabled: bool, max_names: int = 30) -> None:
@@ -844,6 +940,9 @@ def render_clickable_scan_table(
     caption: Optional[str] = "💡 Click any row to load its interactive chart + pre-buy research below.",
     show_panel: bool = True,
     styler=None,
+    market: Optional[str] = None,
+    highlight_row_test=None,
+    highlight_row_style: str = "background-color: #d1fae5; color: #064e3b",
 ) -> Optional[str]:
     """Render a results dataframe with row selection wired to the chart/research panel.
 
@@ -855,10 +954,32 @@ def render_clickable_scan_table(
     if df is None or df.empty:
         return None
 
+    mkt = market or market_from_universe(universe_name)
+    raw_col = "Raw" if "Raw" in df.columns else None
+    df = prepare_scan_results_df(
+        df,
+        market=mkt,
+        universe_name=universe_name,
+        cache_key_prefix=key_prefix,
+        raw_ticker_col=raw_col,
+    )
+    if column_config is not None:
+        column_config = dict(column_config)
+        for k, v in _scan_table_news_column_config().items():
+            column_config.setdefault(k, v)
+
     if caption:
         st.caption(caption)
 
-    table_arg = styler if styler is not None else df
+    if highlight_row_test is not None:
+        table_arg = df.style.apply(  # type: ignore[union-attr]
+            lambda row: [highlight_row_style if highlight_row_test(row) else ""] * len(row),
+            axis=1,
+        )
+    elif styler is not None:
+        table_arg = styler
+    else:
+        table_arg = df
     kwargs = {
         "use_container_width": True,
         "hide_index": hide_index,
@@ -1287,6 +1408,7 @@ def signal_results_download(
 ) -> None:
     if not results:
         return
+    ensure_scan_results_news(results)
     if (include_analyst or include_history) and len(results) > 50:
         st.warning(
             "Yahoo analyst/history columns skipped — more than 50 matches (rate limits). "
@@ -1327,7 +1449,10 @@ def signal_results_download(
             "Stoch_D": r.stoch_d,
             "RS20_vs_idx": r.rel_strength_20d,
             "VWAP_pct": r.price_vs_vwap_pct,
-            "News_sentiment": r.news_sentiment or "",
+            "News_tone": r.news_sentiment or "",
+            SCAN_RESULTS_NEWS_COL: format_recent_news_cell(r.news_headlines)
+            if r.news_headlines
+            else "—",
             "NSE_flow_note": r.nse_flow_note or "",
             "Entry": r.entry,
             "Stop": r.stop_loss,
@@ -1350,6 +1475,18 @@ def signal_results_download(
     df = pd.DataFrame(rows)
     if "First_seen" in df.columns:
         df = df.rename(columns={"First_seen": "First seen"})
+    mkt = "NSE"
+    if results and not any(
+        str(getattr(r, "raw_ticker", "")).upper().endswith((".NS", ".BO")) for r in results
+    ):
+        mkt = "US"
+    if not df.empty:
+        df = prepare_scan_results_df(
+            df,
+            market=mkt,
+            cache_key_prefix=f"csv_{scenario_id}_{button_key}",
+            raw_ticker_col="Raw",
+        )
     if (include_analyst or include_history) and not df.empty:
         try:
             from screener import enrich_dataframe_yahoo_context
@@ -1785,6 +1922,8 @@ def results_table(
     if not results:
         return
 
+    ensure_scan_results_news(results)
+
     rows = []
     for r in results:
         decision, composite, matrix_note = _decision_for_signal_result(r)
@@ -1814,7 +1953,10 @@ def results_table(
             "%D":          r.stoch_d,
             "RS20":        r.rel_strength_20d,
             "VWAP %":      r.price_vs_vwap_pct,
-            "Sentiment":   r.news_sentiment or "—",
+            "News tone":   r.news_sentiment or "—",
+            SCAN_RESULTS_NEWS_COL: format_recent_news_cell(r.news_headlines)
+            if r.news_headlines
+            else "—",
             "Bull div":    "✓" if r.rsi_bullish_div else "—",
             "Bear div":    "⚠" if r.rsi_bearish_div else "—",
             "RSI Rising":   "↑" if r.rsi_rising else "→/↓",
@@ -1839,6 +1981,18 @@ def results_table(
 
     df = pd.DataFrame(rows)
     df["Raw"] = [r.raw_ticker for r in results]
+
+    mkt = "NSE"
+    if results and not any(
+        str(getattr(r, "raw_ticker", "")).upper().endswith((".NS", ".BO")) for r in results
+    ):
+        mkt = "US"
+    df = prepare_scan_results_df(
+        df,
+        market=mkt,
+        cache_key_prefix=f"scenario_{scenario_id}",
+        raw_ticker_col="Raw",
+    )
 
     if include_yahoo_context and len(df) <= 50:
         try:
@@ -1867,6 +2021,7 @@ def results_table(
             df[col_name] = [r.links.get(name, "") for r in results]
 
     col_cfg = {
+        **_scan_table_news_column_config(),
         "Decision":     st.column_config.TextColumn("Decision", width="medium"),
         "Matrix note":  st.column_config.TextColumn("Matrix note", width="large"),
         "Composite":    st.column_config.NumberColumn("Composite", format="%.1f"),

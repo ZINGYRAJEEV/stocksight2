@@ -387,6 +387,7 @@ class HighProfitResult:
     rsi: float = 0.0
     score: float = 0.0
     links: dict = field(default_factory=dict)
+    news_headlines: list[str] = field(default_factory=list)
 
     today_low: float = 0.0
     today_high: float = 0.0

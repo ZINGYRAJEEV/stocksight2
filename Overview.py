@@ -31,6 +31,7 @@ from navigation_pages import (
     page_high_profit_regulatory_moat,
     page_intraday_guide,
     page_intraday_screener,
+    page_news_scanner,
     page_multibagger,
     page_popular_screens,
     page_proven_multibaggers,
@@ -102,6 +103,9 @@ NAV_PAGES = {
         st.Page(page_intraday_screener, title="Intraday Screener (5 strategies)", icon="📡"),
         st.Page(page_intraday_guide, title="Intraday Guide", icon="📚"),
     ],
+    "📰 News & Sentiment": [
+        st.Page(page_news_scanner, title="News Scanner + Rulebook", icon="📰"),
+    ],
 }
 
 inject_app_chrome()
@@ -126,6 +130,7 @@ with st.sidebar:
         pass
     st.caption(
         "📈 **Popular Screens** sits under the main screener for classic named filters. "
+        "📰 **News Scanner + Rulebook** classifies headlines (Tier 1–4) and scans your intraday shortlist. "
         "**Buy / Hold / Avoid** is the final decision layer—use it after you have candidates. "
         "Expand the sidebar (**«**) if the menu is truncated."
     )

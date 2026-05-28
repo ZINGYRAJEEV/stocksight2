@@ -16,6 +16,7 @@ from high_profit import (
     nav_title,
     scan_high_profit,
 )
+from screener import fetch_recent_quote_news
 from high_profit_ui import (
     high_profit_detail_card,
     high_profit_header,
@@ -189,6 +190,10 @@ def render_high_profit_page(archetype_id: str) -> None:
             key=f"{key}_view",
         )
         if view == "Cards":
+            if len(results) <= 35:
+                with st.spinner("Loading recent headlines (last 4 days)…"):
+                    for r in results:
+                        r.news_headlines = fetch_recent_quote_news(r.raw_ticker, limit=3)
             for rank, r in enumerate(results, start=1):
                 high_profit_detail_card(r, rank)
 

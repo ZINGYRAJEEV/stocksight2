@@ -11,6 +11,7 @@ from watchlist_store import load_watchlist
 from ui_components import (
     inject_css,
     trade_plan_card,
+    ensure_scan_results_news,
     results_table,
     safe_set_page_config,
     scenario_advanced_panel,
@@ -77,7 +78,7 @@ if run:
             weekly_macd_confirm=adv["weekly_macd_confirm"],
             progress_cb=cb,
         )
-        maybe_enrich_news(merged, adv.get("fetch_news", False))
+        maybe_enrich_news(merged, adv.get("fetch_news", True))
         log_scenario_scan(PAGE_SCENARIO_ID, "watchlist", merged)
         notify_watchlist_alerts(merged, "Watchlist Cross-Scan")
         prog.empty()
@@ -137,6 +138,7 @@ else:
     st.markdown("---")
 
     if view == "Cards":
+        ensure_scan_results_news(results)
         by_ticker: dict[str, list] = {}
         for r in results:
             by_ticker.setdefault(r.ticker, []).append(r)

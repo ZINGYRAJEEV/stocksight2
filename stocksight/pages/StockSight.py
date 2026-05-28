@@ -6,13 +6,21 @@ For: active traders and investors who want one ranked list across Nifty 50/500 o
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from screener import screen_stocks, UNIVERSES, us_market_status_label, enrich_dataframe_yahoo_context
+from screener import (
+    screen_stocks,
+    UNIVERSES,
+    us_market_status_label,
+    enrich_dataframe_yahoo_context,
+)
 from scan_history_store import append_scan_record
+from market_sentiment import market_from_universe
 from ui_components import (
+    SCAN_RESULTS_NEWS_COL,
     filter_column_config,
     first_seen_label,
     notify_watchlist_alerts_screen_df,
     page_audience_note,
+    prepare_scan_results_df,
     raw_symbol_from_screen_display,
     render_decision_matrix_legend,
     render_historical_detail_panel,
@@ -154,7 +162,7 @@ with col_h2:
 page_audience_note(
     "Anyone building a daily or weekly shortlist—beginners can start with Nifty 50; active users can tune PE, volume, and RSI.",
     "Runs the core screen across your chosen universe, ranks by composite score, and shows table/cards with "
-    "Yahoo / Moneycontrol / TradingView links, optional news enrichment, and watchlist alerts.",
+    "Yahoo / Moneycontrol / TradingView links, recent headlines (last 4 days) in the results table, and watchlist alerts.",
 )
 
 st.markdown("---")
@@ -368,6 +376,12 @@ else:
                 for x in display_df["Ticker"].tolist()
             ],
         )
+    display_df = prepare_scan_results_df(
+        display_df,
+        market=market_from_universe(universe),
+        universe_name=universe,
+        cache_key_prefix="app1",
+    )
 
     _link_cols = (
         "Yahoo Finance",
@@ -379,6 +393,9 @@ else:
     col_cfg = filter_column_config(
         display_df,
         {
+            "Market sentiment": st.column_config.TextColumn("Market sentiment", width="medium"),
+            "Sentiment why": st.column_config.TextColumn("Sentiment why", width="large"),
+            SCAN_RESULTS_NEWS_COL: st.column_config.TextColumn(SCAN_RESULTS_NEWS_COL, width="large"),
             "Decision": st.column_config.TextColumn("Decision", width="medium"),
             "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
             "Composite": st.column_config.NumberColumn("Composite", format="%.1f"),

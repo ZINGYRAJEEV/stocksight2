@@ -159,18 +159,14 @@ else:
             hidden_cols.append(dst)
     hide_cfg = {c: None for c in hidden_cols}
 
-    def _highlight(row: pd.Series):
-        if bool(df.loc[row.name, "all_conditions_met"]):
-            return [_PASS_ROW_STYLE] * len(row)
-        return [""] * len(row)
-
     render_clickable_scan_table(
         display,
         key_prefix="live_nse_results",
         universe_name="NSE",
         hide_index=True,
         column_config=hide_cfg or None,
-        styler=display.style.apply(_highlight, axis=1),  # type: ignore[arg-type]
+        highlight_row_test=lambda row: bool(df.loc[row.name, "all_conditions_met"]),
+        highlight_row_style=_PASS_ROW_STYLE,
     )
 
     csv_cols = [c for c in (*show_cols, "yahoo", "google", "research", "chart") if c in df.columns]

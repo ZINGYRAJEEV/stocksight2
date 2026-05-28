@@ -5,7 +5,7 @@ from signals import scan_healthy_dip
 from ui_components import (
     inject_css,
     scenario_header,
-    trade_plan_card,
+    render_trade_plan_cards,
     results_table,
     no_results_state,
     safe_set_page_config,
@@ -264,13 +264,12 @@ else:
     st.markdown("---")
 
     if view == "Cards":
-        for r in results:
-            trade_plan_card(
-                r,
-                SCENARIO,
-                portfolio_value=pf_sz,
-                risk_pct=float(adv.get("risk_pct_per_trade", 1.0) or 1.0),
-            )
+        render_trade_plan_cards(
+            results,
+            SCENARIO,
+            portfolio_value=pf_sz,
+            risk_pct=float(adv.get("risk_pct_per_trade", 1.0) or 1.0),
+        )
     else:
         results_table(results, SCENARIO)
 

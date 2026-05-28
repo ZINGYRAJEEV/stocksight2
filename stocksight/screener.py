@@ -6,7 +6,8 @@ Uses yfinance for free market data. No API key required.
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 import json
@@ -670,19 +671,214 @@ def next_earnings_label(ticker_obj: yf.Ticker) -> str:
     return ""
 
 
-def fetch_quote_news(raw_ticker: str, limit: int = 3) -> list[str]:
-    """Short headlines from yfinance (best-effort)."""
+RECENT_NEWS_MAX_AGE_DAYS = 4
+
+
+def _news_item_content(item: dict) -> dict:
+    """Yahoo news items may be flat or nested under ``content``."""
+    if not isinstance(item, dict):
+        return {}
+    inner = item.get("content")
+    if isinstance(inner, dict) and (inner.get("title") or inner.get("pubDate")):
+        return inner
+    return item
+
+
+def _news_item_title(item: dict) -> str:
+    c = _news_item_content(item)
+    title = c.get("title") or item.get("title")
+    return str(title or "").strip()
+
+
+def _parse_news_datetime(raw: Any) -> Optional[datetime]:
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _news_item_published_dt(item: dict) -> Optional[datetime]:
+    c = _news_item_content(item)
+    for key in ("pubDate", "displayTime", "providerPublishTime"):
+        dt = _parse_news_datetime(c.get(key) or item.get(key))
+        if dt is not None:
+            return dt
+    return None
+
+
+def _format_news_date_label(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).strftime("%d %b %Y")
+
+
+def fetch_recent_quote_news(
+    raw_ticker: str,
+    *,
+    limit: int = 3,
+    max_age_days: int = RECENT_NEWS_MAX_AGE_DAYS,
+) -> list[str]:
+    """Headlines from Yahoo Finance published within ``max_age_days`` (dated for display)."""
     try:
         t = yf.Ticker(raw_ticker)
         news = getattr(t, "news", None) or []
-        out = []
-        for item in news[:limit]:
-            title = item.get("title") if isinstance(item, dict) else None
-            if title:
-                out.append(str(title).strip())
-        return out
     except Exception:
         return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=int(max_age_days))
+    dated: list[tuple[datetime, str]] = []
+
+    for item in news:
+        if not isinstance(item, dict):
+            continue
+        title = _news_item_title(item)
+        if not title:
+            continue
+        published = _news_item_published_dt(item)
+        if published is None or published < cutoff:
+            continue
+        dated.append((published, title))
+
+    dated.sort(key=lambda x: x[0], reverse=True)
+    out: list[str] = []
+    for published, title in dated[:limit]:
+        out.append(f"{_format_news_date_label(published)} · {title}")
+    return out
+
+
+def format_recent_news_cell(headlines: list[str], *, max_items: int = 2) -> str:
+    """Compact cell text for scan result tables."""
+    if not headlines:
+        return "—"
+    parts = [str(h).strip() for h in headlines[:max_items] if str(h).strip()]
+    return " | ".join(parts) if parts else "—"
+
+
+def fetch_quote_news(raw_ticker: str, limit: int = 3) -> list[str]:
+    """Short dated headlines from yfinance (last few days only)."""
+    return fetch_recent_quote_news(raw_ticker, limit=limit)
+
+
+@dataclass
+class NewsHeadline:
+    title: str
+    published: Optional[datetime] = None
+    url: str = ""
+    publisher: str = ""
+
+
+def _news_item_url(item: dict) -> str:
+    c = _news_item_content(item)
+    for key in ("canonicalUrl", "clickThroughUrl"):
+        raw = c.get(key) or item.get(key)
+        if isinstance(raw, dict):
+            return str(raw.get("url") or "").strip()
+        if isinstance(raw, str) and raw.startswith("http"):
+            return raw.strip()
+    return ""
+
+
+def _news_item_publisher(item: dict) -> str:
+    c = _news_item_content(item)
+    prov = c.get("provider") or item.get("provider")
+    if isinstance(prov, dict):
+        return str(prov.get("displayName") or prov.get("name") or "").strip()
+    return str(prov or "").strip()
+
+
+def fetch_structured_news(
+    raw_ticker: str,
+    *,
+    limit: int = 15,
+    max_age_days: int = RECENT_NEWS_MAX_AGE_DAYS,
+) -> list[NewsHeadline]:
+    """Yahoo Finance headlines with publish time and link (for News Scanner)."""
+    try:
+        news = getattr(yf.Ticker(raw_ticker), "news", None) or []
+    except Exception:
+        return []
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=int(max_age_days))
+    out: list[NewsHeadline] = []
+
+    for item in news:
+        if not isinstance(item, dict):
+            continue
+        title = _news_item_title(item)
+        if not title:
+            continue
+        published = _news_item_published_dt(item)
+        if published is not None and published < cutoff:
+            continue
+        out.append(
+            NewsHeadline(
+                title=title,
+                published=published,
+                url=_news_item_url(item),
+                publisher=_news_item_publisher(item),
+            )
+        )
+
+    out.sort(key=lambda h: h.published or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return out[:limit]
+
+
+def enrich_dataframe_recent_news(
+    df: pd.DataFrame,
+    *,
+    universe_name: str = "",
+    ticker_col: str = "Ticker",
+    raw_ticker_col: Optional[str] = None,
+    max_age_days: int = RECENT_NEWS_MAX_AGE_DAYS,
+    limit_per_ticker: int = 2,
+    max_rows: int = 50,
+    delay_sec: float = 0.12,
+    insert_after: str = "Sentiment why",
+) -> pd.DataFrame:
+    """Add ``Recent news (<4d)`` column (extra Yahoo calls — capped for performance)."""
+    if df is None or df.empty or "Recent news (<4d)" in df.columns:
+        return df
+
+    out = df.copy()
+    headlines: list[str] = []
+    for i, (_, row) in enumerate(out.iterrows()):
+        if i >= max_rows:
+            headlines.append("—")
+            continue
+        if raw_ticker_col and raw_ticker_col in out.columns:
+            raw = str(row[raw_ticker_col] or "").strip()
+        else:
+            raw = raw_ticker_from_display(str(row.get(ticker_col, "")), universe_name)
+        if not raw:
+            headlines.append("—")
+            continue
+        items = fetch_recent_quote_news(
+            raw, limit=limit_per_ticker, max_age_days=max_age_days
+        )
+        headlines.append(
+            format_recent_news_cell(items) if items else "No headlines in last 4d"
+        )
+        if delay_sec > 0:
+            time.sleep(delay_sec)
+
+    pos = len(out.columns)
+    if insert_after in out.columns:
+        pos = out.columns.get_loc(insert_after) + 1
+    out.insert(pos, "Recent news (<4d)", headlines)
+    return out
 
 
 _RECOMMENDATION_LABELS: dict[str, str] = {

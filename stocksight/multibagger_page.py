@@ -310,6 +310,14 @@ Table columns from Yahoo Finance where data exists
                 "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
             },
         )
+        from ui_components import prepare_scan_results_df
+
+        df = prepare_scan_results_df(
+            df,
+            universe_name=last_uni,
+            cache_key_prefix=f"{key}_results",
+            raw_ticker_col="Raw",
+        )
         render_clickable_scan_table(
             df,
             key_prefix=f"{key}_results",
@@ -567,6 +575,14 @@ def render_proven_multibaggers_section() -> None:
             "MarketWatch": st.column_config.LinkColumn("MarketWatch", display_text="MW ↗"),
             "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
         },
+    )
+    from ui_components import prepare_scan_results_df
+
+    df = prepare_scan_results_df(
+        df,
+        universe_name=last_uni,
+        cache_key_prefix=f"{key}_proven",
+        raw_ticker_col="Raw",
     )
     render_clickable_scan_table(
         df,
