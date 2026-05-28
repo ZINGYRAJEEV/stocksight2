@@ -45,6 +45,7 @@ try:
         upsert_watchlist_fields,
     )
     from .market_sentiment import add_market_sentiment_columns, market_from_universe
+    from .news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker
 except ImportError:
     from screener import (
         DECISION_ZONES,
@@ -69,6 +70,7 @@ except ImportError:
         upsert_watchlist_fields,
     )
     from market_sentiment import add_market_sentiment_columns, market_from_universe  # type: ignore[no-redef]
+    from news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker  # type: ignore[no-redef]
 
 
 INTERVAL_LABELS = {"1d": "Daily", "1h": "1 Hour", "15m": "15 Minute"}
@@ -496,6 +498,11 @@ def scenario_advanced_panel(key_prefix: str) -> dict:
 
 
 SCAN_RESULTS_NEWS_COL = "Recent news (<4d)"
+SCAN_NEWS_SCORE_COL = "News score"
+SCAN_TOP_TIER_COL = "Top tier"
+SCAN_TIER_REF_COL = "Tier reference"
+SCAN_TOP_HEADLINE_COL = "Top headline"
+SCAN_CONFIRM_ACTION_COL = "Confirm action"
 
 
 def maybe_enrich_news(
@@ -543,6 +550,11 @@ def _scan_table_news_column_config() -> dict:
         "Market sentiment": st.column_config.TextColumn("Market sentiment", width="medium"),
         "Sentiment why": st.column_config.TextColumn("Sentiment why", width="large"),
         SCAN_RESULTS_NEWS_COL: st.column_config.TextColumn(SCAN_RESULTS_NEWS_COL, width="large"),
+        SCAN_NEWS_SCORE_COL: st.column_config.ProgressColumn(SCAN_NEWS_SCORE_COL, min_value=0, max_value=100, format="%d"),
+        SCAN_TOP_TIER_COL: st.column_config.TextColumn(SCAN_TOP_TIER_COL, width="small"),
+        SCAN_TIER_REF_COL: st.column_config.TextColumn(SCAN_TIER_REF_COL, width="medium"),
+        SCAN_TOP_HEADLINE_COL: st.column_config.TextColumn(SCAN_TOP_HEADLINE_COL, width="large"),
+        SCAN_CONFIRM_ACTION_COL: st.column_config.TextColumn(SCAN_CONFIRM_ACTION_COL, width="medium"),
     }
 
 
@@ -581,16 +593,49 @@ def prepare_scan_results_df(
     if len(df) <= max_news_rows:
         if news_cache_key not in st.session_state:
             with st.spinner("Loading recent headlines (last 4 days)…"):
-                st.session_state[news_cache_key] = enrich_dataframe_recent_news(
+                enriched = enrich_dataframe_recent_news(
                     df,
                     universe_name=universe_name,
                     raw_ticker_col=raw_col,
                     insert_after="Sentiment why" if "Sentiment why" in df.columns else insert_after,
                 )
+                mkt_for_news = "S&P 500 (NYSE)" if str(mkt).upper() == "US" else "Nifty 500 (NSE)"
+                scores: list[Optional[int]] = []
+                tiers: list[str] = []
+                refs: list[str] = []
+                headlines: list[str] = []
+                actions: list[str] = []
+                for _, row in enriched.iterrows():
+                    raw = str(row.get(raw_col) if raw_col else row.get("Ticker", "")).strip()
+                    if not raw:
+                        scores.append(None)
+                        tiers.append("—")
+                        refs.append("—")
+                        headlines.append("—")
+                        actions.append("—")
+                        continue
+                    s = analyze_ticker(raw, universe_name=mkt_for_news)
+                    tier = int(getattr(s, "top_tier", 4) or 4)
+                    scores.append(int(getattr(s, "news_score", 0) or 0))
+                    tiers.append(f"{TIER_EMOJI.get(tier, '•')} T{tier}")
+                    refs.append(f"{TIER_EMOJI.get(tier, '•')} {TIER_LABELS.get(tier, f'Tier {tier}')}")
+                    headlines.append(str(getattr(s, "top_headline", "") or "—")[:95])
+                    actions.append(str(getattr(s, "action", "") or "—")[:95])
+                enriched[SCAN_NEWS_SCORE_COL] = scores
+                enriched[SCAN_TOP_TIER_COL] = tiers
+                enriched[SCAN_TIER_REF_COL] = refs
+                enriched[SCAN_TOP_HEADLINE_COL] = headlines
+                enriched[SCAN_CONFIRM_ACTION_COL] = actions
+                st.session_state[news_cache_key] = enriched
         return st.session_state[news_cache_key]
 
     out = df.copy()
     out[SCAN_RESULTS_NEWS_COL] = f"— (narrow to ≤{max_news_rows} rows for headlines)"
+    out[SCAN_NEWS_SCORE_COL] = None
+    out[SCAN_TOP_TIER_COL] = "—"
+    out[SCAN_TIER_REF_COL] = "—"
+    out[SCAN_TOP_HEADLINE_COL] = "—"
+    out[SCAN_CONFIRM_ACTION_COL] = f"— (narrow to ≤{max_news_rows} rows for confirmation)"
     return out
 
 

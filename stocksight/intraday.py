@@ -166,6 +166,7 @@ class IntradayScanStats:
     result_rows: int = 0
     bars_5m: int = 0
     bars_15m: int = 0
+    bars_extended_history: int = 0  # multi-day 5m/15m fetch for RSI / vol-ratio stability
 
 
 # ─────────────────────────────────────────────────────────────
@@ -365,10 +366,11 @@ def _suggest_setup(strategy: str, price: float, intraday_low: Optional[float],
 # ─────────────────────────────────────────────────────────────
 # Data fetch (per ticker) — 5m first, auto-fallback to 15m when market is closed
 # ─────────────────────────────────────────────────────────────
-def _fetch_intraday_bars(ticker: str) -> tuple[Optional[pd.DataFrame], str]:
+def _fetch_intraday_bars(ticker: str) -> tuple[Optional[pd.DataFrame], str, str]:
     """Fetch intraday OHLCV. Tries 5m then 15m (better when session is closed).
 
-    Returns (dataframe, interval_label) where interval_label is '5m', '15m', or ''.
+    Returns (dataframe, interval_label, history_period) where interval_label is
+    '5m', '15m', or '' and history_period is the yfinance period (e.g. '1d', '5d').
     """
     attempts = (
         ("5m", "1d"),
@@ -377,23 +379,35 @@ def _fetch_intraday_bars(ticker: str) -> tuple[Optional[pd.DataFrame], str]:
         ("15m", "5d"),
         ("15m", "10d"),
     )
+    min_bars_for_quality = 15  # enough for RSI-14 and stable volume-ratio logic
+    best_df: Optional[pd.DataFrame] = None
+    best_interval = ""
+    best_period = ""
     try:
         stk = yf.Ticker(ticker)
         for interval, period in attempts:
             try:
                 df = stk.history(period=period, interval=interval, auto_adjust=False)
-                if df is not None and not df.empty and len(df) >= 3:
-                    return df, interval
+                if df is None or df.empty or len(df) < 3:
+                    continue
+                # Keep the best available frame, but prefer data with enough bars for
+                # RSI/news confirmation quality (important in early US session).
+                if best_df is None or len(df) > len(best_df):
+                    best_df, best_interval, best_period = df, interval, period
+                if len(df) >= min_bars_for_quality:
+                    return df, interval, period
             except Exception:
                 continue
     except Exception:
         pass
-    return None, ""
+    if best_df is not None:
+        return best_df, best_interval, best_period
+    return None, "", ""
 
 
 def _fetch_intraday_5m(ticker: str) -> Optional[pd.DataFrame]:
     """Back-compat wrapper — returns bars only (any interval)."""
-    df, _ = _fetch_intraday_bars(ticker)
+    df, _, _ = _fetch_intraday_bars(ticker)
     return df
 
 
@@ -436,9 +450,11 @@ def _orb_levels(bars: pd.DataFrame, interval: str = "5m") -> tuple[Optional[floa
 # ─────────────────────────────────────────────────────────────
 def _build_context(raw_ticker: str) -> Optional[dict]:
     """Heavy-lift context block reused by every strategy for a ticker."""
-    bars, bar_interval = _fetch_intraday_bars(raw_ticker)
+    bars, bar_interval, bar_period = _fetch_intraday_bars(raw_ticker)
     if bars is None or bars.empty:
         return None
+    # Multi-day intraday history stabilises RSI early in the session (thin 1d feeds).
+    bars_extended_history = bar_period not in ("", "1d")
     daily = _fetch_daily(raw_ticker, "1y")
     if daily is None or daily.empty:
         return None
@@ -545,6 +561,8 @@ def _build_context(raw_ticker: str) -> Optional[dict]:
     return {
         "bars": bars,
         "bar_interval": bar_interval,
+        "bar_period": bar_period,
+        "bars_extended_history": bars_extended_history,
         "session": session,
         "daily": daily,
         "price": price,
@@ -971,6 +989,8 @@ def scan_intraday(
             stats.bars_5m += 1
         elif interval == "15m":
             stats.bars_15m += 1
+        if ctx.get("bars_extended_history"):
+            stats.bars_extended_history += 1
 
         uni_fail = _universal_fail_reason(ctx, flt)
         if uni_fail == "price":
@@ -1070,7 +1090,7 @@ def scan_gaps(
         if progress_cb:
             progress_cb(i + 1, total, raw)
         try:
-            bars, _interval = _fetch_intraday_bars(raw)
+            bars, _interval, _period = _fetch_intraday_bars(raw)
             daily = _fetch_daily(raw, "10d")
             if bars is None or bars.empty or daily is None or daily.empty:
                 continue
@@ -1328,6 +1348,13 @@ def _now_tz(tz_name: str):
         return datetime.now(ZoneInfo(tz_name))
     except Exception:
         return datetime.now()
+
+
+def is_us_early_session() -> bool:
+    """True during US regular-session opening hour (9:30–11:00 AM ET)."""
+    market_now = _now_tz(US_TZ)
+    mins = market_now.hour * 60 + market_now.minute
+    return 9 * 60 + 30 <= mins < 11 * 60
 
 
 def market_session_window(market: str = "NSE") -> dict:

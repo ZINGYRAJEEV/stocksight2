@@ -15,6 +15,11 @@ from screener import (
 from scan_history_store import append_scan_record
 from market_sentiment import market_from_universe
 from ui_components import (
+    SCAN_CONFIRM_ACTION_COL,
+    SCAN_NEWS_SCORE_COL,
+    SCAN_TIER_REF_COL,
+    SCAN_TOP_HEADLINE_COL,
+    SCAN_TOP_TIER_COL,
     SCAN_RESULTS_NEWS_COL,
     filter_column_config,
     first_seen_label,
@@ -396,6 +401,11 @@ else:
             "Market sentiment": st.column_config.TextColumn("Market sentiment", width="medium"),
             "Sentiment why": st.column_config.TextColumn("Sentiment why", width="large"),
             SCAN_RESULTS_NEWS_COL: st.column_config.TextColumn(SCAN_RESULTS_NEWS_COL, width="large"),
+            SCAN_NEWS_SCORE_COL: st.column_config.ProgressColumn(SCAN_NEWS_SCORE_COL, min_value=0, max_value=100, format="%d"),
+            SCAN_TOP_TIER_COL: st.column_config.TextColumn(SCAN_TOP_TIER_COL, width="small"),
+            SCAN_TIER_REF_COL: st.column_config.TextColumn(SCAN_TIER_REF_COL, width="medium"),
+            SCAN_TOP_HEADLINE_COL: st.column_config.TextColumn(SCAN_TOP_HEADLINE_COL, width="large"),
+            SCAN_CONFIRM_ACTION_COL: st.column_config.TextColumn(SCAN_CONFIRM_ACTION_COL, width="medium"),
             "Decision": st.column_config.TextColumn("Decision", width="medium"),
             "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
             "Composite": st.column_config.NumberColumn("Composite", format="%.1f"),

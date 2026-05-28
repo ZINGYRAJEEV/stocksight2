@@ -31,6 +31,7 @@ from intraday import (
     IntradayScanStats,
     compute_market_mood,
     compute_volume_time_prediction,
+    is_us_early_session,
     market_session_window,
     resolve_universe,
     scan_gaps,
@@ -310,6 +311,35 @@ def _render_quick_rules() -> None:
 # ─────────────────────────────────────────────────────────────
 # Common helpers
 # ─────────────────────────────────────────────────────────────
+def _render_extended_bars_notice(
+    market: str,
+    scan_stats: Optional[IntradayScanStats] = None,
+) -> None:
+    """Explain multi-day intraday fetches used for RSI stability (esp. early US session)."""
+    mkt = (market or "NSE").upper()
+    early_us = mkt == "US" and is_us_early_session()
+    extended_n = int(scan_stats.bars_extended_history) if scan_stats else 0
+    if not early_us and extended_n <= 0:
+        return
+
+    parts: list[str] = []
+    if early_us:
+        parts.append(
+            "**Early US session:** Yahoo often returns only a handful of 5m bars in the first hour. "
+            "The scanner may pull **2–10 days** of 5m/15m history so RSI-14 and volume-ratio gates stay stable."
+        )
+    if extended_n > 0 and scan_stats and scan_stats.total_scanned:
+        pct = round(100 * extended_n / scan_stats.total_scanned)
+        parts.append(
+            f"**This scan:** **{extended_n}** of **{scan_stats.total_scanned}** tickers "
+            f"({pct}%) used extended intraday history (not same-day 5m only)."
+        )
+    if not parts:
+        return
+
+    st.info("📊 " + " ".join(parts))
+
+
 def _session_banner(market: str = "NSE") -> None:
     """Market-aware session banner with both market-local and CEST clocks."""
     s = market_session_window(market)
@@ -322,6 +352,11 @@ def _session_banner(market: str = "NSE") -> None:
         f"<span style='background:#1a3b31; color:#7abeac; padding:2px 8px; "
         f"border-radius:8px; font-size:0.72rem; margin-left:8px;'>CLOSED</span>"
     )
+    early_us_note = ""
+    if s["market"] == "US" and is_us_early_session():
+        early_us_note = (
+            "<br><span style='color:#4db8ff;'>ℹ Early US session — extended 5m/15m bars may be used for RSI stability.</span>"
+        )
     st.markdown(
         f"""
 <div style='background:#0f2a22; border:1px solid #1a3b31; border-left:4px solid {is_open_color};
@@ -335,6 +370,7 @@ def _session_banner(market: str = "NSE") -> None:
   <span style='color:#7abeac;'>(your local European time)</span>
   <br>
   <span style='color:#7abeac;'>💡 {html.escape(s["tip"])}</span>
+  {early_us_note}
 </div>
 """,
         unsafe_allow_html=True,
@@ -718,6 +754,11 @@ def _render_diagnostic_panel(stats: IntradayScanStats, *, key_prefix: str) -> No
             "(market closed or thin 5m feed). Results are still usable for planning; "
             "re-scan during live hours for best accuracy."
         )
+    if stats.bars_extended_history and stats.total_scanned:
+        st.caption(
+            f"ℹ **{stats.bars_extended_history}** ticker(s) used **multi-day intraday history** "
+            "(2d–10d 5m/15m) so RSI and volume-ratio filters have enough bars — common in early US session."
+        )
 
     rows = [
         ("No intraday data (Yahoo)", stats.no_data),
@@ -895,6 +936,7 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
         _render_diagnostic_panel(scan_stats, key_prefix=key)
 
     scan_market = st.session_state.get(f"{key}_scan_market", market)
+    _render_extended_bars_notice(scan_market, scan_stats)
     vol_pred = compute_volume_time_prediction(scan_market)
     st.markdown(
         f"""
