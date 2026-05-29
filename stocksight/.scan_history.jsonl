@@ -69,3 +69,4 @@
 {"ts": "2026-05-28T08:27:31.929209+00:00", "page": "StockSight", "universe": "Nifty 50 (NSE)", "count": 4, "symbols": ["COALINDIA.NS", "HINDALCO.NS", "NTPC.NS", "WIPRO.NS"], "meta": {"rows": 4}}
 {"ts": "2026-05-28T08:47:55.456789+00:00", "page": "StockSight", "universe": "Nifty 50 (NSE)", "count": 4, "symbols": ["COALINDIA.NS", "HINDALCO.NS", "NTPC.NS", "WIPRO.NS"], "meta": {"rows": 4}}
 {"ts": "2026-05-28T08:52:26.714196+00:00", "page": "StockSight", "universe": "Nifty 50 (NSE)", "count": 4, "symbols": ["COALINDIA.NS", "HINDALCO.NS", "NTPC.NS", "WIPRO.NS"], "meta": {"rows": 4}}
+{"ts": "2026-05-29T04:54:38.448406+00:00", "page": "healthy_dip", "universe": "Nifty 50 (NSE)", "count": 4, "symbols": ["HCLTECH.NS", "ITC.NS", "SBIN.NS", "TCS.NS"], "meta": {"matches": 4}}
