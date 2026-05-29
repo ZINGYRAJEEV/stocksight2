@@ -1390,6 +1390,22 @@ RSI(14) > 55
 Close > SMA(close, 50)
 ```
 
+### Strategy 5 — 🏔️ All-Time High Breakout · *after 10:00 AM (post-ORB)*
+```
+Price at / within 2% of the prior ALL-TIME high
+Volume ≥ 1.5 × 20-period avg   (institutional confirmation)
+RSI(14) between 55 and 78       (strong, not parabolic)
+Close > SMA(close, 50)          (trend intact)
+Day change ≥ 0                  (holding, not fading)
+
+Enter on a 5m/15m CLOSE above the prior ATH (not just a touch).
+Stop = below the intraday base / breakout level.
+Target = 1:2 R:R · trail the stop as new highs print.
+```
+*ATH breakouts have **zero overhead resistance** — see the **ATH Strategy Playbook**
+page for the full rulebook, structure diagram, and Go / No-Go checklist. For the
+**weekly** and **monthly/long-term** versions, use the dedicated ATH screener pages.*
+
 ### Universal filters (apply to every strategy)
 ```
 Market cap > 5000 cr        ← Avoid illiquid small caps

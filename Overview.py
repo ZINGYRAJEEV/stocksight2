@@ -32,6 +32,9 @@ from navigation_pages import (
     page_intraday_guide,
     page_intraday_screener,
     page_news_scanner,
+    page_weekly_swing_ath,
+    page_longterm_ath,
+    page_ath_playbook,
     page_multibagger,
     page_popular_screens,
     page_proven_multibaggers,
@@ -100,8 +103,13 @@ NAV_PAGES = {
     ],
     "⚡ Intraday": [
         st.Page(page_gap_scanner, title="Gap Scanner (pre-market)", icon="🌅"),
-        st.Page(page_intraday_screener, title="Intraday Screener (5 strategies)", icon="📡"),
+        st.Page(page_intraday_screener, title="Intraday Screener (6 strategies)", icon="📡"),
         st.Page(page_intraday_guide, title="Intraday Guide", icon="📚"),
+    ],
+    "🏔️ All-Time High (ATH)": [
+        st.Page(page_weekly_swing_ath, title="Weekly Swing ATH", icon="🏔️"),
+        st.Page(page_longterm_ath, title="Long-Term ATH", icon="🚀"),
+        st.Page(page_ath_playbook, title="ATH Strategy Playbook", icon="📖"),
     ],
     "📰 News & Sentiment": [
         st.Page(page_news_scanner, title="News Scanner + Rulebook", icon="📰"),

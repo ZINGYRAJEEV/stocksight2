@@ -136,6 +136,21 @@ NIFTY_500_EXTRA = [
     "AIAENG.NS", "BIKAJI.NS", "TRAVELFOOD.NS",
 ]
 
+# Liquid NSE small / mid-caps that fall OUTSIDE the Nifty 500 list but are
+# active intraday movers. Lets users scan high-beta names (defence, power,
+# chemicals, fertilisers, realty, etc.) that often top the daily gainers list.
+NSE_SMALLMID_EXTRA = [
+    "FINPIPE.NS", "SASKEN.NS", "NIBE.NS", "RTNPOWER.NS", "RTNINDIA.NS",
+    "GTLINFRA.NS", "JISLJALEQS.NS", "HCC.NS", "SOUTHBANK.NS", "MOREPENLAB.NS",
+    "ALOKINDS.NS", "VAKRANGEE.NS", "MTNL.NS", "RPGLIFE.NS", "INDOWIND.NS",
+    "SEPC.NS", "TV18BRDCST.NS", "NETWORK18.NS", "ORIENTCEM.NS", "BIRLACORPN.NS",
+    "HEIDELBERG.NS", "PRSMJOHNSN.NS", "JKLAKSHMI.NS", "KSCL.NS", "RAYMOND.NS",
+    "INDIAGLYCO.NS", "GNFC.NS", "GSFC.NS", "RCF.NS", "MANGCHEFER.NS",
+    "NFL.NS", "MOIL.NS", "KIOCL.NS", "DCAL.NS", "EQUITASBNK.NS",
+    "UJJIVANSFB.NS", "TANLA.NS", "TRIVENI.NS", "BALAMINES.NS", "VSTIND.NS",
+    "SUNDRMFAST.NS", "TIMETECHNO.NS", "JKPAPER.NS", "JYOTHYLAB.NS", "GHCL.NS",
+]
+
 SP500 = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL",
     "META", "TSLA", "AVGO", "JPM", "LLY",
@@ -192,12 +207,16 @@ SP500 = [
 UNIVERSES = {
     "Nifty 50 (NSE)": NIFTY_50,
     "Nifty 500 (NSE)": NIFTY_50 + NIFTY_500_EXTRA,
+    "NSE Small/Mid-Cap Movers": NSE_SMALLMID_EXTRA,
+    "Nifty 500 + Small/Mid Movers (NSE)": NIFTY_50 + NIFTY_500_EXTRA + NSE_SMALLMID_EXTRA,
     "S&P 500 (NYSE)": SP500,
 }
 
 PE_DATA_CAP = {
     "Nifty 50 (NSE)":    300,
     "Nifty 500 (NSE)":   300,
+    "NSE Small/Mid-Cap Movers": 400,
+    "Nifty 500 + Small/Mid Movers (NSE)": 400,
     "S&P 500 (NYSE)":    500,
 }
 
@@ -1435,6 +1454,49 @@ def fetch_weekly_history(ticker: str, period: str = "2y") -> pd.DataFrame:
         return df if df is not None and not df.empty else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
+
+
+def fetch_monthly_history(ticker: str, period: str = "max") -> pd.DataFrame:
+    """Monthly bars for long-term / all-time-high analysis."""
+    try:
+        df = yf.Ticker(ticker).history(period=period, interval="1mo", auto_adjust=True)
+        return df if df is not None and not df.empty else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def fetch_ath_history(ticker: str, period: str = "max") -> pd.DataFrame:
+    """Full daily history (best-effort) for true all-time-high detection."""
+    try:
+        df = yf.Ticker(ticker).history(period=period, interval="1d", auto_adjust=True)
+        if df is not None and not df.empty:
+            return df
+    except Exception:
+        pass
+    # Fall back to whatever daily history we can get.
+    return fetch_daily_history_min_bars(ticker, 252)
+
+
+def compute_all_time_high(hist: pd.DataFrame, *, exclude_last: bool = False) -> Optional[float]:
+    """Highest traded price across the supplied history (prior ATH if exclude_last)."""
+    if hist is None or hist.empty or "High" not in hist:
+        return None
+    highs = hist["High"].astype(float).dropna()
+    if highs.empty:
+        return None
+    if exclude_last and len(highs) >= 2:
+        highs = highs.iloc[:-1]
+    try:
+        return round(float(highs.max()), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def pct_from_ath(price: float, ath: Optional[float]) -> Optional[float]:
+    """Signed % distance from the all-time high (0 = at ATH, negative = below)."""
+    if ath is None or ath <= 0 or price <= 0:
+        return None
+    return round((float(price) / float(ath) - 1.0) * 100.0, 2)
 
 
 def weekly_buy_alignment(closes_w: pd.Series, rsi_floor: float = 45.0) -> bool:

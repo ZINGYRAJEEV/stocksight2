@@ -52,6 +52,11 @@ try:
         extract_healthy_dip_fundamentals,
         drawdown_pct_from_52w_high,
         fetch_daily_history_min_bars,
+        fetch_monthly_history,
+        fetch_ath_history,
+        compute_all_time_high,
+        pct_from_ath,
+        rsi_series_wilder,
     )
 except ImportError:
     from screener import (
@@ -83,6 +88,11 @@ except ImportError:
         extract_healthy_dip_fundamentals,
         drawdown_pct_from_52w_high,
         fetch_daily_history_min_bars,
+        fetch_monthly_history,
+        fetch_ath_history,
+        compute_all_time_high,
+        pct_from_ath,
+        rsi_series_wilder,
     )
 
 
@@ -1507,6 +1517,305 @@ def cross_scan_watchlist(
 
 
 # ─────────────────────────────────────────────────────────────
+# ATH (All-Time High) helpers + swing / long-term scans
+# ─────────────────────────────────────────────────────────────
+
+def _ema_last(series: pd.Series, span: int) -> Optional[float]:
+    if series is None or len(series) < span:
+        return None
+    try:
+        return float(series.ewm(span=span, adjust=False).mean().iloc[-1])
+    except Exception:
+        return None
+
+
+def _vol_ratio_last(vols: pd.Series, window: int = 20) -> Optional[float]:
+    """Latest bar volume vs trailing average (excludes the latest bar)."""
+    if vols is None or len(vols) < 5:
+        return None
+    try:
+        v = vols.astype(float).dropna()
+        if len(v) < 5:
+            return None
+        lookback = min(window, len(v) - 1)
+        prior = v.iloc[-(lookback + 1):-1]
+        avg = float(prior.mean()) if len(prior) else 0.0
+        if avg <= 0:
+            return None
+        return round(float(v.iloc[-1]) / avg, 2)
+    except Exception:
+        return None
+
+
+def _tightness_pct(highs: pd.Series, lows: pd.Series, lookback: int) -> Optional[float]:
+    """Base width over the lookback window (smaller = tighter consolidation)."""
+    try:
+        h = float(highs.iloc[-(lookback + 1):-1].max())
+        l = float(lows.iloc[-(lookback + 1):-1].min())
+        if l <= 0:
+            return None
+        return round((h / l - 1.0) * 100.0, 1)
+    except Exception:
+        return None
+
+
+def scan_weekly_ath_swing(
+    universe_name: str,
+    *,
+    near_pct: float = 3.0,
+    vol_min: float = 1.5,
+    rsi_min: float = 55.0,
+    rsi_max: float = 78.0,
+    require_ema_alignment: bool = True,
+    require_tight_base: bool = False,
+    max_base_width_pct: float = 25.0,
+    sector_filter: Optional[str] = None,
+    tickers_override: Optional[list[str]] = None,
+    progress_cb=None,
+) -> list[SignalResult]:
+    """52-week-high breakout on the **weekly** chart (swing timeframe).
+
+    Rules (weekly bars): price at/within ``near_pct`` of its 52-week high,
+    volume ≥ ``vol_min``× the 20-week average, RSI(14) in band, EMA 20 > 50
+    alignment, optional tight base. Educational only.
+    """
+    results: list[tuple[float, SignalResult]] = []
+    tickers = _ticker_list(universe_name, tickers_override)
+    total = len(tickers)
+
+    for i, ticker in enumerate(tickers):
+        if progress_cb:
+            progress_cb(i + 1, total, ticker)
+        try:
+            wdf = fetch_weekly_history(ticker, period="2y")
+            if wdf is None or wdf.empty or len(wdf) < 30:
+                continue
+            closes = wdf["Close"].astype(float)
+            highs = wdf["High"].astype(float)
+            lows = wdf["Low"].astype(float)
+            vols = wdf["Volume"].astype(float)
+            price = float(closes.iloc[-1])
+
+            # 52-week (≈52 weekly bars) high using prior bars (breakout reference).
+            wk52 = wdf.tail(53)
+            prior_high = float(wk52["High"].iloc[:-1].max()) if len(wk52) >= 2 else float(highs.max())
+            if prior_high <= 0:
+                continue
+            pct_from_high = round((price / prior_high - 1.0) * 100.0, 2)
+            if pct_from_high < -abs(near_pct):
+                continue  # too far below the 52-week high
+
+            vr = _vol_ratio_last(vols, 20)
+            if vr is None or vr < float(vol_min):
+                continue
+
+            rsi_s = rsi_series_wilder(closes, 14)
+            if rsi_s is None or len(rsi_s) < 5 or pd.isna(rsi_s.iloc[-1]):
+                continue
+            rsi = round(float(rsi_s.iloc[-1]), 1)
+            rsi_prev = round(float(rsi_s.iloc[-4]), 1)
+            if not (rsi_min <= rsi <= rsi_max):
+                continue
+
+            ema20 = _ema_last(closes, 20)
+            ema50 = _ema_last(closes, 50)
+            if require_ema_alignment:
+                if ema20 is None or ema50 is None:
+                    continue
+                if not (price > ema20 and ema20 > ema50):
+                    continue
+
+            base_width = _tightness_pct(highs, lows, 8)
+            if require_tight_base and base_width is not None and base_width > float(max_base_width_pct):
+                continue
+
+            macd_l, macd_sig, macd_h = compute_macd(closes)
+            macd_bull = bool(not np.isnan(macd_h) and macd_h > 0)
+
+            try:
+                sector, industry = get_sector_industry(yf.Ticker(ticker))
+            except Exception:
+                sector, industry = "", ""
+            if sector_filter and sector_filter.strip():
+                if sector_filter.strip().lower() not in (sector or "").lower():
+                    continue
+
+            state = "NEW 52W HIGH" if pct_from_high >= 0 else f"{pct_from_high:+.1f}% from 52W high"
+            base_txt = f" · base {base_width:.0f}% (8w)" if base_width is not None else ""
+            note = (
+                f"Weekly breakout — {state} · vol {vr:.1f}× 20w avg · RSI {rsi:.0f}"
+                + (" · EMA20>50" if (ema20 and ema50 and ema20 > ema50) else "")
+                + (" · MACD+" if macd_bull else "")
+                + base_txt
+                + ". Enter on weekly close above the high; stop below the base."
+            )
+
+            ex = {
+                "sector": sector or None,
+                "industry": industry or None,
+                "macd_line": macd_l,
+                "macd_signal": macd_sig,
+                "macd_hist": macd_h,
+                "macd_bullish": macd_bull,
+            }
+            res = _build_result(
+                ticker, wdf, 9999.0, vr, rsi, rsi_prev,
+                scenario_id="weekly_ath_swing",
+                signal_label="BUY",
+                timeframe="Swing · 2–12 weeks",
+                note=note,
+                sl_lookback=8,
+                target_ratios=(1.0, 2.0, 3.0),
+                extras=ex,
+                bar_interval="1wk",
+            )
+            # Rank: prefer fresh breakouts with strong volume.
+            rank = (vr * 2.0) + max(0.0, 5.0 - abs(pct_from_high)) + (3.0 if macd_bull else 0.0)
+            results.append((rank, res))
+        except Exception:
+            continue
+
+    results.sort(key=lambda pair: pair[0], reverse=True)
+    return [r for _, r in results]
+
+
+def scan_monthly_ath_longterm(
+    universe_name: str,
+    *,
+    near_pct: float = 5.0,
+    rsi_min: float = 55.0,
+    rsi_max: float = 85.0,
+    vol_min: float = 1.0,
+    min_roe_pct: float = 15.0,
+    max_debt_equity: float = 0.5,
+    apply_fundamentals: bool = True,
+    require_above_200dma: bool = True,
+    sector_filter: Optional[str] = None,
+    tickers_override: Optional[list[str]] = None,
+    progress_cb=None,
+) -> list[SignalResult]:
+    """All-time-high breakout on the **monthly** chart for long-term investors.
+
+    Rules: price at/within ``near_pct`` of its true all-time high, monthly
+    RSI strong, above the 200-DMA, with optional quality fundamentals
+    (ROE ≥ ``min_roe_pct``, Debt/Equity ≤ ``max_debt_equity``). Educational only.
+    """
+    results: list[tuple[float, SignalResult]] = []
+    tickers = _ticker_list(universe_name, tickers_override)
+    total = len(tickers)
+
+    for i, ticker in enumerate(tickers):
+        if progress_cb:
+            progress_cb(i + 1, total, ticker)
+        try:
+            mdf = fetch_monthly_history(ticker, period="max")
+            if mdf is None or mdf.empty or len(mdf) < 18:
+                continue
+            closes = mdf["Close"].astype(float)
+            vols = mdf["Volume"].astype(float)
+            price = float(closes.iloc[-1])
+
+            prior_ath = compute_all_time_high(mdf, exclude_last=True)
+            if prior_ath is None or prior_ath <= 0:
+                continue
+            pct_ath = round((price / prior_ath - 1.0) * 100.0, 2)
+            if pct_ath < -abs(near_pct):
+                continue  # not within striking distance of the ATH
+
+            rsi_s = rsi_series_wilder(closes, 14)
+            if rsi_s is None or len(rsi_s) < 5 or pd.isna(rsi_s.iloc[-1]):
+                continue
+            rsi = round(float(rsi_s.iloc[-1]), 1)
+            rsi_prev = round(float(rsi_s.iloc[-4]), 1)
+            if not (rsi_min <= rsi <= rsi_max):
+                continue
+
+            vr = _vol_ratio_last(vols, 12)
+            if vr is not None and vr < float(vol_min):
+                continue
+
+            # 200-DMA from daily history (true long-term trend filter).
+            pct_vs_ma200: Optional[float] = None
+            dhist = fetch_ath_history(ticker)
+            if dhist is not None and not dhist.empty and len(dhist) >= 200:
+                ma200 = float(dhist["Close"].astype(float).rolling(200).mean().iloc[-1])
+                if ma200 > 0:
+                    pct_vs_ma200 = round((price / ma200 - 1.0) * 100.0, 2)
+            if require_above_200dma and (pct_vs_ma200 is None or pct_vs_ma200 < 0):
+                continue
+
+            roe = de = None
+            if apply_fundamentals:
+                try:
+                    info = yf.Ticker(ticker).info or {}
+                except Exception:
+                    info = {}
+                fund = extract_healthy_dip_fundamentals(info)
+                roe = fund.get("roe_pct")
+                de = fund.get("debt_equity")
+                if roe is None or roe < float(min_roe_pct):
+                    continue
+                if de is not None and de > float(max_debt_equity):
+                    continue
+
+            try:
+                sector, industry = get_sector_industry(yf.Ticker(ticker))
+            except Exception:
+                sector, industry = "", ""
+            if sector_filter and sector_filter.strip():
+                if sector_filter.strip().lower() not in (sector or "").lower():
+                    continue
+
+            macd_l, macd_sig, macd_h = compute_macd(closes)
+            macd_bull = bool(not np.isnan(macd_h) and macd_h > 0)
+
+            state = "AT/NEW ALL-TIME HIGH" if pct_ath >= 0 else f"{pct_ath:+.1f}% from ATH"
+            fund_bits = []
+            if roe is not None:
+                fund_bits.append(f"ROE {roe:.0f}%")
+            if de is not None:
+                fund_bits.append(f"D/E {de:.2f}")
+            if pct_vs_ma200 is not None:
+                fund_bits.append(f"{pct_vs_ma200:+.0f}% vs 200-DMA")
+            note = (
+                f"Monthly ATH breakout — {state}"
+                + (" · " + " · ".join(fund_bits) if fund_bits else "")
+                + (" · MACD+" if macd_bull else "")
+                + ". Enter on monthly close above the ATH; trail a wide 10–15% stop."
+            )
+
+            ex = {
+                "sector": sector or None,
+                "industry": industry or None,
+                "macd_line": macd_l,
+                "macd_signal": macd_sig,
+                "macd_hist": macd_h,
+                "macd_bullish": macd_bull,
+                "roe_pct": roe,
+                "debt_equity": de,
+                "pct_vs_ma200": pct_vs_ma200,
+            }
+            res = _build_result(
+                ticker, mdf, 9999.0, (vr or 1.0), rsi, rsi_prev,
+                scenario_id="monthly_ath_longterm",
+                signal_label="BUY",
+                timeframe="Position · 6 months – 3+ years",
+                note=note,
+                sl_lookback=6,
+                target_ratios=(1.0, 2.0, 4.0),
+                extras=ex,
+                bar_interval="1mo",
+            )
+            rank = (roe or 0.0) + max(0.0, 8.0 - abs(pct_ath)) + (5.0 if macd_bull else 0.0)
+            results.append((rank, res))
+        except Exception:
+            continue
+
+    results.sort(key=lambda pair: pair[0], reverse=True)
+    return [r for _, r in results]
+
+
+# ─────────────────────────────────────────────────────────────
 # Scenario Registry
 # ─────────────────────────────────────────────────────────────
 
@@ -1609,6 +1918,34 @@ SCENARIOS = {
         "sl_note":     "Stop below recent swing low or a level you can hold through another 15–20% drawdown.",
         "target_note": "Hold 3–5+ years if fundamentals stay intact; trim on euphoric RSI / new highs.",
     },
+    "weekly_ath_swing": {
+        "fn":          scan_weekly_ath_swing,
+        "title":       "Weekly Swing ATH",
+        "emoji":       "🏔️",
+        "signal":      "BUY",
+        "color":       "#00e5a0",
+        "badge_bg":    "#0a2e1e",
+        "description": "52-week-high breakouts on the weekly chart with volume ≥1.5×, RSI 55–78, and EMA 20>50 alignment.",
+        "audience": "Swing and part-time traders riding momentum breakouts to fresh highs (Nifty 500 / S&P 500).",
+        "purpose": "Finds stocks breaking (or within a few % of) their 52-week high on confirming weekly volume and trend — the swing tier of the ATH playbook.",
+        "entry_note":  "Enter on a weekly close above the prior 52-week high (or on a retest of that level).",
+        "sl_note":     "Stop 5–8% below the breakout / base low. No stop = no trade.",
+        "target_note": "Target 10–20% (≥1:2 R:R). Trail the stop as new highs print.",
+    },
+    "monthly_ath_longterm": {
+        "fn":          scan_monthly_ath_longterm,
+        "title":       "Long-Term ATH",
+        "emoji":       "🚀",
+        "signal":      "BUY",
+        "color":       "#f0b429",
+        "badge_bg":    "#2a1e00",
+        "description": "True all-time-high breakouts on the monthly chart, above the 200-DMA, with quality fundamentals (ROE ≥15%, D/E ≤0.5).",
+        "audience": "Investors and wealth compounders hunting price-discovery leaders for multi-year holds.",
+        "purpose": "Combines a monthly ATH breakout with trend (200-DMA) and fundamental health to surface long-term momentum leaders — the long-term tier of the ATH playbook.",
+        "entry_note":  "Enter on a monthly close above the all-time high; scale in over 2–3 tranches.",
+        "sl_note":     "Trail a wide 10–15% stop below the breakout base. Long-term conviction required.",
+        "target_note": "Hold for 30–100%+ while the uptrend and fundamentals stay intact.",
+    },
 }
 
 
@@ -1621,6 +1958,8 @@ SCENARIO_RESULT_TO_PAGE: dict[str, str] = {
     "extreme_oversold": "extreme_oversold",
     "volume_no_confirm": "volume_no_confirm",
     "healthy_dip": "healthy_dip",
+    "weekly_ath_swing": "weekly_ath_swing",
+    "monthly_ath_longterm": "monthly_ath_longterm",
 }
 
 

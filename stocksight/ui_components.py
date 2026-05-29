@@ -358,7 +358,11 @@ def render_chart_expander(raw_ticker: str, interval_key: str, uid: str) -> None:
                     col=1,
                 )
 
-        colors = np.where(closes.values >= opens.values, "#25d36666", "#ff6b6b66")
+        colors = np.where(
+            closes.values >= opens.values,
+            "rgba(37,211,102,0.4)",
+            "rgba(255,107,107,0.4)",
+        )
         fig.add_trace(go.Bar(x=df.index, y=vols, name="Volume", marker_color=list(colors)), row=2, col=1)
 
         fig.add_trace(
@@ -366,8 +370,8 @@ def render_chart_expander(raw_ticker: str, interval_key: str, uid: str) -> None:
             row=3,
             col=1,
         )
-        fig.add_hline(y=70, line_width=1, line_dash="dash", line_color="#ff6b6b44", row=3, col=1)
-        fig.add_hline(y=30, line_width=1, line_dash="dash", line_color="#25d36644", row=3, col=1)
+        fig.add_hline(y=70, line_width=1, line_dash="dash", line_color="rgba(255,107,107,0.27)", row=3, col=1)
+        fig.add_hline(y=30, line_width=1, line_dash="dash", line_color="rgba(37,211,102,0.27)", row=3, col=1)
 
         fig.update_layout(
             height=520,

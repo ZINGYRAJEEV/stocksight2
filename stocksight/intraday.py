@@ -22,21 +22,29 @@ try:
     from .screener import (
         NIFTY_50,
         NIFTY_500_EXTRA,
+        NSE_SMALLMID_EXTRA,
         UNIVERSES,
+        compute_all_time_high,
         compute_rsi,
+        fetch_ath_history,
         get_sector_industry,
         get_stock_links,
         hist_series,
+        pct_from_ath,
     )
 except ImportError:
     from screener import (  # type: ignore[no-redef]
         NIFTY_50,
         NIFTY_500_EXTRA,
+        NSE_SMALLMID_EXTRA,
         UNIVERSES,
+        compute_all_time_high,
         compute_rsi,
+        fetch_ath_history,
         get_sector_industry,
         get_stock_links,
         hist_series,
+        pct_from_ath,
     )
 
 
@@ -60,6 +68,8 @@ NSE_INTRADAY_UNIVERSES: dict[str, list[str]] = {
     "Nifty 50 (fast)": NIFTY_50,
     "Nifty 100 (medium)": NIFTY_100,
     "Nifty 500 (broad, slow)": NIFTY_500,
+    "Small/Mid-Cap Movers (NSE)": NSE_SMALLMID_EXTRA,
+    "Nifty 500 + Small/Mid Movers (slow)": NIFTY_500 + NSE_SMALLMID_EXTRA,
 }
 
 # Common F&O-friendly large/mid caps for the "Liquid F&O shortlist" universe.
@@ -98,7 +108,7 @@ INTRADAY_UNIVERSES_BY_MARKET: dict[str, dict[str, list[str]]] = {
 # Back-compat alias used by older code that imports INTRADAY_UNIVERSES directly.
 INTRADAY_UNIVERSES: dict[str, list[str]] = dict(NSE_INTRADAY_UNIVERSES)
 
-STRATEGIES = ("BROAD", "MOMENTUM", "VWAP", "ORB", "GAP")
+STRATEGIES = ("BROAD", "MOMENTUM", "VWAP", "ORB", "GAP", "ATH")
 
 STRATEGY_LABEL = {
     "BROAD":    "🔍 Broad Movers (widest net)",
@@ -106,6 +116,7 @@ STRATEGY_LABEL = {
     "VWAP":     "📈 VWAP Pullback",
     "ORB":      "🕯️ Opening Range Breakout",
     "GAP":      "📊 Gap-Up with Strength",
+    "ATH":      "🏔️ All-Time High Breakout",
 }
 
 # Best-time-of-day per strategy, per market. Each entry shows the *market-local*
@@ -118,6 +129,7 @@ STRATEGY_BEST_TIME_BY_MARKET: dict[str, dict[str, str]] = {
         "VWAP":     "10:30 AM – 1:00 PM IST  ·  7:00 – 9:30 AM CEST",
         "ORB":      "9:45 – 10:15 AM IST only  ·  6:15 – 6:45 AM CEST",
         "GAP":      "Pre-open + 9:15 – 9:30 AM IST  ·  5:45 – 6:00 AM CEST",
+        "ATH":      "After 10:00 AM IST (post-ORB)  ·  6:30 – 9:00 AM CEST",
     },
     "US": {
         "BROAD":    "Any session window  ·  use when you want the widest list",
@@ -125,6 +137,7 @@ STRATEGY_BEST_TIME_BY_MARKET: dict[str, dict[str, str]] = {
         "VWAP":     "11:00 AM – 1:30 PM ET  ·  5:00 – 7:30 PM CEST",
         "ORB":      "9:45 – 10:00 AM ET only  ·  3:45 – 4:00 PM CEST",
         "GAP":      "Pre-market + 9:30 – 9:45 AM ET  ·  3:30 – 3:45 PM CEST",
+        "ATH":      "After 10:00 AM ET (post-ORB)  ·  4:00 – 6:00 PM CEST",
     },
 }
 
@@ -301,9 +314,24 @@ def _gap_advice(gap_pct: float, holding: bool, open_to_now_pct: float, vol_ratio
 def _suggest_setup(strategy: str, price: float, intraday_low: Optional[float],
                     intraday_high: Optional[float], orb_high: Optional[float],
                     orb_low: Optional[float], vwap: Optional[float],
-                    prev_close: float, gap_pct: float
+                    prev_close: float, gap_pct: float,
+                    ath_ref: Optional[float] = None
                   ) -> tuple[str, Optional[float], Optional[float], Optional[float]]:
     """Return (setup_note, entry, stop, target) for a strategy."""
+    if strategy == "ATH":
+        # Enter on a close above the prior ATH; stop just below the breakout level
+        # / intraday base; target = 1:2 R:R (ATH runs tend to be larger).
+        ref = ath_ref or price
+        entry = round(max(price, ref) * 1.001, 2)
+        base = intraday_low if intraday_low else price * 0.99
+        stop = round(min(base, ref * 0.992), 2)
+        risk = entry - stop
+        if risk <= 0:
+            return ("ATH: wait for a clean close above the high — no defined risk.", None, None, None)
+        target = round(entry + 2.0 * risk, 2)
+        return ("Buy on 5m/15m close > prior ATH · stop below base · 1:2 R:R · trail on new highs",
+                entry, stop, target)
+
     if strategy == "BROAD":
         entry = round(price * 1.001, 2)
         stop = round(min(intraday_low or price * 0.992, price * 0.992), 2)
@@ -448,8 +476,12 @@ def _orb_levels(bars: pd.DataFrame, interval: str = "5m") -> tuple[Optional[floa
 # Strategy evaluators (one per row).
 # Each returns IntradayResult or None.
 # ─────────────────────────────────────────────────────────────
-def _build_context(raw_ticker: str) -> Optional[dict]:
-    """Heavy-lift context block reused by every strategy for a ticker."""
+def _build_context(raw_ticker: str, *, need_ath: bool = False) -> Optional[dict]:
+    """Heavy-lift context block reused by every strategy for a ticker.
+
+    When ``need_ath`` is True an extra full-history daily fetch is made so the
+    All-Time-High strategy can test a true breakout (not just a 52-week high).
+    """
     bars, bar_interval, bar_period = _fetch_intraday_bars(raw_ticker)
     if bars is None or bars.empty:
         return None
@@ -558,12 +590,36 @@ def _build_context(raw_ticker: str) -> Optional[dict]:
 
     orb_h, orb_l = _orb_levels(bars, bar_interval)
 
+    # All-time-high context (extra fetch only when an ATH scan is requested).
+    ath: Optional[float] = None
+    prior_ath: Optional[float] = None
+    pct_vs_ath: Optional[float] = None
+    near_ath = False
+    broke_ath = False
+    if need_ath:
+        try:
+            ath_hist = fetch_ath_history(raw_ticker)
+            prior_ath = compute_all_time_high(ath_hist, exclude_last=True)
+            ath = compute_all_time_high(ath_hist, exclude_last=False)
+        except Exception:
+            prior_ath = ath = None
+        ref = prior_ath or ath
+        if ref:
+            pct_vs_ath = _safe_pct(price, ref)
+            near_ath = pct_vs_ath is not None and pct_vs_ath >= -2.0
+            broke_ath = (intraday_high is not None and intraday_high >= ref) or price >= ref * 0.999
+
     return {
         "bars": bars,
         "bar_interval": bar_interval,
         "bar_period": bar_period,
         "bars_extended_history": bars_extended_history,
         "session": session,
+        "ath": ath,
+        "prior_ath": prior_ath,
+        "pct_vs_ath": pct_vs_ath,
+        "near_ath": near_ath,
+        "broke_ath": broke_ath,
         "daily": daily,
         "price": price,
         "open_px": open_px,
@@ -824,6 +880,7 @@ def _make_result(
         ctx["vwap"],
         ctx["prev_close"],
         ctx["gap_pct"],
+        ctx.get("prior_ath") or ctx.get("ath"),
     )
     rr = None
     if entry is not None and stop is not None and target is not None and (entry - stop) > 0:
@@ -951,6 +1008,30 @@ def _evaluate(strategy: str, ctx: dict, flt: IntradayFilters) -> Optional[str]:
             return None
         return f"RSI≥55 · price>9EMA · day>0 · near 52W high · vol {vr:.1f}×"
 
+    if strategy == "ATH":
+        # All-time-high breakout: price at/above prior ATH with volume + trend.
+        pct_ath = ctx.get("pct_vs_ath")
+        if pct_ath is None:
+            return None
+        if not (ctx.get("near_ath") or ctx.get("broke_ath")):
+            return None
+        # Rule 1: volume confirmation (1.5×+ for intraday breakouts).
+        if vr < 1.5:
+            return None
+        # Rule 4: trend must be intact (above 50-DMA).
+        if pct_ma50 is None or pct_ma50 <= 0:
+            return None
+        # RSI strong but not parabolic (Rule: avoid RSI > 78).
+        if rsi < 55.0 or rsi > 78.0:
+            return None
+        # Holding the move, not fading hard.
+        if pct_chg < 0:
+            return None
+        ref = ctx.get("prior_ath") or ctx.get("ath")
+        state = "broke ATH" if ctx.get("broke_ath") else f"{pct_ath:+.2f}% from ATH"
+        ref_txt = f" {ref:.2f}" if ref else ""
+        return f"ATH{ref_txt} · {state} · RSI {rsi:.1f} · vol {vr:.1f}× · price>50DMA"
+
     return None
 
 
@@ -975,11 +1056,12 @@ def scan_intraday(
     stats = IntradayScanStats(total_scanned=len(raw_tickers))
     total = len(raw_tickers)
     session_pred = compute_volume_time_prediction(market)
+    need_ath = "ATH" in strategies
 
     for i, raw in enumerate(raw_tickers):
         if progress_cb:
             progress_cb(i + 1, total, raw)
-        ctx = _build_context(raw)
+        ctx = _build_context(raw, need_ath=need_ath)
         if ctx is None:
             stats.no_data += 1
             continue

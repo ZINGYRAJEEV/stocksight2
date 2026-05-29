@@ -70,3 +70,8 @@
 {"ts": "2026-05-28T08:47:55.456789+00:00", "page": "StockSight", "universe": "Nifty 50 (NSE)", "count": 4, "symbols": ["COALINDIA.NS", "HINDALCO.NS", "NTPC.NS", "WIPRO.NS"], "meta": {"rows": 4}}
 {"ts": "2026-05-28T08:52:26.714196+00:00", "page": "StockSight", "universe": "Nifty 50 (NSE)", "count": 4, "symbols": ["COALINDIA.NS", "HINDALCO.NS", "NTPC.NS", "WIPRO.NS"], "meta": {"rows": 4}}
 {"ts": "2026-05-29T04:54:38.448406+00:00", "page": "healthy_dip", "universe": "Nifty 50 (NSE)", "count": 4, "symbols": ["HCLTECH.NS", "ITC.NS", "SBIN.NS", "TCS.NS"], "meta": {"matches": 4}}
+{"ts": "2026-05-29T11:03:49.811124+00:00", "page": "weekly_ath_swing", "universe": "Nifty 50 (NSE)", "count": 1, "symbols": ["ADANIENT.NS"], "meta": {"matches": 1}}
+{"ts": "2026-05-29T11:07:22.988276+00:00", "page": "weekly_ath_swing", "universe": "Nifty 500 (NSE)", "count": 16, "symbols": ["ADANIENSOL.NS", "ADANIENT.NS", "AIAENG.NS", "ENRIN.NS", "GRANULES.NS", "HONASA.NS", "JSWENERGY.NS", "MINDACORP.NS", "MOTHERSON.NS", "NETWEB.NS", "RRKABEL.NS", "SHYAMMETL.NS", "SIEMENS.NS", "USHAMART.NS", "WOCKPHARMA.NS", "ZYDUSLIFE.NS"], "meta": {"matches": 16}}
+{"ts": "2026-05-29T11:20:14.684717+00:00", "page": "monthly_ath_longterm", "universe": "Nifty 50 (NSE)", "count": 1, "symbols": ["NESTLEIND.NS"], "meta": {"matches": 1}}
+{"ts": "2026-05-29T17:36:38.969738+00:00", "page": "weekly_ath_swing", "universe": "S&P 500 (NYSE)", "count": 0, "symbols": [], "meta": {"matches": 0}}
+{"ts": "2026-05-29T17:38:34.569412+00:00", "page": "monthly_ath_longterm", "universe": "S&P 500 (NYSE)", "count": 2, "symbols": ["CARE", "CBOE"], "meta": {"matches": 2}}

@@ -151,3 +151,21 @@ def page_news_scanner() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
     exec_stocksight_page("News Scanner.py")
+
+
+def page_weekly_swing_ath() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Weekly Swing ATH.py")
+
+
+def page_longterm_ath() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Long-Term ATH.py")
+
+
+def page_ath_playbook() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("ATH Playbook.py")
