@@ -936,6 +936,35 @@ def _render_breeze_token_refresh() -> None:
                 st.error(msg)
 
 
+def _apply_scan_row_to_trade(key: str, row: "pd.Series") -> None:
+    """Push a scan-results row into the Live Trade form (session state)."""
+    raw = str(row.get("Raw", "") or "").strip()
+    if raw:
+        if not (raw.endswith(".NS") or raw.endswith(".BO")):
+            raw = f"{raw}.NS"
+        st.session_state[f"{key}_trade_selected_raw"] = raw
+        st.session_state[f"{key}_trade_pick"] = raw
+        st.session_state[f"{key}_trade_ticker"] = raw
+    display = str(row.get("Ticker", "") or "").strip()
+    if display:
+        st.session_state[f"{key}_trade_selected_display"] = display
+    entry_val = row.get("Entry")
+    if entry_val is not None and pd.notna(entry_val):
+        try:
+            st.session_state[f"{key}_trade_limit"] = float(entry_val)
+            st.session_state[f"{key}_trade_buytype"] = "Limit"
+        except (TypeError, ValueError):
+            pass
+    stop_val = row.get("Stop")
+    if stop_val is not None and pd.notna(stop_val):
+        try:
+            st.session_state[f"{key}_trade_sltrig"] = float(stop_val)
+            st.session_state[f"{key}_trade_slmode"] = "Exact trigger ₹"
+        except (TypeError, ValueError):
+            pass
+    st.session_state[f"{key}_trade_expand"] = True
+
+
 def _render_breeze_trade_panel(key: str) -> None:
     """REAL-MONEY trade panel: BUY + stop-loss SELL via Breeze. Heavily guarded."""
     try:
@@ -950,7 +979,11 @@ def _render_breeze_trade_panel(key: str) -> None:
     if not breeze_configured():
         return
 
-    with st.expander("⚠️ Live Trade — places REAL orders (BUY + stop-loss)", expanded=False):
+    expand = bool(st.session_state.get(f"{key}_trade_expand"))
+    with st.expander(
+        "⚠️ Live Trade — places REAL orders (BUY + stop-loss)",
+        expanded=expand,
+    ):
         st.error(
             "**This places real orders on your live ICICI account and can lose money.** "
             "Orders are sent only after you preview them and type CONFIRM. A stop-loss is a "
@@ -970,20 +1003,32 @@ def _render_breeze_trade_panel(key: str) -> None:
         scan_tickers = [getattr(r, "raw_ticker", "") for r in results if getattr(r, "raw_ticker", "")]
         scan_tickers = list(dict.fromkeys(scan_tickers))
 
+        selected_raw = st.session_state.get(f"{key}_trade_selected_raw", "")
+        selected_display = st.session_state.get(f"{key}_trade_selected_display", "")
+        if selected_raw:
+            st.info(
+                f"**Loaded from scan row:** {selected_display or selected_raw} "
+                f"(`{selected_raw}`) — click another row in the results table to change."
+            )
+
         c1, c2 = st.columns([1.4, 1.0])
         with c1:
+            pick_options = scan_tickers + ["Other (type below)"] if scan_tickers else ["Other (type below)"]
+            if selected_raw and selected_raw in scan_tickers:
+                st.session_state[f"{key}_trade_pick"] = selected_raw
             if scan_tickers:
                 choice = st.selectbox(
                     "Ticker (from last scan, or choose ‘Other’)",
-                    scan_tickers + ["Other (type below)"],
+                    pick_options,
                     key=f"{key}_trade_pick",
                 )
             else:
                 choice = "Other (type below)"
-                st.caption("No scan results yet — type a ticker below.")
+                st.caption("Run a scan first, then click a row — or type a ticker below.")
+            if choice != "Other (type below)":
+                st.session_state[f"{key}_trade_ticker"] = choice
             typed = st.text_input(
                 "Ticker (NSE, e.g. ICICIBANK.NS)",
-                value="" if choice == "Other (type below)" else choice,
                 key=f"{key}_trade_ticker",
             )
             ticker = (typed or "").strip().upper()
@@ -1020,11 +1065,23 @@ def _render_breeze_trade_panel(key: str) -> None:
         if ltp:
             st.caption(f"Live price for **{ticker}**: ₹{ltp:,.2f}")
 
+        scan_entry = st.session_state.get(f"{key}_trade_limit")
+        scan_stop = st.session_state.get(f"{key}_trade_sltrig")
+        if scan_entry or scan_stop:
+            parts = []
+            if scan_entry:
+                parts.append(f"Entry **₹{float(scan_entry):,.2f}** (BUY → Limit)")
+            if scan_stop:
+                parts.append(f"Stop **₹{float(scan_stop):,.2f}**")
+            st.caption("From scan row — " + " · ".join(parts))
+
         st.markdown("**Stop-loss (sell if it loses value)**")
         s1, s2 = st.columns(2)
         with s1:
             sl_mode = st.radio(
-                "Stop-loss basis", ["% below entry", "Exact trigger ₹"], key=f"{key}_trade_slmode"
+                "Stop-loss basis",
+                ["% below entry", "Exact trigger ₹"],
+                key=f"{key}_trade_slmode",
             )
         with s2:
             if sl_mode == "% below entry":
@@ -1144,7 +1201,6 @@ def render_intraday_screener_page(
     if breeze_mode:
         st.markdown("### 🟠 ICICI Breeze Screener — live NSE intraday (Breeze data)")
         _render_breeze_status_banner()
-        _render_breeze_trade_panel(key)
         page_audience_note(
             "Active **NSE (India)** intraday traders who want candidates powered by **ICICI Direct "
             "Breeze** market data, with Entry / Stop / Target attached.",
@@ -1257,6 +1313,8 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
         st.session_state[f"{key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")
         st.session_state[f"{key}_universe"] = uni_label
         st.session_state[f"{key}_scan_market"] = market
+        if breeze_mode and results:
+            _apply_scan_row_to_trade(key, pd.Series(_results_to_df([results[0]], market=market).iloc[0]))
 
     results: list[IntradayResult] = st.session_state.get(f"{key}_results", [])
     scan_stats: Optional[IntradayScanStats] = st.session_state.get(f"{key}_stats")
@@ -1395,6 +1453,13 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
     tab_labels = ["📋 All matches"] + [STRATEGY_LABEL[s] for s in STRATEGIES if counts.get(s, 0)]
     tabs = st.tabs(tab_labels)
 
+    trade_row_cb = (lambda row: _apply_scan_row_to_trade(key, row)) if breeze_mode else None
+    table_caption = (
+        "💡 **Click any row** — loads chart below and fills **⚠️ Live Trade** with that ticker’s Entry/Stop."
+        if breeze_mode
+        else "💡 Click any row to load its interactive chart + pre-buy research below."
+    )
+
     with tabs[0]:
         render_clickable_scan_table(
             df_all,
@@ -1403,6 +1468,8 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
             market=scan_market,
             column_config=_intraday_col_cfg(df_all),
             height=min(620, 48 + len(df_all) * 36),
+            caption=table_caption,
+            on_row_select=trade_row_cb,
         )
         _csv_download(
             df_all,
@@ -1430,6 +1497,8 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
                 market=scan_market,
                 column_config=_intraday_col_cfg(sub_df),
                 height=min(560, 48 + len(sub_df) * 36),
+                caption=table_caption,
+                on_row_select=trade_row_cb,
             )
             _csv_download(
                 sub_df,
@@ -1440,6 +1509,10 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
                 market=scan_market,
             )
         tab_idx += 1
+
+    if breeze_mode:
+        st.markdown("---")
+        _render_breeze_trade_panel(key)
 
 
 # ─────────────────────────────────────────────────────────────

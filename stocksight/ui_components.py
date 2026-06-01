@@ -5,7 +5,7 @@ ui_components.py — Shared UI helpers for all signal pages.
 import html
 import hashlib
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 
 import streamlit as st
 import pandas as pd
@@ -992,11 +992,15 @@ def render_clickable_scan_table(
     market: Optional[str] = None,
     highlight_row_test=None,
     highlight_row_style: str = "background-color: #d1fae5; color: #064e3b",
+    on_row_select: Optional[Callable[[pd.Series], None]] = None,
 ) -> Optional[str]:
     """Render a results dataframe with row selection wired to the chart/research panel.
 
     Replaces an `st.dataframe(...)` call. Captures the row click and renders
     `render_historical_detail_panel(...)` (chart + pre-buy research card) below.
+
+    If ``on_row_select`` is provided, it is called with the selected row (Series)
+    whenever the user picks a row (e.g. to sync a live-trade form).
 
     Returns the selected display ticker (or None).
     """
@@ -1048,8 +1052,12 @@ def render_clickable_scan_table(
         sel_rows = event.selection.rows  # type: ignore[union-attr]
         if sel_rows:
             row_idx = int(sel_rows[0])
-            if 0 <= row_idx < len(df) and "Ticker" in df.columns:
-                selected_ticker = str(df.iloc[row_idx]["Ticker"])
+            if 0 <= row_idx < len(df):
+                row = df.iloc[row_idx]
+                if "Ticker" in df.columns:
+                    selected_ticker = str(row["Ticker"])
+                if on_row_select is not None:
+                    on_row_select(row)
     except Exception:
         selected_ticker = None
 
