@@ -411,6 +411,24 @@ def _fetch_intraday_bars(ticker: str) -> tuple[Optional[pd.DataFrame], str, str]
     best_df: Optional[pd.DataFrame] = None
     best_interval = ""
     best_period = ""
+
+    # Prefer ICICI Breeze for NSE/BSE intraday bars when it is configured.
+    if str(ticker).upper().endswith((".NS", ".BO")):
+        try:
+            from breeze_data import breeze_configured, fetch_breeze_intraday_bars
+        except Exception:
+            breeze_configured = None  # type: ignore[assignment]
+            fetch_breeze_intraday_bars = None  # type: ignore[assignment]
+        try:
+            if breeze_configured and breeze_configured() and fetch_breeze_intraday_bars:
+                bdf = fetch_breeze_intraday_bars(ticker)
+                if bdf is not None and not bdf.empty:
+                    if len(bdf) >= min_bars_for_quality:
+                        return bdf, "5m", "breeze-5d"
+                    best_df, best_interval, best_period = bdf, "5m", "breeze-5d"
+        except Exception:
+            pass
+
     try:
         stk = yf.Ticker(ticker)
         for interval, period in attempts:

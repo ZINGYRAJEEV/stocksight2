@@ -141,6 +141,12 @@ def page_gap_scanner() -> None:
     exec_stocksight_page("Gap Scanner.py")
 
 
+def page_icici_breeze_screener() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("ICICI Breeze Screener.py")
+
+
 def page_intraday_guide() -> None:
     from stocksight_page_loader import exec_stocksight_page
 

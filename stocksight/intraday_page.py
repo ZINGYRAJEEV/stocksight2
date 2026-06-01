@@ -818,18 +818,183 @@ def _csv_download(
 # ─────────────────────────────────────────────────────────────
 # Page 1: Intraday Screener (4-strategy)
 # ─────────────────────────────────────────────────────────────
-def render_intraday_screener_page() -> None:
-    safe_set_page_config(page_title="Intraday Screener | StockSight", page_icon="📡", layout="wide")
+# What each strategy does, when to use it, and what a match tells the trader.
+STRATEGY_PLAYBOOK: dict[str, dict[str, str]] = {
+    "BROAD": {
+        "does": "Loosest filter — flags any stock making a meaningful move on above-average "
+                "volume (RSI 40–80). No chart pattern required.",
+        "use":  "Any session window, especially when the stricter pattern strategies return too "
+                "few names, or when you just want a broad list of what is moving today.",
+        "means": "Low specificity — a *starting point*, not a setup. Confirm direction on the 5m chart "
+                 "before acting.",
+    },
+    "MOMENTUM": {
+        "does": "Strong stocks pushing higher — RSI ≥ 55, price above the 9-EMA, up on the day, "
+                "near the 52-week high, with volume.",
+        "use":  "The opening 60–90 minutes, when fresh trends establish and volume is real.",
+        "means": "Trend-continuation long. Best when volume confirms; avoid chasing if already extended.",
+    },
+    "VWAP": {
+        "does": "Up-trend stocks (above the 200-DMA) pulling back to within ±1% of VWAP on a calm "
+                "RSI (42–65).",
+        "use":  "Mid-morning to early afternoon, when the opening trend consolidates around VWAP.",
+        "means": "Lower-risk continuation entry — buy the dip to VWAP with a tight stop just below it.",
+    },
+    "ORB": {
+        "does": "Price breaking above the high of the first 15-minute range on volume.",
+        "use":  "Strictly the post-open window (9:45–10:15 AM IST / 9:45–10:00 AM ET) — the opening "
+                "range must have formed first.",
+        "means": "Opening-range breakout long. Outside its window it returns little/nothing — that is "
+                 "expected, not a bug.",
+    },
+    "GAP": {
+        "does": "Stock gapping up ≥ 0.5%, holding above the open, RSI > 50, above the 50-DMA.",
+        "use":  "Pre-open and the first 15 minutes, to catch a gap-and-go continuation.",
+        "means": "Gap continuation long. Skip if the gap is already filling back toward prev close.",
+    },
+    "ATH": {
+        "does": "Price at / within 2% of (or breaking) its true all-time high, volume ≥ 1.5×, "
+                "RSI 55–78, above the 50-DMA.",
+        "use":  "After ~10:00 AM (post-ORB) so you don't chase the first spike. Needs an extra "
+                "all-time-high history fetch, so it is OFF by default — select it explicitly.",
+        "means": "Highest-conviction breakout (zero overhead resistance). See the **ATH Strategy "
+                 "Playbook** page for the full rulebook.",
+    },
+}
+
+
+# Strategies ordered by where they fire in the trading session (earliest → latest).
+# BROAD is time-agnostic so it sits last.
+STRATEGY_TIME_ORDER = ("GAP", "MOMENTUM", "ORB", "ATH", "VWAP", "BROAD")
+
+
+def _render_strategy_playbook(market: str) -> None:
+    """Explain when to use each strategy, what it does, and what confluence means."""
+    times = STRATEGY_BEST_TIME_BY_MARKET.get(market, STRATEGY_BEST_TIME_BY_MARKET["NSE"])
+    ordered = [s for s in STRATEGY_TIME_ORDER if s in STRATEGIES]
+    ordered += [s for s in STRATEGIES if s not in ordered]  # any new strategy falls through
+    with st.expander(f"ℹ When to use each strategy — by session time ({MARKET_LABEL.get(market, market)})", expanded=False):
+        st.caption("Ordered chronologically through the session: pre-open → opening → mid-day. "
+                   "Broad Movers is time-agnostic, so it sits last.")
+        for s in ordered:
+            info = STRATEGY_PLAYBOOK.get(s, {})
+            st.markdown(
+                f"**{STRATEGY_LABEL.get(s, s)}**  \n"
+                f"<span style='color:#7abeac;'>🕐 Best time:</span> {times.get(s, '—')}  \n"
+                f"<span style='color:#7abeac;'>⚙ What it does:</span> {info.get('does', '')}  \n"
+                f"<span style='color:#7abeac;'>✅ When to use:</span> {info.get('use', '')}  \n"
+                f"<span style='color:#7abeac;'>📌 What a match means:</span> {info.get('means', '')}",
+                unsafe_allow_html=True,
+            )
+            st.markdown("")
+        st.markdown(
+            "---\n"
+            "**Do they matter together? — Yes, this is *signal confluence*:**\n"
+            "- Each result is scored **0–120**; the score counts how many strategies a stock matched "
+            "(shown as *Signals N* in the rank reason). **More strategies firing on the same stock = "
+            "higher conviction.**\n"
+            "- A stock under **several** strategies (e.g. *Gap + Momentum + ATH*) is a far stronger "
+            "setup than one that only shows under **Broad Movers**.\n"
+            "- If a name matches **only Broad Movers**, it is moving but has **no clean pattern** — "
+            "treat it as a watchlist item, not a trade.\n"
+            "- If a name **doesn't appear at all**, it failed the filters — open **🔍 Scan diagnostics** "
+            "to see exactly which rule rejected it.\n"
+            "- **Time-gating matters:** ORB/Gap are valid only in their narrow windows, so running them "
+            "off-window yields few/no matches by design.\n\n"
+            "**Tip:** select **more** strategies for the widest net + confluence detection; select "
+            "**fewer** for a faster, more focused scan."
+        )
+
+
+def _render_breeze_token_refresh() -> None:
+    """Daily session-token refresh widget — paste the apisession value, save, reconnect."""
+    try:
+        from breeze_data import login_url, update_session_token
+    except Exception:
+        return
+    with st.expander("🔑 Refresh daily session token", expanded=False):
+        st.caption(
+            "The Breeze **session token expires every day**. Click the login link, sign in, then "
+            "copy the `apisession=…` value from the redirected URL and paste it below."
+        )
+        st.markdown(f"1. Open the Breeze login: [**Log in to generate token →**]({login_url()})")
+        st.markdown(
+            "2. After login your browser goes to `http://localhost:8501/?apisession=XXXXXX` "
+            "(the page may not load — that's fine). Copy the **XXXXXX**."
+        )
+        new_token = st.text_input(
+            "3. Paste today's apisession token",
+            key="breeze_token_input",
+            placeholder="e.g. 55806325",
+        )
+        if st.button("💾 Save token & reconnect", key="breeze_token_save"):
+            ok, msg = update_session_token(new_token)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+
+def _render_breeze_status_banner() -> None:
+    """Show ICICI Breeze connection status + setup hint on the Breeze screener."""
+    try:
+        from breeze_data import breeze_configured, breeze_status_message
+    except Exception:
+        st.warning("Breeze module unavailable — this screener will use Yahoo Finance data.")
+        return
+    configured = breeze_configured()
+    msg = breeze_status_message()
+    if configured:
+        st.success(f"🟢 {msg}")
+        _render_breeze_token_refresh()
+    else:
+        st.warning(f"🟠 {msg}")
+        with st.expander("🔌 How to connect ICICI Breeze", expanded=False):
+            st.markdown(
+                "1. Register your app at "
+                "[ICICI Direct API portal](https://api.icicidirect.com/apiuser/home).\n"
+                "2. Install the SDK: `pip install breeze-connect`\n"
+                "3. Add credentials to `.streamlit/secrets.toml` (repo root or `stocksight/.streamlit/`):\n"
+                "```toml\n[breeze]\napi_key = \"your_api_key\"\napi_secret = \"your_api_secret\"\n"
+                "session_token = \"your_session_token\"\n```\n"
+                "   …or set env vars `BREEZE_API_KEY`, `BREEZE_API_SECRET`, `BREEZE_SESSION_TOKEN`.\n"
+                "4. The **session token expires daily** — regenerate it from the Breeze login URL each day.\n\n"
+                "Until then, this screener still runs on **Yahoo Finance** data automatically."
+            )
+        _render_breeze_token_refresh()
+
+
+def render_intraday_screener_page(
+    *,
+    key: str = "id",
+    breeze_mode: bool = False,
+    force_market: Optional[str] = None,
+) -> None:
+    title = "ICICI Breeze Screener" if breeze_mode else "Intraday Screener"
+    icon = "🟠" if breeze_mode else "📡"
+    safe_set_page_config(page_title=f"{title} | StockSight", page_icon=icon, layout="wide")
     inject_css()
 
-    st.markdown("### 📡 Intraday Screener — 5 strategies, NSE or US")
-    page_audience_note(
-        "Active intraday traders on **NSE (India)** or **US (NYSE & NASDAQ)** who want "
-        "pre-screened candidates with Entry / Stop / Target attached.",
-        "Scans Yahoo Finance intraday bars (5m, auto-fallback to 15m when closed) + daily history. "
-        "Includes **Broad Movers** for the widest net. Diagnostic panel shows why names failed. "
-        "**Educational only — confirm risk before trading.**",
-    )
+    if breeze_mode:
+        st.markdown("### 🟠 ICICI Breeze Screener — live NSE intraday (Breeze data)")
+        _render_breeze_status_banner()
+        page_audience_note(
+            "Active **NSE (India)** intraday traders who want candidates powered by **ICICI Direct "
+            "Breeze** market data, with Entry / Stop / Target attached.",
+            "Fetches 5-minute bars from **ICICI Breeze** when configured (auto-fallback to Yahoo "
+            "Finance otherwise). Same 6-strategy engine + 7-rule ranking as the Intraday Screener, "
+            "scoped to NSE. **Educational only — confirm risk before trading.**",
+        )
+    else:
+        st.markdown("### 📡 Intraday Screener — 6 strategies, NSE or US")
+        page_audience_note(
+            "Active intraday traders on **NSE (India)** or **US (NYSE & NASDAQ)** who want "
+            "pre-screened candidates with Entry / Stop / Target attached.",
+            "Scans Yahoo Finance intraday bars (5m, auto-fallback to 15m when closed) + daily history. "
+            "Includes **Broad Movers** for the widest net. Diagnostic panel shows why names failed. "
+            "**Educational only — confirm risk before trading.**",
+        )
     st.info(
         "⚙ **Recommended for results:** Vol ratio **1.0×** · RSI **40–80** · "
         "enable **🔍 Broad Movers** · Min change % = **0** · start with **Nifty 50**."
@@ -859,8 +1024,11 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
 """
         )
 
-    key = "id"
-    market = _market_picker(key)
+    if force_market:
+        market = force_market
+        st.session_state[f"{key}_market"] = market
+    else:
+        market = _market_picker(key)
     _live_market_clocks()
     _session_banner(market)
     _render_market_schedule(market)
@@ -879,10 +1047,7 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
                 key=f"{key}_strats",
                 help="Enable **Broad Movers** for the widest net. Pattern strategies are stricter.",
             )
-            with st.expander(f"ℹ Best time-of-day per strategy ({MARKET_LABEL.get(market, market)})", expanded=False):
-                times = STRATEGY_BEST_TIME_BY_MARKET.get(market, STRATEGY_BEST_TIME_BY_MARKET["NSE"])
-                for s in STRATEGIES:
-                    st.markdown(f"- **{STRATEGY_LABEL[s]}** — {times.get(s, '')}")
+            _render_strategy_playbook(market)
 
     flt = _filters_panel(key, market)
     _news_confirmation_controls()
@@ -1149,6 +1314,11 @@ def _mood_counters(gaps: list[GapResult]) -> None:
     c[3].metric("💥 Large gap-downs", large_dn)
     c[4].metric("📉 Medium gap-downs", med_dn)
     c[5].metric("↘ Small gap-downs", sm_dn)
+
+
+def render_icici_breeze_screener_page() -> None:
+    """ICICI Breeze-powered live NSE intraday screener (reuses the intraday engine)."""
+    render_intraday_screener_page(key="icici", breeze_mode=True, force_market="NSE")
 
 
 def render_gap_scanner_page() -> None:

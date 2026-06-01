@@ -24,6 +24,7 @@ from navigation_pages import (
     page_buy_hold_avoid,
     page_extreme_oversold,
     page_gap_scanner,
+    page_icici_breeze_screener,
     page_high_profit_category_leader,
     page_high_profit_duopoly,
     page_high_profit_monopoly,
@@ -104,6 +105,7 @@ NAV_PAGES = {
     "⚡ Intraday": [
         st.Page(page_gap_scanner, title="Gap Scanner (pre-market)", icon="🌅"),
         st.Page(page_intraday_screener, title="Intraday Screener (6 strategies)", icon="📡"),
+        st.Page(page_icici_breeze_screener, title="ICICI Breeze Screener (live NSE)", icon="🟠"),
         st.Page(page_intraday_guide, title="Intraday Guide", icon="📚"),
     ],
     "🏔️ All-Time High (ATH)": [
@@ -123,17 +125,39 @@ pg = st.navigation(NAV_PAGES, expanded=True)
 with st.sidebar:
     st.markdown("---")
     try:
-        from breeze_data import breeze_configured, breeze_status_message
+        from breeze_data import (
+            breeze_configured,
+            breeze_status_message,
+            login_url,
+            update_session_token,
+        )
 
-        with st.expander("ICICI Breeze API (optional)", expanded=False):
+        _bz_ok = breeze_configured()
+        with st.expander(f"{'🟢' if _bz_ok else '🟠'} ICICI Breeze API", expanded=False):
             st.caption(breeze_status_message())
-            if not breeze_configured():
+            if not _bz_ok:
                 st.caption(
                     "For NSE/BSE charts via ICICI: register at "
                     "[Breeze API](https://api.icicidirect.com/apiuser/home), "
                     "`pip install breeze-connect`, then add `[breeze]` keys to "
                     "`.streamlit/secrets.toml`. Charts still use **Plotly**; Breeze supplies OHLC data."
                 )
+            else:
+                st.caption(
+                    "Session token **expires daily** — refresh it here without editing files "
+                    "or restarting."
+                )
+                st.markdown(f"[**Log in to generate token →**]({login_url()})")
+                _tok = st.text_input(
+                    "Paste today's apisession token",
+                    key="sidebar_breeze_token",
+                    placeholder="e.g. 55806325",
+                )
+                if st.button("💾 Save & reconnect", key="sidebar_breeze_save"):
+                    _ok, _msg = update_session_token(_tok)
+                    (st.success if _ok else st.error)(_msg)
+                    if _ok:
+                        st.rerun()
     except Exception:
         pass
     st.caption(
