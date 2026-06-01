@@ -147,6 +147,12 @@ def page_icici_breeze_screener() -> None:
     exec_stocksight_page("ICICI Breeze Screener.py")
 
 
+def page_icici_positions() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("ICICI Positions.py")
+
+
 def page_intraday_guide() -> None:
     from stocksight_page_loader import exec_stocksight_page
 

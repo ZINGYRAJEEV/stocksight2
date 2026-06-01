@@ -25,6 +25,7 @@ from navigation_pages import (
     page_extreme_oversold,
     page_gap_scanner,
     page_icici_breeze_screener,
+    page_icici_positions,
     page_high_profit_category_leader,
     page_high_profit_duopoly,
     page_high_profit_monopoly,
@@ -106,6 +107,7 @@ NAV_PAGES = {
         st.Page(page_gap_scanner, title="Gap Scanner (pre-market)", icon="🌅"),
         st.Page(page_intraday_screener, title="Intraday Screener (6 strategies)", icon="📡"),
         st.Page(page_icici_breeze_screener, title="ICICI Breeze Screener (live NSE)", icon="🟠"),
+        st.Page(page_icici_positions, title="ICICI Positions & Orders", icon="📒"),
         st.Page(page_intraday_guide, title="Intraday Guide", icon="📚"),
     ],
     "🏔️ All-Time High (ATH)": [

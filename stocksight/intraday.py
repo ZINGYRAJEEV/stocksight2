@@ -64,12 +64,119 @@ NIFTY_500 = NIFTY_50 + NIFTY_500_EXTRA
 # Nifty 100 ≈ first 100 unique names from the Nifty 500 composition list.
 NIFTY_100: list[str] = list(dict.fromkeys(NIFTY_500))[:100]
 
-NSE_INTRADAY_UNIVERSES: dict[str, list[str]] = {
+def _ns(*symbols: str) -> list[str]:
+    """Suffix bare NSE symbols with '.NS' (de-duplicated, order preserved)."""
+    out: list[str] = []
+    for s in symbols:
+        t = s.strip().upper()
+        if not t:
+            continue
+        if not t.endswith(".NS"):
+            t = f"{t}.NS"
+        if t not in out:
+            out.append(t)
+    return out
+
+
+# ── Broad-market / market-cap based indices ──────────────────────────
+NIFTY_NEXT_50 = _ns(
+    "ADANIENSOL", "ADANIGREEN", "ADANIPOWER", "ADANITOTAL", "AMBUJACEM", "BAJAJHLDNG",
+    "BANKBARODA", "BERGEPAINT", "BEL", "BOSCHLTD", "CANBK", "CHOLAFIN", "COLPAL",
+    "DABUR", "DLF", "GAIL", "GODREJCP", "HAVELLS", "HDFCAMC", "ICICIGI", "ICICIPRULI",
+    "INDHOTEL", "INDIGO", "IOC", "IRCTC", "IRFC", "JINDALSTEL", "JSWENERGY", "LICI",
+    "MARICO", "MOTHERSON", "INFOEDGE", "PIDILITIND", "PNB", "RECLTD", "PFC",
+    "SHREECEM", "SIEMENS", "SRF", "TATAPOWER", "TORNTPHARM", "TVSMOTOR", "UNITDSPR",
+    "VBL", "VEDL", "ZYDUSLIFE", "DMART", "CGPOWER", "HAL", "ABB",
+)
+NIFTY_MIDCAP_EXTRA = _ns(
+    "AUROPHARMA", "ASHOKLEY", "AUBANK", "BALKRISIND", "BHARATFORG", "COFORGE",
+    "CONCOR", "CUMMINSIND", "DALBHARAT", "DIXON", "FEDERALBNK", "GMRINFRA",
+    "GODREJPROP", "HINDPETRO", "IDFCFIRSTB", "INDUSTOWER", "LTF", "LUPIN",
+    "MFSL", "MPHASIS", "MRF", "NMDC", "OBEROIRLTY", "OFSS", "PERSISTENT",
+    "PETRONET", "PHOENIXLTD", "POLYCAB", "PRESTIGE", "SAIL", "SUPREMEIND",
+    "TATACOMM", "TIINDIA", "UPL", "VOLTAS", "YESBANK", "ASTRAL", "PAGEIND",
+)
+
+# ── Sectoral indices (curated constituents) ──────────────────────────
+NIFTY_BANK = _ns(
+    "HDFCBANK", "ICICIBANK", "SBIN", "KOTAKBANK", "AXISBANK", "INDUSINDBK",
+    "BANKBARODA", "PNB", "AUBANK", "FEDERALBNK", "IDFCFIRSTB", "CANBK",
+)
+NIFTY_IT = _ns(
+    "TCS", "INFY", "HCLTECH", "WIPRO", "TECHM", "LTIM", "PERSISTENT",
+    "COFORGE", "MPHASIS", "LTTS",
+)
+NIFTY_AUTO = _ns(
+    "MARUTI", "M&M", "TATAMOTORS", "BAJAJ-AUTO", "EICHERMOT", "HEROMOTOCO",
+    "TVSMOTOR", "ASHOKLEY", "BHARATFORG", "BOSCHLTD", "MOTHERSON", "BALKRISIND",
+    "MRF", "EXIDEIND", "TIINDIA",
+)
+NIFTY_PHARMA = _ns(
+    "SUNPHARMA", "DRREDDY", "CIPLA", "DIVISLAB", "AUROPHARMA", "LUPIN",
+    "TORNTPHARM", "ALKEM", "ZYDUSLIFE", "BIOCON", "GLENMARK", "IPCALAB",
+    "LAURUSLABS", "ABBOTINDIA", "MANKIND", "AJANTPHARM",
+)
+NIFTY_FMCG = _ns(
+    "HINDUNILVR", "ITC", "NESTLEIND", "BRITANNIA", "DABUR", "MARICO",
+    "GODREJCP", "COLPAL", "TATACONSUM", "VBL", "UBL", "RADICO", "EMAMILTD",
+    "PGHH", "BALRAMCHIN",
+)
+NIFTY_METAL = _ns(
+    "TATASTEEL", "JSWSTEEL", "HINDALCO", "VEDL", "JINDALSTEL", "SAIL", "NMDC",
+    "NATIONALUM", "APLAPOLLO", "JSL", "HINDZINC", "RATNAMANI", "HINDCOPPER", "WELCORP",
+)
+NIFTY_ENERGY = _ns(
+    "RELIANCE", "NTPC", "POWERGRID", "ONGC", "COALINDIA", "BPCL", "IOC",
+    "GAIL", "TATAPOWER", "ADANIGREEN", "ADANIENSOL",
+)
+NIFTY_REALTY = _ns(
+    "DLF", "GODREJPROP", "OBEROIRLTY", "PHOENIXLTD", "PRESTIGE", "BRIGADE",
+    "LODHA", "SOBHA", "MAHLIFE", "RAYMOND",
+)
+NIFTY_FIN_SERVICES = _ns(
+    "HDFCBANK", "ICICIBANK", "AXISBANK", "SBIN", "KOTAKBANK", "BAJFINANCE",
+    "BAJAJFINSV", "SBILIFE", "HDFCLIFE", "SHRIRAMFIN", "CHOLAFIN", "ICICIPRULI",
+    "ICICIGI", "HDFCAMC", "SBICARD", "PFC", "RECLTD", "MUTHOOTFIN", "LICHSGFIN",
+)
+NIFTY_PSU_BANK = _ns(
+    "SBIN", "BANKBARODA", "PNB", "CANBK", "UNIONBANK", "INDIANB", "BANKINDIA",
+    "MAHABANK", "CENTRALBK", "IOB", "UCOBANK", "PSB",
+)
+
+# Nifty Next 100-ish wide cap = Nifty 100 + Next 50 + midcap extras (de-duplicated).
+NIFTY_MIDCAP_150 = list(dict.fromkeys(NIFTY_NEXT_50 + NIFTY_MIDCAP_EXTRA))
+
+# Individual NSE universes (the "All NSE" union is appended automatically below).
+_NSE_UNIVERSES_BASE: dict[str, list[str]] = {
+    # Broad market / market-cap
     "Nifty 50 (fast)": NIFTY_50,
+    "Nifty Next 50": NIFTY_NEXT_50,
     "Nifty 100 (medium)": NIFTY_100,
+    "Nifty Midcap 150": NIFTY_MIDCAP_150,
     "Nifty 500 (broad, slow)": NIFTY_500,
     "Small/Mid-Cap Movers (NSE)": NSE_SMALLMID_EXTRA,
     "Nifty 500 + Small/Mid Movers (slow)": NIFTY_500 + NSE_SMALLMID_EXTRA,
+    # Sectoral
+    "Sector · Bank (Nifty Bank)": NIFTY_BANK,
+    "Sector · IT (Nifty IT)": NIFTY_IT,
+    "Sector · Auto (Nifty Auto)": NIFTY_AUTO,
+    "Sector · Pharma (Nifty Pharma)": NIFTY_PHARMA,
+    "Sector · FMCG (Nifty FMCG)": NIFTY_FMCG,
+    "Sector · Metal (Nifty Metal)": NIFTY_METAL,
+    "Sector · Energy (Nifty Energy)": NIFTY_ENERGY,
+    "Sector · Realty (Nifty Realty)": NIFTY_REALTY,
+    "Sector · Financial Services": NIFTY_FIN_SERVICES,
+    "Sector · PSU Bank": NIFTY_PSU_BANK,
+}
+
+# True union of EVERY universe above — the complete NSE stock list, de-duplicated.
+ALL_NSE_STOCKS: list[str] = list(dict.fromkeys(
+    t for tickers in _NSE_UNIVERSES_BASE.values() for t in tickers
+))
+
+NSE_INTRADAY_UNIVERSES: dict[str, list[str]] = {
+    **_NSE_UNIVERSES_BASE,
+    f"🌐 ALL stocks — every universe combined ({len(ALL_NSE_STOCKS)})": ALL_NSE_STOCKS,
 }
 
 # Common F&O-friendly large/mid caps for the "Liquid F&O shortlist" universe.

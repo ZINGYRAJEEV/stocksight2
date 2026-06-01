@@ -936,6 +936,171 @@ def _render_breeze_token_refresh() -> None:
                 st.error(msg)
 
 
+def _render_breeze_trade_panel(key: str) -> None:
+    """REAL-MONEY trade panel: BUY + stop-loss SELL via Breeze. Heavily guarded."""
+    try:
+        from breeze_data import (
+            breeze_configured,
+            get_ltp,
+            place_buy_order,
+            place_stoploss_sell,
+        )
+    except Exception:
+        return
+    if not breeze_configured():
+        return
+
+    with st.expander("⚠️ Live Trade — places REAL orders (BUY + stop-loss)", expanded=False):
+        st.error(
+            "**This places real orders on your live ICICI account and can lose money.** "
+            "Orders are sent only after you preview them and type CONFIRM. A stop-loss is a "
+            "*trigger* — in fast moves it can fill below your stop (slippage). Educational tool; "
+            "you are responsible for every confirmed order."
+        )
+        armed = st.checkbox(
+            "I understand this sends real orders with real money.",
+            key=f"{key}_trade_armed",
+        )
+        if not armed:
+            st.caption("Tick the box above to enable the trade form.")
+            return
+
+        # Candidate tickers from the last scan (if any).
+        results = st.session_state.get(f"{key}_results", [])
+        scan_tickers = [getattr(r, "raw_ticker", "") for r in results if getattr(r, "raw_ticker", "")]
+        scan_tickers = list(dict.fromkeys(scan_tickers))
+
+        c1, c2 = st.columns([1.4, 1.0])
+        with c1:
+            if scan_tickers:
+                choice = st.selectbox(
+                    "Ticker (from last scan, or choose ‘Other’)",
+                    scan_tickers + ["Other (type below)"],
+                    key=f"{key}_trade_pick",
+                )
+            else:
+                choice = "Other (type below)"
+                st.caption("No scan results yet — type a ticker below.")
+            typed = st.text_input(
+                "Ticker (NSE, e.g. ICICIBANK.NS)",
+                value="" if choice == "Other (type below)" else choice,
+                key=f"{key}_trade_ticker",
+            )
+            ticker = (typed or "").strip().upper()
+            if ticker and not (ticker.endswith(".NS") or ticker.endswith(".BO")):
+                ticker = f"{ticker}.NS"
+        with c2:
+            product_label = st.radio(
+                "Hold style",
+                ["Delivery (CNC)", "Intraday (MIS)"],
+                key=f"{key}_trade_product",
+            )
+            product = "cash" if product_label.startswith("Delivery") else "margin"
+
+        c3, c4, c5 = st.columns(3)
+        with c3:
+            buy_type = st.radio("BUY type", ["Market", "Limit"], key=f"{key}_trade_buytype")
+        with c4:
+            qty = int(st.number_input("Quantity", min_value=1, value=1, step=1, key=f"{key}_trade_qty"))
+        with c5:
+            limit_price = None
+            if buy_type == "Limit":
+                limit_price = float(
+                    st.number_input(
+                        "Limit price ₹", min_value=0.0, value=0.0, step=0.05, key=f"{key}_trade_limit"
+                    )
+                )
+
+        # Live price for reference / % stop math.
+        lp_col, _ = st.columns([1.0, 2.0])
+        with lp_col:
+            if st.button("🔄 Get live price", key=f"{key}_trade_ltp_btn"):
+                st.session_state[f"{key}_trade_ltp"] = get_ltp(ticker) if ticker else None
+        ltp = st.session_state.get(f"{key}_trade_ltp")
+        if ltp:
+            st.caption(f"Live price for **{ticker}**: ₹{ltp:,.2f}")
+
+        st.markdown("**Stop-loss (sell if it loses value)**")
+        s1, s2 = st.columns(2)
+        with s1:
+            sl_mode = st.radio(
+                "Stop-loss basis", ["% below entry", "Exact trigger ₹"], key=f"{key}_trade_slmode"
+            )
+        with s2:
+            if sl_mode == "% below entry":
+                sl_pct = float(
+                    st.number_input(
+                        "Stop %", min_value=0.1, max_value=50.0, value=3.0, step=0.1, key=f"{key}_trade_slpct"
+                    )
+                )
+                sl_trigger_input = None
+            else:
+                sl_pct = None
+                sl_trigger_input = float(
+                    st.number_input(
+                        "Trigger price ₹", min_value=0.0, value=0.0, step=0.05, key=f"{key}_trade_sltrig"
+                    )
+                )
+
+        # Reference entry: limit price if a limit order, else the live price.
+        entry_ref = limit_price if (buy_type == "Limit" and limit_price) else (ltp or 0.0)
+        if sl_mode == "% below entry":
+            sl_trigger = round(entry_ref * (1 - (sl_pct or 0) / 100.0), 2) if entry_ref else 0.0
+        else:
+            sl_trigger = sl_trigger_input or 0.0
+
+        # Preview.
+        st.markdown("**Order preview**")
+        risk_per_share = (entry_ref - sl_trigger) if (entry_ref and sl_trigger) else 0.0
+        st.table(
+            {
+                "Field": ["Ticker", "Side", "Hold", "BUY type", "Qty", "Entry ref ₹", "Stop trigger ₹", "Est. risk ₹"],
+                "Value": [
+                    ticker or "—",
+                    "BUY + Stop-loss SELL",
+                    product_label,
+                    buy_type + (f" @ ₹{limit_price:,.2f}" if (buy_type == "Limit" and limit_price) else ""),
+                    str(qty),
+                    f"{entry_ref:,.2f}" if entry_ref else "—",
+                    f"{sl_trigger:,.2f}" if sl_trigger else "—",
+                    f"{risk_per_share * qty:,.2f}" if risk_per_share > 0 else "—",
+                ],
+            }
+        )
+
+        confirm = st.text_input(
+            "Type CONFIRM to enable the order button", key=f"{key}_trade_confirm", placeholder="CONFIRM"
+        )
+        ready = (
+            confirm.strip().upper() == "CONFIRM"
+            and bool(ticker)
+            and qty >= 1
+            and sl_trigger > 0
+            and (buy_type == "Market" or (limit_price and limit_price > 0))
+        )
+        if sl_trigger and entry_ref and sl_trigger >= entry_ref:
+            st.warning("Stop trigger is at/above the entry reference — a SELL stop must be **below** entry.")
+            ready = False
+
+        if st.button("🚀 Place BUY + Stop-loss", key=f"{key}_trade_send", disabled=not ready, use_container_width=True):
+            ok_b, msg_b, _ = place_buy_order(
+                ticker, qty, order_type=("limit" if buy_type == "Limit" else "market"),
+                price=limit_price, product=product,
+            )
+            (st.success if ok_b else st.error)(f"BUY: {msg_b}")
+            if ok_b:
+                ok_s, msg_s, _ = place_stoploss_sell(
+                    ticker, qty, trigger_price=sl_trigger, product=product,
+                )
+                (st.success if ok_s else st.error)(f"Stop-loss SELL: {msg_s}")
+                if not ok_s:
+                    st.warning(
+                        "⚠️ BUY went through but the stop-loss did **not** — your position is "
+                        "currently UNPROTECTED. Place a stop-loss manually now."
+                    )
+            st.caption("Check your ICICI Direct order book to verify status.")
+
+
 def _render_breeze_status_banner() -> None:
     """Show ICICI Breeze connection status + setup hint on the Breeze screener."""
     try:
@@ -979,6 +1144,7 @@ def render_intraday_screener_page(
     if breeze_mode:
         st.markdown("### 🟠 ICICI Breeze Screener — live NSE intraday (Breeze data)")
         _render_breeze_status_banner()
+        _render_breeze_trade_panel(key)
         page_audience_note(
             "Active **NSE (India)** intraday traders who want candidates powered by **ICICI Direct "
             "Breeze** market data, with Entry / Stop / Target attached.",
@@ -1319,6 +1485,131 @@ def _mood_counters(gaps: list[GapResult]) -> None:
 def render_icici_breeze_screener_page() -> None:
     """ICICI Breeze-powered live NSE intraday screener (reuses the intraday engine)."""
     render_intraday_screener_page(key="icici", breeze_mode=True, force_market="NSE")
+
+
+def _breeze_rows_to_df(rows: list, prefer: tuple[str, ...]) -> "pd.DataFrame":
+    """Build a tidy DataFrame from Breeze list-of-dicts, surfacing key columns first."""
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    ordered = [c for c in prefer if c in df.columns]
+    rest = [c for c in df.columns if c not in ordered]
+    return df[ordered + rest]
+
+
+def render_breeze_positions_page() -> None:
+    """Show ICICI live positions, today's orders, and executed trades (purchased tickers)."""
+    safe_set_page_config(page_title="ICICI Positions & Orders | StockSight", page_icon="📒", layout="wide")
+    inject_css()
+
+    st.markdown("### 📒 ICICI Positions & Orders — your purchased tickers")
+    _render_breeze_status_banner()
+    page_audience_note(
+        "Traders who placed orders via the **ICICI Breeze Screener** and want to see open "
+        "positions, today's orders, and executed trades in one place.",
+        "Reads live data from your ICICI account via Breeze (positions, order book, trade book). "
+        "**Read-only view — no orders are placed here.**",
+    )
+
+    try:
+        from breeze_data import (
+            breeze_configured,
+            get_holdings,
+            get_order_book,
+            get_positions,
+            get_trade_book,
+        )
+    except Exception:
+        st.error("Breeze module unavailable.")
+        return
+
+    if not breeze_configured():
+        st.warning("🟠 Breeze isn't connected — add credentials / refresh the daily token above.")
+        return
+
+    if st.button("🔄 Refresh from ICICI", key="bpos_refresh", use_container_width=True):
+        for k in ("bpos_positions", "bpos_orders", "bpos_trades", "bpos_holdings"):
+            st.session_state.pop(k, None)
+
+    if "bpos_positions" not in st.session_state:
+        with st.spinner("Fetching positions, orders and trades from ICICI…"):
+            st.session_state["bpos_positions"] = get_positions()
+            st.session_state["bpos_orders"] = get_order_book(days=1)
+            st.session_state["bpos_trades"] = get_trade_book(days=1)
+            st.session_state["bpos_holdings"] = get_holdings()
+
+    pos_rows, pos_err = st.session_state["bpos_positions"]
+    ord_rows, ord_err = st.session_state["bpos_orders"]
+    trd_rows, trd_err = st.session_state["bpos_trades"]
+    hld_rows, hld_err = st.session_state["bpos_holdings"]
+
+    tab_pos, tab_ord, tab_trd, tab_hld = st.tabs(
+        [
+            f"📈 Open Positions ({len(pos_rows)})",
+            f"🧾 Today's Orders ({len(ord_rows)})",
+            f"✅ Today's Trades ({len(trd_rows)})",
+            f"🏦 Holdings ({len(hld_rows)})",
+        ]
+    )
+
+    with tab_pos:
+        st.caption("Live intraday / open positions on your ICICI account.")
+        if pos_err:
+            st.error(f"Could not load positions: {pos_err}")
+        df = _breeze_rows_to_df(
+            pos_rows,
+            ("stock_code", "action", "quantity", "average_price", "ltp", "product_type", "pnl"),
+        )
+        if df.empty:
+            st.info("No open positions right now.")
+        else:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+    with tab_ord:
+        st.caption("Orders placed today (any status — open, executed, cancelled, rejected).")
+        if ord_err:
+            st.error(f"Could not load orders: {ord_err}")
+        df = _breeze_rows_to_df(
+            ord_rows,
+            ("stock_code", "action", "quantity", "price", "average_price", "order_type",
+             "status", "product_type", "order_datetime", "order_id"),
+        )
+        if df.empty:
+            st.info("No orders found for today.")
+        else:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+    with tab_trd:
+        st.caption("Executed (filled) trades today — these are your actual purchases/sales.")
+        if trd_err:
+            st.error(f"Could not load trades: {trd_err}")
+        df = _breeze_rows_to_df(
+            trd_rows,
+            ("stock_code", "action", "quantity", "average_cost", "price", "product_type",
+             "trade_date", "order_id"),
+        )
+        if df.empty:
+            st.info("No executed trades for today.")
+        else:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+    with tab_hld:
+        st.caption("Delivery / demat holdings (multi-day positions).")
+        if hld_err:
+            st.error(f"Could not load holdings: {hld_err}")
+        df = _breeze_rows_to_df(
+            hld_rows,
+            ("stock_code", "quantity", "average_price", "current_market_price", "ltp"),
+        )
+        if df.empty:
+            st.info("No holdings found.")
+        else:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+    st.caption(
+        "Read-only snapshot from ICICI Breeze. Click **Refresh** to re-fetch. "
+        "Always verify against the official ICICI Direct order book."
+    )
 
 
 def render_gap_scanner_page() -> None:

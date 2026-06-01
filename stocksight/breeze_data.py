@@ -70,10 +70,17 @@ def _secrets_path() -> str:
 
 
 def login_url() -> str:
-    """ICICI Breeze daily-login URL, pre-filled with the configured api_key."""
+    """ICICI Breeze daily-login URL, pre-filled with the configured api_key.
+
+    The api_key often contains characters like '#', '%', '!', '*' which MUST be
+    percent-encoded — otherwise the browser truncates the key (e.g. at '#') and
+    ICICI returns "Public Key does not exist".
+    """
+    from urllib.parse import quote
+
     api_key = _read_secret("api_key")
     base = "https://api.icicidirect.com/apiuser/login"
-    return f"{base}?api_key={api_key}" if api_key else base
+    return f"{base}?api_key={quote(api_key, safe='')}" if api_key else base
 
 
 def update_session_token(token: str) -> tuple[bool, str]:
@@ -263,7 +270,7 @@ def fetch_breeze_price_history(raw_ticker: str, interval_key: str = "1d") -> pd.
         )
         return _response_to_ohlc_df(payload)
     except Exception as ex:
-        global _LAST_ERROR
+        global _LAST_ERROR  # noqa: PLW0603
         _LAST_ERROR = str(ex)
         return pd.DataFrame()
 
@@ -297,6 +304,213 @@ def fetch_breeze_intraday_bars(raw_ticker: str, days: int = 5) -> pd.DataFrame:
         )
         return _response_to_ohlc_df(payload)
     except Exception as ex:
-        global _LAST_ERROR
+        global _LAST_ERROR  # noqa: PLW0603
         _LAST_ERROR = str(ex)
         return pd.DataFrame()
+
+
+# ─────────────────────────────────────────────────────────────
+# Live quotes + order placement (REAL MONEY — use with care).
+# product: "cash" = delivery/CNC, "margin" = intraday/MIS.
+# ─────────────────────────────────────────────────────────────
+def get_ltp(raw_ticker: str) -> Optional[float]:
+    """Last traded price for an NSE/BSE symbol via Breeze. None if unavailable."""
+    parsed = _parse_breeze_symbol(raw_ticker)
+    if parsed is None:
+        return None
+    stock_code, exch_code = parsed
+    client = _get_client()
+    if client is None:
+        return None
+    code = _resolve_stock_code(client, exch_code, stock_code)
+    try:
+        resp = client.get_quotes(
+            stock_code=code,
+            exchange_code=exch_code,
+            expiry_date="",
+            product_type="cash",
+            right="",
+            strike_price="",
+        )
+        rows = (resp or {}).get("Success") or []
+        if rows:
+            row = rows[0]
+            for key in ("ltp", "last_traded_price", "close", "best_bid_price"):
+                val = row.get(key)
+                if val not in (None, "", 0, "0"):
+                    return float(val)
+    except Exception as ex:
+        global _LAST_ERROR  # noqa: PLW0603
+        _LAST_ERROR = str(ex)
+    return None
+
+
+def _place_order(
+    raw_ticker: str,
+    action: str,
+    quantity: int,
+    order_type: str,
+    price: Optional[float],
+    stoploss: Optional[float],
+    product: str,
+) -> tuple[bool, str, Any]:
+    """Low-level Breeze order call. Returns (ok, message, raw_response)."""
+    parsed = _parse_breeze_symbol(raw_ticker)
+    if parsed is None:
+        return False, "Not an NSE/BSE symbol.", None
+    stock_code, exch_code = parsed
+    client = _get_client()
+    if client is None:
+        return False, _LAST_ERROR or "Breeze not connected.", None
+    code = _resolve_stock_code(client, exch_code, stock_code)
+    try:
+        resp = client.place_order(
+            stock_code=code,
+            exchange_code=exch_code,
+            product=product,
+            action=action,
+            order_type=order_type,
+            stoploss=str(stoploss) if stoploss else "",
+            quantity=str(int(quantity)),
+            price=str(price) if price else "",
+            validity="day",
+            validity_date="",
+            disclosed_quantity="0",
+            expiry_date="",
+            right="",
+            strike_price="",
+        )
+        if isinstance(resp, dict):
+            if resp.get("Error"):
+                return False, str(resp.get("Error")), resp
+            success = resp.get("Success") or {}
+            order_id = success.get("order_id") if isinstance(success, dict) else None
+            return True, f"Order accepted (id: {order_id or 'n/a'}).", resp
+        return False, f"Unexpected response: {resp!r}", resp
+    except Exception as ex:
+        return False, str(ex), None
+
+
+def place_buy_order(
+    raw_ticker: str,
+    quantity: int,
+    order_type: str = "market",
+    price: Optional[float] = None,
+    product: str = "cash",
+) -> tuple[bool, str, Any]:
+    """Place a BUY order (market or limit)."""
+    return _place_order(
+        raw_ticker,
+        action="buy",
+        quantity=quantity,
+        order_type=order_type,
+        price=price if order_type == "limit" else None,
+        stoploss=None,
+        product=product,
+    )
+
+
+def place_stoploss_sell(
+    raw_ticker: str,
+    quantity: int,
+    trigger_price: float,
+    limit_price: Optional[float] = None,
+    product: str = "cash",
+) -> tuple[bool, str, Any]:
+    """Place a stop-loss SELL order — sells if price falls to trigger_price."""
+    return _place_order(
+        raw_ticker,
+        action="sell",
+        quantity=quantity,
+        order_type="stoploss",
+        price=limit_price if limit_price else trigger_price,
+        stoploss=trigger_price,
+        product=product,
+    )
+
+
+def _unwrap(resp: Any) -> tuple[list, Optional[str]]:
+    """Normalise a Breeze response into (rows, error).
+
+    Breeze reports an empty result via the Error field with messages like
+    'No Data Found' / 'No Positions available' — treat those as empty, not errors.
+    """
+    if not isinstance(resp, dict):
+        return [], f"Unexpected response: {resp!r}"
+    err = resp.get("Error")
+    if err:
+        low = str(err).lower()
+        if any(s in low for s in ("no data", "no position", "no order", "no record", "not available", "no trade")):
+            return [], None
+        return [], str(err)
+    rows = resp.get("Success")
+    if rows is None:
+        return [], None
+    if isinstance(rows, dict):
+        rows = [rows]
+    return list(rows), None
+
+
+def get_positions() -> tuple[list, Optional[str]]:
+    """Current portfolio positions (open intraday / derivative positions)."""
+    client = _get_client()
+    if client is None:
+        return [], _LAST_ERROR or "Breeze not connected."
+    try:
+        return _unwrap(client.get_portfolio_positions())
+    except Exception as ex:
+        return [], str(ex)
+
+
+def get_holdings() -> tuple[list, Optional[str]]:
+    """Demat / delivery holdings."""
+    client = _get_client()
+    if client is None:
+        return [], _LAST_ERROR or "Breeze not connected."
+    try:
+        return _unwrap(
+            client.get_demat_holdings()
+            if hasattr(client, "get_demat_holdings")
+            else client.get_portfolio_holdings(
+                exchange_code="NSE", from_date="", to_date="", stock_code="", portfolio_type=""
+            )
+        )
+    except Exception as ex:
+        return [], str(ex)
+
+
+def get_order_book(days: int = 1) -> tuple[list, Optional[str]]:
+    """Order book for the last `days` calendar days (default = today)."""
+    client = _get_client()
+    if client is None:
+        return [], _LAST_ERROR or "Breeze not connected."
+    now = datetime.now(tz=_IST)
+    start = (now - timedelta(days=max(0, days - 1))).replace(hour=0, minute=0, second=0, microsecond=0)
+    fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+    try:
+        return _unwrap(
+            client.get_order_list(
+                exchange_code="NSE", from_date=start.strftime(fmt), to_date=now.strftime(fmt)
+            )
+        )
+    except Exception as ex:
+        return [], str(ex)
+
+
+def get_trade_book(days: int = 1) -> tuple[list, Optional[str]]:
+    """Executed trades for the last `days` calendar days (default = today)."""
+    client = _get_client()
+    if client is None:
+        return [], _LAST_ERROR or "Breeze not connected."
+    now = datetime.now(tz=_IST)
+    start = (now - timedelta(days=max(0, days - 1))).replace(hour=0, minute=0, second=0, microsecond=0)
+    fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+    try:
+        return _unwrap(
+            client.get_trade_list(
+                from_date=start.strftime(fmt), to_date=now.strftime(fmt), exchange_code="NSE",
+                product_type="", action="", stock_code="",
+            )
+        )
+    except Exception as ex:
+        return [], str(ex)
