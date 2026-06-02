@@ -135,6 +135,12 @@ def page_algo_strategy_hub() -> None:
     exec_stocksight_page("Algo Strategy Hub.py")
 
 
+def page_paper_trading() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Paper Trading.py")
+
+
 def page_intraday_screener() -> None:
     from stocksight_page_loader import exec_stocksight_page
 

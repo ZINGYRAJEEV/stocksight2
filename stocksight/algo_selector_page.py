@@ -23,6 +23,7 @@ from ui_components import (
     safe_set_page_config,
 )
 from quality_gate import render_quality_gate_legend
+from paper_trading_page import render_paper_trading_panel
 
 try:
     from screener import UNIVERSES
@@ -211,6 +212,11 @@ Use **ICICI Breeze Screener → Live Trade** only after you review picks manuall
 
     with st.expander("Scan stats", expanded=False):
         st.json(report.stats)
+
+    all_picks: list = []
+    for plist in report.picks_by_horizon.values():
+        all_picks.extend(plist)
+    render_paper_trading_panel(picks=all_picks, key_prefix="algo_paper", expanded=True)
 
     _render_horizon_guide()
 

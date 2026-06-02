@@ -12,6 +12,9 @@ venv/
 # Streamlit secrets (keep config.toml if needed)
 .streamlit/secrets.toml
 
+# Local paper-trading ledger (per machine)
+stocksight/.paper_trading.json
+
 # Data / local
 *.csv
 *.sqlite3

@@ -42,6 +42,15 @@ to_addrs = ["you@gmail.com"]
 
 Then: `python scripts/run_algo_hub.py --email`
 
+## Paper trading
+
+- **Algo Strategy Hub** — scroll to **Paper trading** after a scan.
+- **Paper Trading** page — full ledger + manual trades.
+
+Virtual cash (default ₹10,00,000), paper BUY from picks, MTM via Yahoo, square-off intraday positions, closed-trade history.
+
+Ledger file: `stocksight/.paper_trading.json` (gitignored).
+
 ## Compliance
 
 White-box research signals only. India live algos require broker hosting, exchange approval, and Algo IDs (SEBI). No auto-orders from this hub.

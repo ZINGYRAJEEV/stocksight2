@@ -24,6 +24,7 @@ from navigation_pages import (
     page_buy_hold_avoid,
     page_extreme_oversold,
     page_algo_strategy_hub,
+    page_paper_trading,
     page_gap_scanner,
     page_icici_breeze_screener,
     page_icici_positions,
@@ -106,6 +107,7 @@ NAV_PAGES = {
     ],
     "🤖 Algo Strategy": [
         st.Page(page_algo_strategy_hub, title="Algo Strategy Hub", icon="🤖"),
+        st.Page(page_paper_trading, title="Paper Trading", icon="📝"),
     ],
     "⚡ Intraday": [
         st.Page(page_gap_scanner, title="Gap Scanner (pre-market)", icon="🌅"),
