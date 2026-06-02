@@ -18,6 +18,9 @@ stocksight/.paper_trading.json
 # Data / local
 *.csv
 *.sqlite3
+logs/
+output/
+stocksight/.scan_history.jsonl
 
 # IDE / OS
 .vscode/
