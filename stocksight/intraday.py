@@ -287,6 +287,13 @@ class IntradayScanStats:
     bars_5m: int = 0
     bars_15m: int = 0
     bars_extended_history: int = 0  # multi-day 5m/15m fetch for RSI / vol-ratio stability
+    bars_from_breeze: int = 0
+    bars_from_yahoo: int = 0
+    data_source: str = "auto"  # auto | breeze | yahoo — set per scan from UI
+
+
+# Intraday/daily fetch preference for the current scan (``auto`` | ``breeze`` | ``yahoo``).
+DATA_SOURCE_OPTIONS = ("auto", "breeze", "yahoo")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -501,12 +508,23 @@ def _suggest_setup(strategy: str, price: float, intraday_low: Optional[float],
 # ─────────────────────────────────────────────────────────────
 # Data fetch (per ticker) — 5m first, auto-fallback to 15m when market is closed
 # ─────────────────────────────────────────────────────────────
-def _fetch_intraday_bars(ticker: str) -> tuple[Optional[pd.DataFrame], str, str]:
+def _fetch_intraday_bars(
+    ticker: str,
+    *,
+    data_source: str = "auto",
+) -> tuple[Optional[pd.DataFrame], str, str]:
     """Fetch intraday OHLCV. Tries 5m then 15m (better when session is closed).
 
+    ``data_source``: ``auto`` (Breeze if configured, else Yahoo), ``breeze`` only,
+    or ``yahoo`` only.
+
     Returns (dataframe, interval_label, history_period) where interval_label is
-    '5m', '15m', or '' and history_period is the yfinance period (e.g. '1d', '5d').
+    '5m', '15m', or '' and history_period is the yfinance period (e.g. '1d', '5d')
+    or ``breeze-5d`` when bars came from ICICI Breeze.
     """
+    ds = (data_source or "auto").lower()
+    if ds not in DATA_SOURCE_OPTIONS:
+        ds = "auto"
     attempts = (
         ("5m", "1d"),
         ("5m", "2d"),
@@ -519,8 +537,8 @@ def _fetch_intraday_bars(ticker: str) -> tuple[Optional[pd.DataFrame], str, str]
     best_interval = ""
     best_period = ""
 
-    # Prefer ICICI Breeze for NSE/BSE intraday bars when it is configured.
-    if str(ticker).upper().endswith((".NS", ".BO")):
+    # ICICI Breeze intraday bars (NSE/BSE) when requested.
+    if ds != "yahoo" and str(ticker).upper().endswith((".NS", ".BO")):
         try:
             from breeze_data import breeze_configured, fetch_breeze_intraday_bars
         except Exception:
@@ -535,6 +553,13 @@ def _fetch_intraday_bars(ticker: str) -> tuple[Optional[pd.DataFrame], str, str]
                     best_df, best_interval, best_period = bdf, "5m", "breeze-5d"
         except Exception:
             pass
+        if ds == "breeze":
+            if best_df is not None:
+                return best_df, best_interval, best_period
+            return None, "", ""
+
+    if ds == "breeze":
+        return None, "", ""
 
     try:
         stk = yf.Ticker(ticker)
@@ -564,7 +589,29 @@ def _fetch_intraday_5m(ticker: str) -> Optional[pd.DataFrame]:
     return df
 
 
-def _fetch_daily(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
+def _fetch_daily(
+    ticker: str,
+    period: str = "1y",
+    *,
+    data_source: str = "auto",
+) -> Optional[pd.DataFrame]:
+    ds = (data_source or "auto").lower()
+    if ds not in DATA_SOURCE_OPTIONS:
+        ds = "auto"
+    if ds != "yahoo" and str(ticker).upper().endswith((".NS", ".BO")):
+        try:
+            from breeze_data import breeze_configured, fetch_breeze_price_history
+
+            if breeze_configured() and fetch_breeze_price_history:
+                bdf = fetch_breeze_price_history(ticker, "1d")
+                if bdf is not None and not bdf.empty:
+                    return bdf
+        except Exception:
+            pass
+        if ds == "breeze":
+            return None
+    if ds == "breeze":
+        return None
     try:
         df = yf.Ticker(ticker).history(period=period, interval="1d", auto_adjust=False)
         return df if df is not None and not df.empty else None
@@ -601,18 +648,23 @@ def _orb_levels(bars: pd.DataFrame, interval: str = "5m") -> tuple[Optional[floa
 # Strategy evaluators (one per row).
 # Each returns IntradayResult or None.
 # ─────────────────────────────────────────────────────────────
-def _build_context(raw_ticker: str, *, need_ath: bool = False) -> Optional[dict]:
+def _build_context(
+    raw_ticker: str,
+    *,
+    need_ath: bool = False,
+    data_source: str = "auto",
+) -> Optional[dict]:
     """Heavy-lift context block reused by every strategy for a ticker.
 
     When ``need_ath`` is True an extra full-history daily fetch is made so the
     All-Time-High strategy can test a true breakout (not just a 52-week high).
     """
-    bars, bar_interval, bar_period = _fetch_intraday_bars(raw_ticker)
+    bars, bar_interval, bar_period = _fetch_intraday_bars(raw_ticker, data_source=data_source)
     if bars is None or bars.empty:
         return None
     # Multi-day intraday history stabilises RSI early in the session (thin 1d feeds).
     bars_extended_history = bar_period not in ("", "1d")
-    daily = _fetch_daily(raw_ticker, "1y")
+    daily = _fetch_daily(raw_ticker, "1y", data_source=data_source)
     if daily is None or daily.empty:
         return None
 
@@ -1171,14 +1223,18 @@ def scan_intraday(
     *,
     market: str = "NSE",
     info_delay_sec: float = 0.05,
+    data_source: str = "auto",
 ) -> tuple[list[IntradayResult], IntradayScanStats]:
     """Run all selected strategies across a ticker list.
 
     Returns (results, stats) where stats powers the diagnostic funnel panel.
     """
     flt = filters or IntradayFilters()
+    ds = (data_source or "auto").lower()
+    if ds not in DATA_SOURCE_OPTIONS:
+        ds = "auto"
     results: list[IntradayResult] = []
-    stats = IntradayScanStats(total_scanned=len(raw_tickers))
+    stats = IntradayScanStats(total_scanned=len(raw_tickers), data_source=ds)
     total = len(raw_tickers)
     session_pred = compute_volume_time_prediction(market)
     need_ath = "ATH" in strategies
@@ -1186,12 +1242,17 @@ def scan_intraday(
     for i, raw in enumerate(raw_tickers):
         if progress_cb:
             progress_cb(i + 1, total, raw)
-        ctx = _build_context(raw, need_ath=need_ath)
+        ctx = _build_context(raw, need_ath=need_ath, data_source=ds)
         if ctx is None:
             stats.no_data += 1
             continue
 
         interval = ctx.get("bar_interval") or ""
+        bar_period = str(ctx.get("bar_period") or "")
+        if bar_period.startswith("breeze"):
+            stats.bars_from_breeze += 1
+        else:
+            stats.bars_from_yahoo += 1
         if interval == "5m":
             stats.bars_5m += 1
         elif interval == "15m":

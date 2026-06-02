@@ -586,6 +586,7 @@ def _results_to_df(results: list[IntradayResult], *, market: str = "NSE") -> pd.
             "Stop": r.stop,
             "Target": r.target,
             "R:R": r.rr_ratio,
+            "Exit plan": _exit_hint_for_strategy(r.strategy),
             "Setup": r.setup_note,
         }
         for name, url in (r.links or {}).items():
@@ -673,6 +674,11 @@ def _intraday_col_cfg(df: pd.DataFrame) -> dict:
                 format="%d%%",
                 help="Typical session volume participation at scan time (market clock).",
             ),
+            "Exit plan": st.column_config.TextColumn(
+                "Exit plan",
+                width="medium",
+                help="Suggested profit-booking rule for this strategy (see Exit playbook below).",
+            ),
             "Setup": st.column_config.TextColumn("Setup", width="large"),
             "Price": st.column_config.NumberColumn(format="%.2f"),
             "% chg": st.column_config.NumberColumn(format="%+.2f"),
@@ -742,11 +748,16 @@ def _render_diagnostic_panel(stats: IntradayScanStats, *, key_prefix: str) -> No
     c2.metric("Matched (tickers)", passed)
     c3.metric("Result rows", stats.result_rows)
     data_note = []
+    api_label = {"auto": "Auto", "breeze": "Breeze", "yahoo": "Yahoo"}.get(
+        getattr(stats, "data_source", "auto") or "auto", "—"
+    )
+    if stats.bars_from_breeze or stats.bars_from_yahoo:
+        data_note.append(f"Breeze {stats.bars_from_breeze} · Yahoo {stats.bars_from_yahoo}")
     if stats.bars_5m:
         data_note.append(f"{stats.bars_5m} on 5m bars")
     if stats.bars_15m:
         data_note.append(f"{stats.bars_15m} on 15m fallback")
-    c4.metric("Data source", " · ".join(data_note) if data_note else "—")
+    c4.metric("Bars / API", f"{api_label} · " + (" · ".join(data_note) if data_note else "—"))
 
     if stats.bars_15m and stats.total_scanned:
         st.caption(
@@ -761,7 +772,7 @@ def _render_diagnostic_panel(stats: IntradayScanStats, *, key_prefix: str) -> No
         )
 
     rows = [
-        ("No intraday data (Yahoo)", stats.no_data),
+        ("No intraday data", stats.no_data),
         ("Failed price filter", stats.failed_price),
         ("Failed 20-day avg volume", stats.failed_avg_volume),
         ("No RSI (not enough bars)", stats.failed_no_rsi),
@@ -867,6 +878,101 @@ STRATEGY_PLAYBOOK: dict[str, dict[str, str]] = {
 # BROAD is time-agnostic so it sits last.
 STRATEGY_TIME_ORDER = ("GAP", "MOMENTUM", "ORB", "ATH", "VWAP", "BROAD")
 
+# One-line exit hint shown on each scan row (matches scanner Target / Stop / R:R logic).
+EXIT_HINT_BY_STRATEGY: dict[str, str] = {
+    "GAP": "Book 50% at Target (1:2) · exit all if gap fills · flat by close",
+    "MOMENTUM": "Book 50% at Target (1:2) · trail stop under 5m swing lows",
+    "ORB": "Book 50–100% at Target (1:1.5) · exit if loses ORB high",
+    "ATH": "Book 50% at Target (1:2) · trail stop on new highs",
+    "VWAP": "Book 50% at Target (1:2) · exit if 5m close < VWAP",
+    "BROAD": "Book 50% at 1× risk or Target · strict flat by close",
+}
+
+EXIT_PLAYBOOK: dict[str, dict[str, str]] = {
+    "GAP": {
+        "book": "**50% at Target** (scanner 1:2 R:R) · optional 25% at 1× risk · runner trails above prev close.",
+        "exit_now": "Gap filling toward **yesterday’s close** · red 5m after open · **Prediction** = fake/lunch/forced.",
+        "hold": "Holding gap + rising Vol× + **Prediction** still “real moves”.",
+    },
+    "MOMENTUM": {
+        "book": "**50% at Target** (1:2) · move stop to **breakeven** · trail rest under each **5m higher low**.",
+        "exit_now": "Big reversal candle · RSI > 72 · loses VWAP with volume · afternoon **Prediction** turns dangerous.",
+        "hold": "Higher highs + Vol× ≥ 1.5× · stop only trails up, never down.",
+    },
+    "ORB": {
+        "book": "**50–70% at Target** (1:1.5) — ORB moves are fast · many traders exit **full** at Target.",
+        "exit_now": "**5m close back below ORB high** · stop hit (below ORB low) · lunch lull with thin volume.",
+        "hold": "Stays above ORB high · first 90 min of session · volume not collapsing.",
+    },
+    "ATH": {
+        "book": "**50% at Target** (1:2) · trail stop below **last 5m base** or prior ATH · add only on new highs.",
+        "exit_now": "Fails to hold **above breakout / prior ATH** · climax volume + long upper wick.",
+        "hold": "Closes above ATH on 5m/15m · trend + Vol× confirm · trail only upward.",
+    },
+    "VWAP": {
+        "book": "**50% at Target** (1:2) · if extended, take **30% at 1× risk** first · rest trails **just under VWAP**.",
+        "exit_now": "**5m close below VWAP** after entry · stop hit · lunch fake-move **Prediction**.",
+        "hold": "Reclaimed VWAP and holding · RSI 42–65 · price between VWAP and Target.",
+    },
+    "BROAD": {
+        "book": "**50% at 1× risk** OR **Target** (1:1.5) — weaker pattern, take profit earlier.",
+        "exit_now": "Only Broad Movers match (no confluence) · **Prediction** bad · near session close.",
+        "hold": "Also matches Momentum/GAP/ATH + green **Prediction** — treat like those exits.",
+    },
+}
+
+
+def _exit_hint_for_strategy(strategy_code: str) -> str:
+    return EXIT_HINT_BY_STRATEGY.get(strategy_code, "Book 50% at Target · flat all positions before close")
+
+
+def _render_exit_playbook(market: str) -> None:
+    """When to sell / book profit after intraday entries — aligned with Entry/Stop/Target columns."""
+    mkt = (market or "NSE").upper()
+    if mkt == "US":
+        close_rule = "**3:45 PM ET** (9:45 PM CEST) — start squaring off · **no overnight** for pure intraday."
+        lunch_note = "US lunch lull ~**12:00–1:00 PM ET** — book winners, avoid new adds."
+    else:
+        close_rule = "**3:15 PM IST** (11:45 AM CEST) — square off **all** intraday positions."
+        lunch_note = "NSE lunch lull ~**12:00–2:30 PM IST** — thin volume; book partial profits."
+
+    with st.expander("💰 When to sell / book profit (Exit playbook)", expanded=False):
+        st.markdown(
+            "Use the **Entry · Stop · Target · R:R** columns from your scan as the default plan. "
+            "This section tells you **when to take money off the table** after a good move."
+        )
+        st.markdown(
+            f"""
+**Universal rules (every strategy)**  
+1. **First booking:** sell **~50%** when price reaches **Target** OR profit = **1× risk** (Entry − Stop).  
+2. **Protect the rest:** move stop to **breakeven** (entry) after the first booking.  
+3. **Time stop:** {close_rule}  
+4. **Volume stop:** if the row **Prediction** flips to *fake / lunch / forced / dangerous* — **exit winners**, don’t hope.  
+5. {lunch_note}
+"""
+        )
+        st.markdown("---")
+        st.markdown("**By strategy** (matches the **Strategy** column in your table)")
+        for s in STRATEGY_TIME_ORDER:
+            if s not in STRATEGIES:
+                continue
+            info = EXIT_PLAYBOOK.get(s, {})
+            st.markdown(
+                f"**{STRATEGY_LABEL.get(s, s)}**  \n"
+                f"- 📗 **Book profit:** {info.get('book', '—')}  \n"
+                f"- 🔴 **Sell now (thesis broken):** {info.get('exit_now', '—')}  \n"
+                f"- 🟢 **Can hold for Target/trail:** {info.get('hold', '—')}",
+                unsafe_allow_html=True,
+            )
+            st.markdown("")
+        st.markdown(
+            "---\n"
+            "**Quick checklist — take profit when any 2 apply:**  \n"
+            "✓ At **Target** · ✓ Profit ≥ 1× risk and momentum stalling · ✓ Bad **Prediction** on the row · "
+            "✓ Within **45 min of close** · ✓ Strategy-specific stop (VWAP / ORB / gap fill) hit.\n\n"
+            "*Educational only — you manage real exits in your broker (ICICI / other).*"
+        )
+
 
 def _render_strategy_playbook(market: str) -> None:
     """Explain when to use each strategy, what it does, and what confluence means."""
@@ -934,6 +1040,44 @@ def _render_breeze_token_refresh() -> None:
                 st.rerun()
             else:
                 st.error(msg)
+
+
+_DATA_API_LABELS: dict[str, str] = {
+    "auto": "Auto — ICICI Breeze if connected, else Yahoo Finance",
+    "breeze": "ICICI Breeze only (live NSE 5-min + daily)",
+    "yahoo": "Yahoo Finance only",
+}
+
+
+def _pick_breeze_data_source(key: str) -> str:
+    """Radio to choose intraday/daily data API on the ICICI Breeze screener."""
+    try:
+        from breeze_data import breeze_configured
+
+        breeze_ok = breeze_configured()
+    except Exception:
+        breeze_ok = False
+
+    options = ("auto", "breeze", "yahoo")
+    default = st.session_state.get(f"{key}_data_source", "auto")
+    if default not in options:
+        default = "auto"
+    pick = st.radio(
+        "Market data API for this scan",
+        options=options,
+        format_func=lambda k: _DATA_API_LABELS[k],
+        index=options.index(default),
+        key=f"{key}_data_api",
+        horizontal=True,
+    )
+    if pick == "breeze" and not breeze_ok:
+        st.warning(
+            "Breeze is **not connected** — choose **Auto** or **Yahoo**, or refresh your "
+            "daily session token in the sidebar / status banner."
+        )
+    elif pick == "auto" and breeze_ok:
+        st.caption("✓ Breeze connected — **Auto** will use ICICI live data for NSE tickers.")
+    return pick
 
 
 def _apply_scan_row_to_trade(key: str, row: "pd.Series") -> None:
@@ -1199,16 +1343,19 @@ def render_intraday_screener_page(
     inject_css()
 
     if breeze_mode:
-        st.markdown("### 🟠 ICICI Breeze Screener — live NSE intraday (Breeze data)")
+        st.markdown("### 🟠 ICICI Breeze Screener — live NSE intraday")
         _render_breeze_status_banner()
+        data_source = _pick_breeze_data_source(key)
         page_audience_note(
-            "Active **NSE (India)** intraday traders who want candidates powered by **ICICI Direct "
-            "Breeze** market data, with Entry / Stop / Target attached.",
-            "Fetches 5-minute bars from **ICICI Breeze** when configured (auto-fallback to Yahoo "
-            "Finance otherwise). Same 6-strategy engine + 7-rule ranking as the Intraday Screener, "
-            "scoped to NSE. **Educational only — confirm risk before trading.**",
+            "Active **NSE (India)** intraday traders who want candidates with Entry / Stop / Target "
+            "attached, using **ICICI Breeze** or **Yahoo Finance** data (your choice per scan).",
+            "Pick the data API above before each scan. **Auto** uses Breeze when your session token "
+            "is valid, otherwise Yahoo. Same 6-strategy engine + 7-rule ranking as the Intraday Screener. "
+            "**Educational only — confirm risk before trading.**",
         )
     else:
+        data_source = "auto"
+    if not breeze_mode:
         st.markdown("### 📡 Intraday Screener — 6 strategies, NSE or US")
         page_audience_note(
             "Active intraday traders on **NSE (India)** or **US (NYSE & NASDAQ)** who want "
@@ -1300,12 +1447,17 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
         def cb(i: int, t: int, s: str) -> None:
             prog.progress(int(i / max(t, 1) * 100), text=f"Scanning {s}… ({i}/{t})")
 
+        scan_api = data_source if breeze_mode else "auto"
+        if breeze_mode:
+            st.session_state[f"{key}_data_source"] = scan_api
+
         results, scan_stats = scan_intraday(
             raw_tickers,
             tuple(strategies_picked),
             flt,
             progress_cb=cb,
             market=market,
+            data_source=scan_api,
         )
         prog.empty()
         st.session_state[f"{key}_results"] = results
@@ -1444,9 +1596,17 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
         col.metric(STRATEGY_LABEL[s], counts.get(s, 0))
 
     overlap_note = " · 🎯 Gap-Scanner overlap only" if overlap_on else ""
+    ds_note = ""
+    if breeze_mode:
+        ds_key = st.session_state.get(f"{key}_data_source", getattr(scan_stats, "data_source", "auto"))
+        ds_note = f" · Data API: **{_DATA_API_LABELS.get(ds_key, ds_key)}**"
     st.success(
-        f"**{len(results)}** match(es) across {last_uni}{overlap_note}"
+        f"**{len(results)}** match(es) across {last_uni}{overlap_note}{ds_note}"
         + (f" · {scan_at}" if scan_at else "")
+    )
+    st.caption(
+        "Each row includes an **Exit plan** column (e.g. *Book 50% at Target*). "
+        "Open **💰 When to sell / book profit** below the tables for the full rulebook."
     )
 
     df_all = _results_to_df(results, market=scan_market)
@@ -1509,6 +1669,9 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
                 market=scan_market,
             )
         tab_idx += 1
+
+    st.markdown("---")
+    _render_exit_playbook(scan_market)
 
     if breeze_mode:
         st.markdown("---")
