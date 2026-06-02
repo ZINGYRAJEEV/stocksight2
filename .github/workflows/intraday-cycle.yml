@@ -1,0 +1,103 @@
+# Headless intraday cycle: gap scan → intraday scan → overlap CSV export.
+# Uses Yahoo Finance by default (no daily Breeze token refresh required).
+#
+# Manual run: Actions → Intraday cycle → Run workflow
+# Scheduled (UTC, Mon–Fri): ~pre-open + open + mid-morning IST windows
+
+name: Intraday cycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      universe:
+        description: "Universe label (e.g. Nifty 50 (fast))"
+        required: false
+        default: "Nifty 50 (fast)"
+      market:
+        description: "NSE or US"
+        required: false
+        default: "NSE"
+      data_source:
+        description: "auto | breeze | yahoo"
+        required: false
+        default: "yahoo"
+      phase:
+        description: "full | gap | intraday | overlap"
+        required: false
+        default: "full"
+  schedule:
+    # 03:35 UTC ≈ 9:05 IST — gap scan
+    - cron: "35 3 * * 1-5"
+    # 04:05 UTC ≈ 9:35 IST — opening intraday
+    - cron: "5 4 * * 1-5"
+    # 05:00 UTC ≈ 10:30 IST — VWAP window
+    - cron: "0 5 * * 1-5"
+
+jobs:
+  intraday-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Optional Breeze secrets (for data-source=breeze)
+        env:
+          BREEZE_API_KEY: ${{ secrets.BREEZE_API_KEY }}
+          BREEZE_API_SECRET: ${{ secrets.BREEZE_API_SECRET }}
+          BREEZE_SESSION_TOKEN: ${{ secrets.BREEZE_SESSION_TOKEN }}
+        run: |
+          if [ -n "${BREEZE_API_KEY:-}" ]; then
+            mkdir -p .streamlit
+            cat > .streamlit/secrets.toml <<EOF
+[breeze]
+api_key = "${BREEZE_API_KEY}"
+api_secret = "${BREEZE_API_SECRET}"
+session_token = "${BREEZE_SESSION_TOKEN}"
+EOF
+            echo "Breeze secrets.toml written for this job."
+          else
+            echo "No Breeze secrets — using yahoo data source."
+          fi
+
+      - name: Run intraday cycle
+        run: |
+          chmod +x scripts/run_intraday_cycle.sh
+          ./scripts/run_intraday_cycle.sh \
+            --phase "${{ github.event.inputs.phase || 'full' }}" \
+            --market "${{ github.event.inputs.market || 'NSE' }}" \
+            --universe "${{ github.event.inputs.universe || 'Nifty 50 (fast)' }}" \
+            --data-source "${{ github.event.inputs.data_source || 'yahoo' }}" \
+            --history
+
+      - name: Upload scan artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: intraday-cycle-${{ github.run_id }}
+          path: output/intraday/
+          retention-days: 14
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Intraday cycle outputs" >> "$GITHUB_STEP_SUMMARY"
+          if ls output/intraday/summary_*.json 1>/dev/null 2>&1; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat output/intraday/summary_*.json | tail -1 >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary JSON produced (check logs)." >> "$GITHUB_STEP_SUMMARY"
+          fi
