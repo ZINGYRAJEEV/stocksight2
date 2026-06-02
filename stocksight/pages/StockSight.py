@@ -32,6 +32,10 @@ from ui_components import (
     render_watchlist_panel,
     safe_set_page_config,
 )
+try:
+    from quality_gate import GATE_COL, dataframe_gate_styler, render_quality_gate_legend
+except ImportError:
+    from .quality_gate import GATE_COL, dataframe_gate_styler, render_quality_gate_legend  # type: ignore[no-redef]
 
 safe_set_page_config(
     page_title="StockSight | Smart Screener",
@@ -386,6 +390,7 @@ else:
         market=market_from_universe(universe),
         universe_name=universe,
         cache_key_prefix="app1",
+        sort_by_gate=True,
     )
 
     _link_cols = (
@@ -414,6 +419,9 @@ else:
             "Volume Ratio": st.column_config.NumberColumn(format="%.2f"),
             "RSI": st.column_config.NumberColumn(format="%.1f"),
             "Score": st.column_config.NumberColumn(format="%.1f"),
+            "Quality Gate": st.column_config.TextColumn("Quality Gate", width="small"),
+            "Gate score": st.column_config.ProgressColumn("Gate score", min_value=0, max_value=100, format="%d"),
+            "Gate why": st.column_config.TextColumn("Gate why", width="large"),
             **{
                 name: st.column_config.LinkColumn(name, display_text="Open ↗")
                 for name in _link_cols
@@ -471,9 +479,13 @@ else:
         if text_col in show_df.columns:
             table_col_cfg[text_col] = st.column_config.TextColumn(text_col, width="large")
 
-    st.caption("💡 Click any row to load its interactive chart in the panel below.")
+    if GATE_COL in show_df.columns:
+        render_quality_gate_legend(profile="daily")
+    gate_note = " · 🟢/🟡/🟠/🔴 = Quality Gate" if GATE_COL in show_df.columns else ""
+    st.caption(f"💡 Click any row to load its interactive chart in the panel below.{gate_note}")
+    table_arg = dataframe_gate_styler(show_df) if GATE_COL in show_df.columns else show_df
     table_event = st.dataframe(
-        show_df,
+        table_arg,
         use_container_width=True,
         hide_index=False,
         column_config=filter_column_config(show_df, table_col_cfg),

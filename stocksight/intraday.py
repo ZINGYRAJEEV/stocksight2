@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -880,6 +880,130 @@ def _timing_weight_from_prediction(pred_text: str) -> int:
     if "closed" in s:
         return -2
     return 0
+
+
+try:
+    from .quality_gate import QUALITY_GATE_BANDS
+except ImportError:
+    from quality_gate import QUALITY_GATE_BANDS  # type: ignore[no-redef]
+
+_PATTERN_STRATEGIES = frozenset({"GAP", "MOMENTUM", "ORB", "ATH", "VWAP"})
+
+
+def compute_intraday_quality_gate(
+    row: dict,
+    *,
+    strategies_on_ticker: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """
+    Composite quality gate from score, strategy confluence, sentiment, session timing,
+    news tier, and row strategy type. Returns label, 0–100 score, why text, band key (A–D).
+    """
+    score120 = float(row.get("Score /120") or row.get("score_120") or 0)
+    tier = str(row.get("Tier") or row.get("rank_tier") or "").lower()
+    sentiment = str(row.get("Market sentiment") or "")
+    pred = str(row.get("Prediction") or "")
+    strat_label = str(row.get("Strategy") or "")
+    news_score = row.get("News score")
+    top_tier = str(row.get("Top tier") or "")
+    rr = row.get("R:R") or row.get("rr_ratio")
+
+    codes = list(strategies_on_ticker or [])
+    n_conf = len(codes)
+    only_broad = n_conf == 1 and codes == ["BROAD"]
+    has_pattern = any(c in _PATTERN_STRATEGIES for c in codes) or any(
+        k in strat_label for k in ("Momentum", "VWAP", "ORB", "Gap", "ATH", "Broad")
+    )
+    pattern_row = not (strat_label.find("Broad Movers") >= 0 and n_conf <= 1)
+
+    pts = int(min(40, score120 * 40 / 120))
+    pts += min(20, n_conf * 7)
+    if "strong bullish" in sentiment.lower():
+        pts += 15
+    elif "bullish" in sentiment.lower() and "bearish" not in sentiment.lower():
+        pts += 10
+    elif "mixed" in sentiment.lower() or "neutral" in sentiment.lower():
+        pts += 2
+    elif "cautious" in sentiment.lower() or "lean bearish" in sentiment.lower():
+        pts -= 8
+    elif "bearish" in sentiment.lower():
+        pts -= 15
+    if "avoid" in sentiment.lower() or "⛔" in sentiment:
+        pts -= 25
+
+    pts += _timing_weight_from_prediction(pred) * 4
+
+    if top_tier in ("T1", "T2"):
+        pts += 10 if top_tier == "T1" else 5
+    elif top_tier in ("T4",):
+        pts -= 8
+    try:
+        if news_score is not None and float(news_score) < 40:
+            pts -= 8
+        elif news_score is not None and float(news_score) >= 70:
+            pts += 5
+    except (TypeError, ValueError):
+        pass
+
+    if only_broad:
+        pts -= 12
+    elif n_conf >= 2:
+        pts += 8
+    if pattern_row and any(c in _PATTERN_STRATEGIES for c in codes):
+        pts += 5
+
+    try:
+        if rr is not None and float(rr) >= 1.5:
+            pts += 5
+    except (TypeError, ValueError):
+        pass
+
+    if "avoid" in tier or "skip" in tier:
+        pts = min(pts, 30)
+    if _timing_weight_from_prediction(pred) <= -3:
+        pts = min(pts, 35)
+
+    pts = max(0, min(100, pts))
+    if pts >= 75 and n_conf >= 2 and "avoid" not in sentiment.lower():
+        band = "A"
+    elif pts >= 58:
+        band = "B"
+    elif pts >= 38:
+        band = "C"
+    else:
+        band = "D"
+    if "avoid" in tier or "⛔" in sentiment or "avoid" in sentiment.lower():
+        band = "D"
+    if only_broad and band == "A":
+        band = "B"
+
+    why_bits: list[str] = []
+    why_bits.append(f"Score {int(score120)}/120")
+    if n_conf >= 2:
+        why_bits.append(f"{n_conf} strategies align")
+    elif n_conf == 1:
+        why_bits.append("Single strategy only")
+    if sentiment:
+        why_bits.append(sentiment.split("·")[0].strip()[:28])
+    tw = _timing_weight_from_prediction(pred)
+    if tw >= 2:
+        why_bits.append("Session timing OK")
+    elif tw <= -2:
+        why_bits.append("Bad session window")
+    if top_tier:
+        why_bits.append(f"News {top_tier}")
+    if only_broad:
+        why_bits.append("Broad mover — weaker pattern")
+
+    meta = QUALITY_GATE_BANDS[band]
+    return {
+        "band": band,
+        "label": meta["label"],
+        "score": pts,
+        "why": " · ".join(why_bits)[:200],
+        "bg": meta["bg"],
+        "fg": meta["fg"],
+    }
 
 
 def _hard_reject_reasons(ctx: dict) -> list[str]:

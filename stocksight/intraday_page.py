@@ -39,6 +39,18 @@ from intraday import (
 )
 from market_sentiment import add_market_sentiment_columns
 try:
+    from quality_gate import (
+        apply_quality_gate_columns,
+        quality_gate_row_css,
+        render_quality_gate_legend,
+    )
+except ImportError:
+    from .quality_gate import (  # type: ignore[no-redef]
+        apply_quality_gate_columns,
+        quality_gate_row_css,
+        render_quality_gate_legend,
+    )
+try:
     from news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker
 except ImportError:
     from .news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker  # type: ignore[no-redef]
@@ -553,16 +565,67 @@ def _filters_panel(key_prefix: str, market: str = "NSE") -> IntradayFilters:
     )
 
 
-def _results_to_df(results: list[IntradayResult], *, market: str = "NSE") -> pd.DataFrame:
+def _format_confluence(strategy_codes: list[str]) -> str:
+    ordered = [s for s in STRATEGY_TIME_ORDER if s in strategy_codes]
+    ordered += [s for s in strategy_codes if s not in ordered]
+    if not ordered:
+        return "—"
+    if len(ordered) == 1:
+        return STRATEGY_LABEL.get(ordered[0], ordered[0])
+    short = " + ".join(STRATEGY_LABEL.get(s, s).split(" ", 1)[-1][:10] for s in ordered[:4])
+    return f"{len(ordered)}× {short}"
+
+
+def _render_intraday_results_table(
+    df: pd.DataFrame,
+    *,
+    gap_highlight_test=None,
+    **kwargs,
+) -> Optional[str]:
+    """Clickable intraday table with quality-gate row colours."""
+    if df is None or df.empty:
+        return None
+
+    def _row_style(row: "pd.Series") -> list[str]:
+        css = quality_gate_row_css(row)
+        if gap_highlight_test is not None and gap_highlight_test(row):
+            css = "background-color: #fff7ed; color: #7c2d12; border-left: 4px solid #f0b429;"
+        return [css] * len(row)
+
+    styler = df.style.apply(_row_style, axis=1)  # type: ignore[union-attr]
+    kwargs.setdefault("show_gate_legend", False)
+    return render_clickable_scan_table(df, styler=styler, **kwargs)
+
+
+def _build_confluence_map(results: list[IntradayResult]) -> dict[str, list[str]]:
+    confluence_map: dict[str, list[str]] = {}
+    for r in results:
+        confluence_map.setdefault(r.raw_ticker, [])
+        if r.strategy not in confluence_map[r.raw_ticker]:
+            confluence_map[r.raw_ticker].append(r.strategy)
+    return confluence_map
+
+
+def _results_to_df(
+    results: list[IntradayResult],
+    *,
+    market: str = "NSE",
+    confluence_map: Optional[dict[str, list[str]]] = None,
+    sort_by_gate: bool = False,
+) -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
+    conf = confluence_map if confluence_map is not None else _build_confluence_map(results)
+
     rows = []
     for rank, r in enumerate(results, start=1):
+        codes = conf.get(r.raw_ticker, [r.strategy])
         row = {
             "S.No.": rank,
             "Rank": f"#{rank}",
             "Ticker": r.ticker,
             "Raw": r.raw_ticker,
+            "Confluence": _format_confluence(codes),
             "Strategy": STRATEGY_LABEL.get(r.strategy, r.strategy),
             "Score /120": r.score_120,
             "Tier": r.rank_tier or "—",
@@ -597,6 +660,13 @@ def _results_to_df(results: list[IntradayResult], *, market: str = "NSE") -> pd.
     if not df.empty:
         df = add_market_sentiment_columns(df, market=market, insert_after="Ticker")
         df = _add_intraday_news_scanner_columns(df, market=market)
+        df = apply_quality_gate_columns(df, profile="intraday", confluence_map=conf)
+        if sort_by_gate and "Gate score" in df.columns:
+            df = df.sort_values("Gate score", ascending=False, kind="stable").reset_index(drop=True)
+            if "S.No." in df.columns:
+                df["S.No."] = range(1, len(df) + 1)
+            if "Rank" in df.columns:
+                df["Rank"] = [f"#{i}" for i in range(1, len(df) + 1)]
     return df
 
 
@@ -631,6 +701,7 @@ def _gap_results_to_df(gaps: list[GapResult], *, market: str = "NSE") -> pd.Data
     if not df.empty:
         df = add_market_sentiment_columns(df, market=market, insert_after="Ticker")
         df = _add_intraday_news_scanner_columns(df, market=market)
+        df = apply_quality_gate_columns(df, profile="gap", sort_by_gate=True)
     return df
 
 
@@ -648,6 +719,20 @@ def _intraday_col_cfg(df: pd.DataFrame) -> dict:
             "Top headline": st.column_config.TextColumn("Top headline", width="large"),
             "Confirm action": st.column_config.TextColumn("Confirm action", width="medium"),
             "Strategy": st.column_config.TextColumn("Strategy", width="medium"),
+            "Confluence": st.column_config.TextColumn(
+                "Confluence",
+                width="medium",
+                help="Other intraday strategies that also matched this ticker in this scan.",
+            ),
+            "Quality Gate": st.column_config.TextColumn(
+                "Quality Gate",
+                width="small",
+                help="A–D grade: strategy + sentiment + timing + news. Row colour matches band.",
+            ),
+            "Gate score": st.column_config.ProgressColumn(
+                "Gate score", min_value=0, max_value=100, format="%d",
+            ),
+            "Gate why": st.column_config.TextColumn("Gate why", width="large"),
             "Score /120": st.column_config.NumberColumn(
                 "Score /120",
                 format="%d",
@@ -705,9 +790,14 @@ def _intraday_col_cfg(df: pd.DataFrame) -> dict:
 
 
 def _gap_col_cfg(df: pd.DataFrame) -> dict:
+    try:
+        from quality_gate import quality_gate_column_config
+    except ImportError:
+        from .quality_gate import quality_gate_column_config  # type: ignore[no-redef]
     return filter_column_config(
         df,
         {
+            **quality_gate_column_config(),
             "Market sentiment": st.column_config.TextColumn("Market sentiment", width="medium"),
             "Sentiment why": st.column_config.TextColumn("Sentiment why", width="large"),
             SCAN_RESULTS_NEWS_COL: st.column_config.TextColumn(SCAN_RESULTS_NEWS_COL, width="large"),
@@ -1605,11 +1695,16 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
         + (f" · {scan_at}" if scan_at else "")
     )
     st.caption(
-        "Each row includes an **Exit plan** column (e.g. *Book 50% at Target*). "
-        "Open **💰 When to sell / book profit** below the tables for the full rulebook."
+        "Rows are **colour-coded** by **Quality Gate** (A–D). See **Confluence** for multi-strategy "
+        "matches. **Exit plan** + **💰 When to sell** below."
     )
+    render_quality_gate_legend(profile="intraday")
 
-    df_all = _results_to_df(results, market=scan_market)
+    conf_map = _build_confluence_map(results)
+    df_all = _results_to_df(
+        results, market=scan_market, confluence_map=conf_map, sort_by_gate=True,
+    )
+    gap_raw_set = {getattr(g, "raw_ticker", "") for g in (st.session_state.get("gap_results") or []) if getattr(g, "raw_ticker", "")}
     tab_labels = ["📋 All matches"] + [STRATEGY_LABEL[s] for s in STRATEGIES if counts.get(s, 0)]
     tabs = st.tabs(tab_labels)
 
@@ -1621,15 +1716,18 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
     )
 
     with tabs[0]:
-        render_clickable_scan_table(
+        _render_intraday_results_table(
             df_all,
             key_prefix=f"{key}_all",
             universe_name=last_uni,
             market=scan_market,
             column_config=_intraday_col_cfg(df_all),
             height=min(620, 48 + len(df_all) * 36),
-            caption=table_caption,
+            caption=table_caption + " · 🟢/🟡/🟠/🔴 = Quality Gate band.",
             on_row_select=trade_row_cb,
+            gap_highlight_test=(
+                (lambda row, g=gap_raw_set: str(row.get("Raw", "")) in g) if gap_raw_set else None
+            ),
         )
         _csv_download(
             df_all,
@@ -1648,9 +1746,11 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
             continue
         with tabs[tab_idx]:
             sub_results = [r for r in results if r.strategy == s]
-            sub_df = _results_to_df(sub_results, market=scan_market)
+            sub_df = _results_to_df(
+                sub_results, market=scan_market, confluence_map=conf_map, sort_by_gate=True,
+            )
             st.caption(f"Best time-of-day: **{best_times.get(s, '')}**")
-            render_clickable_scan_table(
+            _render_intraday_results_table(
                 sub_df,
                 key_prefix=f"{key}_{s.lower()}",
                 universe_name=last_uni,
@@ -2413,6 +2513,7 @@ def render_gap_scanner_page() -> None:
         market=gap_market,
         column_config=_gap_col_cfg(df),
         height=min(600, 48 + len(df) * 36),
+        sort_by_gate=False,
     )
     _csv_download(
         df,

@@ -46,6 +46,16 @@ try:
     )
     from .market_sentiment import add_market_sentiment_columns, market_from_universe
     from .news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker
+    from .quality_gate import (
+        GATE_COL,
+        apply_quality_gate_columns,
+        build_scenario_confluence_map,
+        dataframe_gate_styler,
+        detect_quality_gate_profile,
+        quality_gate_column_config,
+        quality_gate_row_css,
+        render_quality_gate_legend,
+    )
 except ImportError:
     from screener import (
         DECISION_ZONES,
@@ -71,6 +81,16 @@ except ImportError:
     )
     from market_sentiment import add_market_sentiment_columns, market_from_universe  # type: ignore[no-redef]
     from news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker  # type: ignore[no-redef]
+    from quality_gate import (  # type: ignore[no-redef]
+        GATE_COL,
+        apply_quality_gate_columns,
+        build_scenario_confluence_map,
+        dataframe_gate_styler,
+        detect_quality_gate_profile,
+        quality_gate_column_config,
+        quality_gate_row_css,
+        render_quality_gate_legend,
+    )
 
 
 INTERVAL_LABELS = {"1d": "Daily", "1h": "1 Hour", "15m": "15 Minute"}
@@ -559,6 +579,7 @@ def _scan_table_news_column_config() -> dict:
         SCAN_TIER_REF_COL: st.column_config.TextColumn(SCAN_TIER_REF_COL, width="medium"),
         SCAN_TOP_HEADLINE_COL: st.column_config.TextColumn(SCAN_TOP_HEADLINE_COL, width="large"),
         SCAN_CONFIRM_ACTION_COL: st.column_config.TextColumn(SCAN_CONFIRM_ACTION_COL, width="medium"),
+        **quality_gate_column_config(),
     }
 
 
@@ -570,10 +591,24 @@ def prepare_scan_results_df(
     cache_key_prefix: str = "",
     max_news_rows: int = 50,
     raw_ticker_col: Optional[str] = None,
+    apply_quality_gate: bool = True,
+    confluence_map: Optional[dict[str, list[str]]] = None,
+    sort_by_gate: bool = False,
 ) -> pd.DataFrame:
-    """Add market sentiment + recent news columns for any scan results table."""
+    """Add market sentiment, recent news, and optional Quality Gate columns for scan tables."""
     if df is None or df.empty:
         return df
+
+    def _finish(out_df: pd.DataFrame) -> pd.DataFrame:
+        if apply_quality_gate and GATE_COL not in out_df.columns:
+            prof = detect_quality_gate_profile(out_df)
+            out_df = apply_quality_gate_columns(
+                out_df,
+                profile=prof,
+                confluence_map=confluence_map,
+                sort_by_gate=sort_by_gate,
+            )
+        return out_df
 
     mkt = market or market_from_universe(universe_name)
     insert_after = next((c for c in ("Ticker", "Name", "ticker") if c in df.columns), "Ticker")
@@ -582,7 +617,7 @@ def prepare_scan_results_df(
         df = add_market_sentiment_columns(df, market=mkt, insert_after=insert_after)
 
     if SCAN_RESULTS_NEWS_COL in df.columns:
-        return df
+        return _finish(df)
 
     raw_col = raw_ticker_col
     if raw_col is None and "Raw" in df.columns:
@@ -631,7 +666,7 @@ def prepare_scan_results_df(
                 enriched[SCAN_TOP_HEADLINE_COL] = headlines
                 enriched[SCAN_CONFIRM_ACTION_COL] = actions
                 st.session_state[news_cache_key] = enriched
-        return st.session_state[news_cache_key]
+        return _finish(st.session_state[news_cache_key])
 
     out = df.copy()
     out[SCAN_RESULTS_NEWS_COL] = f"— (narrow to ≤{max_news_rows} rows for headlines)"
@@ -640,7 +675,7 @@ def prepare_scan_results_df(
     out[SCAN_TIER_REF_COL] = "—"
     out[SCAN_TOP_HEADLINE_COL] = "—"
     out[SCAN_CONFIRM_ACTION_COL] = f"— (narrow to ≤{max_news_rows} rows for confirmation)"
-    return out
+    return _finish(out)
 
 
 def maybe_enrich_healthy_dip_context(results: list[SignalResult], enabled: bool, max_names: int = 30) -> None:
@@ -993,6 +1028,8 @@ def render_clickable_scan_table(
     highlight_row_test=None,
     highlight_row_style: str = "background-color: #d1fae5; color: #064e3b",
     on_row_select: Optional[Callable[[pd.Series], None]] = None,
+    show_gate_legend: bool = True,
+    sort_by_gate: bool = False,
 ) -> Optional[str]:
     """Render a results dataframe with row selection wired to the chart/research panel.
 
@@ -1015,22 +1052,37 @@ def render_clickable_scan_table(
         universe_name=universe_name,
         cache_key_prefix=key_prefix,
         raw_ticker_col=raw_col,
+        sort_by_gate=sort_by_gate,
     )
     if column_config is not None:
         column_config = dict(column_config)
         for k, v in _scan_table_news_column_config().items():
             column_config.setdefault(k, v)
 
+    if show_gate_legend and GATE_COL in df.columns:
+        render_quality_gate_legend(profile=detect_quality_gate_profile(df))
+
+    gate_caption = " · 🟢/🟡/🟠/🔴 = Quality Gate band" if GATE_COL in df.columns else ""
     if caption:
-        st.caption(caption)
+        st.caption(caption + gate_caption)
+    elif gate_caption:
+        st.caption(gate_caption.strip(" · "))
 
     if highlight_row_test is not None:
-        table_arg = df.style.apply(  # type: ignore[union-attr]
-            lambda row: [highlight_row_style if highlight_row_test(row) else ""] * len(row),
-            axis=1,
-        )
+        def _highlight_style(row: pd.Series) -> list[str]:
+            if highlight_row_test(row):
+                css = "background-color: #fff7ed; color: #7c2d12; border-left: 4px solid #f0b429;"
+            elif GATE_COL in df.columns:
+                css = quality_gate_row_css(row)
+            else:
+                css = ""
+            return [css] * len(row)
+
+        table_arg = df.style.apply(_highlight_style, axis=1)  # type: ignore[union-attr]
     elif styler is not None:
         table_arg = styler
+    elif GATE_COL in df.columns:
+        table_arg = dataframe_gate_styler(df)
     else:
         table_arg = df
     kwargs = {
@@ -2044,11 +2096,14 @@ def results_table(
         str(getattr(r, "raw_ticker", "")).upper().endswith((".NS", ".BO")) for r in results
     ):
         mkt = "US"
+    conf_map = build_scenario_confluence_map(df) if include_scenario else None
     df = prepare_scan_results_df(
         df,
         market=mkt,
         cache_key_prefix=f"scenario_{scenario_id}",
         raw_ticker_col="Raw",
+        confluence_map=conf_map,
+        sort_by_gate=True,
     )
 
     if include_yahoo_context and len(df) <= 50:
@@ -2076,6 +2131,9 @@ def results_table(
         for name, url in results[0].links.items():
             col_name = name
             df[col_name] = [r.links.get(name, "") for r in results]
+
+    if GATE_COL in df.columns:
+        render_quality_gate_legend(profile=detect_quality_gate_profile(df))
 
     col_cfg = {
         **_scan_table_news_column_config(),
@@ -2109,9 +2167,11 @@ def results_table(
         if text_col in df.columns:
             col_cfg[text_col] = st.column_config.TextColumn(text_col, width="large")
 
-    st.caption("💡 Click any row to load its interactive chart in the panel below.")
+    gate_note = " · 🟢/🟡/🟠/🔴 = Quality Gate" if GATE_COL in df.columns else ""
+    st.caption(f"💡 Click any row to load its interactive chart in the panel below.{gate_note}")
+    table_arg = dataframe_gate_styler(df) if GATE_COL in df.columns else df
     table_event = st.dataframe(
-        df, use_container_width=True,
+        table_arg, use_container_width=True,
         column_config=filter_column_config(df, col_cfg),
         hide_index=True,
         height=min(500, 50 + len(df) * 38),
