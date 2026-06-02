@@ -147,6 +147,22 @@ def _parse_breeze_symbol(raw_ticker: str) -> tuple[str, str] | None:
 
 
 _CODE_CACHE: dict[tuple[str, str], str] = {}
+# Reverse map: (exchange, ISEC code) -> NSE/BSE symbol (e.g. ICIBAN -> ICICIBANK).
+_REVERSE_ISEC_CACHE: dict[tuple[str, str], str] = {}
+
+
+def lookup_nse_symbol(exchange_code: str, isec_or_symbol: str) -> Optional[str]:
+    """Resolve a Breeze ``stock_code`` (ISEC or NSE symbol) to the NSE trading symbol."""
+    code = (isec_or_symbol or "").strip().upper()
+    if not code:
+        return None
+    hit = _REVERSE_ISEC_CACHE.get((exchange_code, code))
+    if hit:
+        return hit
+    # Already an NSE-style symbol in cache from a prior forward lookup.
+    if (exchange_code, code) in _CODE_CACHE:
+        return code
+    return None
 
 
 def _resolve_stock_code(client: Any, exch_code: str, symbol: str) -> str:
@@ -168,6 +184,8 @@ def _resolve_stock_code(client: Any, exch_code: str, symbol: str) -> str:
     except Exception:
         pass
     _CODE_CACHE[key] = code
+    if code != symbol:
+        _REVERSE_ISEC_CACHE[(exch_code, code.upper())] = symbol.upper()
     return code
 
 
@@ -425,6 +443,25 @@ def place_stoploss_sell(
         order_type="stoploss",
         price=limit_price if limit_price else trigger_price,
         stoploss=trigger_price,
+        product=product,
+    )
+
+
+def place_sell_order(
+    raw_ticker: str,
+    quantity: int,
+    order_type: str = "market",
+    price: Optional[float] = None,
+    product: str = "cash",
+) -> tuple[bool, str, Any]:
+    """Place a SELL order (market or limit) to exit a long position."""
+    return _place_order(
+        raw_ticker,
+        action="sell",
+        quantity=quantity,
+        order_type=order_type,
+        price=price if order_type == "limit" else None,
+        stoploss=None,
         product=product,
     )
 

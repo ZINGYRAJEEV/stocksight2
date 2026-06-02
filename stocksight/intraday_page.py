@@ -1733,6 +1733,433 @@ def _breeze_rows_to_df(rows: list, prefer: tuple[str, ...]) -> "pd.DataFrame":
     return df[ordered + rest]
 
 
+def _scan_plans_lookup() -> dict[str, dict]:
+    """Last intraday scan rows keyed by Raw ticker and bare NSE symbol."""
+    plans: dict[str, dict] = {}
+    for sess_key in ("icici", "id"):
+        for r in st.session_state.get(f"{sess_key}_results", []) or []:
+            raw = (getattr(r, "raw_ticker", "") or "").strip().upper()
+            if not raw:
+                continue
+            plan = {
+                "entry": getattr(r, "entry", None),
+                "stop": getattr(r, "stop", None),
+                "target": getattr(r, "target", None),
+                "strategy": getattr(r, "strategy", ""),
+                "prediction": getattr(r, "prediction", "") or "",
+                "exit_hint": _exit_hint_for_strategy(getattr(r, "strategy", "")),
+            }
+            plans[raw] = plan
+            bare = raw.replace(".NS", "").replace(".BO", "")
+            plans[bare] = plan
+    return plans
+
+
+def _breeze_code_to_ticker(stock_code: str) -> str:
+    """Map Breeze stock_code (ISEC or NSE symbol) to yfinance-style ticker."""
+    code = (stock_code or "").strip().upper()
+    if not code:
+        return ""
+    if code.endswith(".NS") or code.endswith(".BO"):
+        return code
+    try:
+        from breeze_data import lookup_nse_symbol
+
+        sym = lookup_nse_symbol("NSE", code)
+        if sym:
+            return sym if "." in sym else f"{sym}.NS"
+    except Exception:
+        pass
+    return f"{code}.NS"
+
+
+def _position_sell_candidates(pos_rows: list) -> list[dict]:
+    """Open long positions that can be sold via Breeze."""
+    out: list[dict] = []
+    for row in pos_rows or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            qty = int(float(row.get("quantity") or 0))
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        if str(row.get("action", "")).lower() == "sell":
+            continue
+        code = str(row.get("stock_code", ""))
+        ticker = _breeze_code_to_ticker(code)
+        prod = str(row.get("product_type", "") or "cash").lower()
+        product = "margin" if "margin" in prod or "mis" in prod else "cash"
+        out.append(
+            {
+                "label": f"{code} · qty {qty} · {ticker}",
+                "stock_code": code,
+                "sell_ticker": ticker,
+                "sell_qty": qty,
+                "ltp": row.get("ltp"),
+                "product": product,
+                "average_price": row.get("average_price"),
+            }
+        )
+    return out
+
+
+def _render_breeze_sell_panel(
+    candidates: list[dict],
+    *,
+    key_prefix: str = "bpos",
+    hint_row: Optional[dict] = None,
+) -> None:
+    """Place a real SELL order for an open ICICI position."""
+    try:
+        from breeze_data import breeze_configured, place_sell_order
+    except Exception:
+        return
+    if not breeze_configured():
+        return
+
+    with st.expander("⚠️ Sell from screen — places REAL SELL orders", expanded=False):
+        st.error(
+            "**This sends a real SELL order on your ICICI account.** "
+            "Use only after you read **Sell now?** and **Why sell?**. "
+            "Requires typed CONFIRM below."
+        )
+        if not candidates:
+            st.info("No open long positions to sell. Check **📈 Open Positions** after you buy.")
+            return
+
+        armed = st.checkbox(
+            "I understand this sells real shares from my account.",
+            key=f"{key_prefix}_sell_armed",
+        )
+        if not armed:
+            return
+
+        labels = [c["label"] for c in candidates]
+        default_idx = 0
+        if hint_row and hint_row.get("stock_code"):
+            for i, c in enumerate(candidates):
+                if c["stock_code"] == hint_row["stock_code"]:
+                    default_idx = i
+                    break
+        pick_label = st.selectbox(
+            "Position to sell",
+            labels,
+            index=default_idx,
+            key=f"{key_prefix}_sell_pick",
+        )
+        sel = next(c for c in candidates if c["label"] == pick_label)
+        ticker = sel["sell_ticker"]
+        max_qty = int(sel["sell_qty"])
+
+        if hint_row:
+            why = hint_row.get("Why sell?") or ""
+            sell_sig = hint_row.get("Sell now?") or ""
+            if why or sell_sig:
+                st.markdown(f"**Signal:** {sell_sig}  \n**Why:** {why}")
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            sell_type = st.radio("SELL type", ["Market", "Limit"], key=f"{key_prefix}_sell_type", horizontal=True)
+        with c2:
+            pct = st.slider("Quantity % of position", 25, 100, 100, 25, key=f"{key_prefix}_sell_pct")
+            qty = max(1, int(max_qty * pct / 100))
+            st.caption(f"Selling **{qty}** of **{max_qty}** shares")
+        with c3:
+            product = sel.get("product", "cash")
+            st.caption(f"Product: **{product}** (from ICICI position)")
+
+        limit_price = None
+        ltp = sel.get("ltp")
+        try:
+            ltp_f = float(ltp) if ltp is not None else None
+        except (TypeError, ValueError):
+            ltp_f = None
+        if sell_type == "Limit":
+            limit_price = float(
+                st.number_input(
+                    "Limit price ₹",
+                    min_value=0.0,
+                    value=ltp_f or 0.0,
+                    step=0.05,
+                    key=f"{key_prefix}_sell_limit",
+                )
+            )
+
+        st.table(
+            {
+                "Field": ["Ticker", "Side", "Type", "Qty", "Product", "Limit ₹" if sell_type == "Limit" else "Price"],
+                "Value": [
+                    ticker,
+                    "SELL",
+                    sell_type,
+                    str(qty),
+                    product,
+                    f"{limit_price:,.2f}" if limit_price else "Market",
+                ],
+            }
+        )
+
+        confirm = st.text_input("Type CONFIRM to enable SELL", key=f"{key_prefix}_sell_confirm")
+        ready = (
+            confirm.strip().upper() == "CONFIRM"
+            and bool(ticker)
+            and qty >= 1
+            and (sell_type == "Market" or (limit_price and limit_price > 0))
+        )
+
+        if st.button(
+            f"🔻 Place SELL ({qty} @ {sell_type})",
+            key=f"{key_prefix}_sell_send",
+            disabled=not ready,
+            use_container_width=True,
+        ):
+            ok, msg, _ = place_sell_order(
+                ticker,
+                qty,
+                order_type="limit" if sell_type == "Limit" else "market",
+                price=limit_price,
+                product=product,
+            )
+            if ok:
+                st.success(msg)
+                for k in ("bpos_positions", "bpos_orders", "bpos_trades", "bpos_holdings"):
+                    st.session_state.pop(k, None)
+                st.rerun()
+            else:
+                st.error(msg)
+        st.caption("Verify fill in **Today's Orders** / **Today's Trades** tabs after sending.")
+
+
+def _plan_for_breeze_code(stock_code: str, plans: dict[str, dict]) -> Optional[dict]:
+    code = (stock_code or "").strip().upper()
+    if not code:
+        return None
+    if code in plans:
+        return plans[code]
+    try:
+        from breeze_data import lookup_nse_symbol
+
+        sym = lookup_nse_symbol("NSE", code)
+        if sym:
+            return plans.get(sym) or plans.get(f"{sym}.NS")
+    except Exception:
+        pass
+    return None
+
+
+def _row_float(row: "pd.Series", *keys: str) -> Optional[float]:
+    for k in keys:
+        if k not in row.index:
+            continue
+        v = row[k]
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _prediction_is_exit(pred: str) -> bool:
+    p = (pred or "").lower()
+    return any(w in p for w in ("fake", "forced", "dangerous", "avoid", "lunch")) or "❌" in (pred or "")
+
+
+def _compute_exit_advice(
+    entry: Optional[float],
+    ltp: Optional[float],
+    stop: Optional[float],
+    target: Optional[float],
+    prediction: str,
+    session_pred: str,
+    strategy: str = "",
+) -> tuple[str, str, str, str]:
+    """Returns (max_profit_done, sell_now, why_sell, exit_note)."""
+    if entry is None or ltp is None or entry <= 0:
+        return "—", "—", "—", "No entry/LTP — refresh or run scan"
+
+    profit = ltp - entry
+    profit_pct = round(profit / entry * 100, 2)
+    risk = (entry - stop) if stop and entry > stop else None
+    at_target = bool(target and ltp >= target)
+    one_r = bool(risk and risk > 0 and profit >= risk)
+    one_five_r = bool(risk and risk > 0 and profit >= 1.5 * risk)
+    below_stop = bool(stop and ltp <= stop)
+
+    sess_exit = _prediction_is_exit(session_pred)
+    pred_exit = _prediction_is_exit(prediction)
+
+    if at_target:
+        max_done = "✅ Yes — at Target"
+    elif one_five_r:
+        max_done = "✅ Yes — ≥1.5× risk"
+    elif one_r:
+        max_done = "🟡 Partial — 1× risk hit"
+    elif profit > 0:
+        max_done = "No — profit, below plan"
+    else:
+        max_done = "No — loss / wait"
+
+    why = ""
+    if below_stop:
+        sell = "🔴 Sell now — stop zone"
+        why = (
+            f"LTP ₹{ltp:,.2f} is at/below scan Stop ₹{stop:,.2f} — "
+            "the intraday thesis is broken; exit to limit loss."
+        )
+    elif at_target and sess_exit:
+        sell = "🔴 Book all — Target + bad session"
+        why = (
+            f"LTP ₹{ltp:,.2f} reached scan Target ₹{target:,.2f} (planned profit). "
+            f"Session timing is unfavourable ({session_pred}) — "
+            "late/lunch/forced volume often reverses winners."
+        )
+    elif at_target:
+        sell = "🟡 Book ~50–70% — at Target"
+        why = (
+            f"LTP ₹{ltp:,.2f} is at/above scan Target ₹{target:,.2f} — "
+            "that is the planned reward from the screener; book most of the position "
+            "and trail a small runner if momentum continues."
+        )
+    elif one_r and (pred_exit or sess_exit):
+        sell = "🔴 Book profit — time/volume risk"
+        parts = [
+            f"Profit ₹{profit:,.2f} ≥ 1× risk (Entry ₹{entry:,.2f} − Stop ₹{stop:,.2f}) — "
+            "minimum planned reward is in hand."
+        ]
+        if pred_exit:
+            parts.append(f"Scan Prediction warns: {prediction[:80]}{'…' if len(prediction) > 80 else ''}.")
+        if sess_exit:
+            parts.append(f"NSE session: {session_pred}.")
+        why = " ".join(parts)
+    elif one_r:
+        sell = "🟡 Book ~50% · trail rest"
+        why = (
+            f"Profit ₹{profit:,.2f} hit **1× risk** (risk was ₹{risk:,.2f}) — "
+            f"Target ₹{target:,.2f} may still be ahead; lock ~50% and move stop to breakeven."
+        )
+    elif one_five_r:
+        sell = "🟡 Scale out — extended move"
+        why = (
+            f"Profit ≥ **1.5× risk** (₹{profit:,.2f} vs risk ₹{risk:,.2f}) — "
+            "move is extended; scale out to avoid giving back gains on a pullback."
+        )
+    elif profit > 0 and sess_exit:
+        sell = "🔴 Book profit — session exit"
+        why = (
+            f"In profit ({profit_pct:+.2f}%) but NSE session quality is poor ({session_pred}) — "
+            "thin/forced volume near lunch or close often erodes intraday gains."
+        )
+    elif profit > 0 and pred_exit:
+        sell = "🟡 Tighten — weak Prediction"
+        why = (
+            f"In profit ({profit_pct:+.2f}%) but this stock's scan Prediction is weak "
+            f"({prediction[:100]}{'…' if len(prediction) > 100 else ''}) — "
+            "volume/quality no longer supports holding for Target."
+        )
+    elif profit > 0:
+        sell = "🟢 Hold — not at Target yet"
+        tgt_txt = f"₹{target:,.2f}" if target else "—"
+        why = (
+            f"In profit ({profit_pct:+.2f}%) but LTP ₹{ltp:,.2f} is still below Target {tgt_txt} — "
+            "session timing OK; wait for Target or trail stop up, don't chase new size."
+        )
+    else:
+        sell = "🟢 Hold / wait"
+        if target and stop:
+            why = (
+                f"LTP ₹{ltp:,.2f} below entry ₹{entry:,.2f} or still building — "
+                f"hold while above Stop ₹{stop:,.2f}; exit if Stop breaks. Target ₹{target:,.2f}."
+            )
+        else:
+            why = "No scan Target/Stop linked — run ICICI Breeze screener, then refresh this page."
+
+    note = f"P/L {profit_pct:+.2f}%"
+    if target and target > 0:
+        note += f" · vs Target {(ltp / target - 1) * 100:+.1f}%"
+    if strategy:
+        note += f" · {STRATEGY_LABEL.get(strategy, strategy)}"
+    return max_done, sell, why, note
+
+
+def _enrich_breeze_portfolio_df(df: "pd.DataFrame", *, session_pred: str) -> "pd.DataFrame":
+    """Add Max profit done? / Sell now? using last scan Entry/Stop/Target + session volume."""
+    if df.empty or "stock_code" not in df.columns:
+        return df
+    plans = _scan_plans_lookup()
+    out_rows: list[dict] = []
+    for _, row in df.iterrows():
+        r = dict(row)
+        plan = _plan_for_breeze_code(str(r.get("stock_code", "")), plans)
+        entry = _row_float(row, "average_price", "average_cost", "price")
+        ltp = _row_float(row, "ltp", "current_market_price")
+        if plan:
+            r["Scan Entry"] = plan.get("entry")
+            r["Scan Stop"] = plan.get("stop")
+            r["Scan Target"] = plan.get("target")
+            r["Exit plan"] = plan.get("exit_hint", "")
+            pred = plan.get("prediction", "")
+            strat = plan.get("strategy", "")
+        else:
+            r["Scan Entry"] = None
+            r["Scan Stop"] = None
+            r["Scan Target"] = None
+            r["Exit plan"] = "Run ICICI Breeze scan to link Target/Stop"
+            pred, strat = "", ""
+        scan_entry = plan.get("entry") if plan else None
+        scan_stop = plan.get("stop") if plan else None
+        scan_target = plan.get("target") if plan else None
+        max_done, sell, why, note = _compute_exit_advice(
+            entry or scan_entry,
+            ltp,
+            scan_stop,
+            scan_target,
+            pred,
+            session_pred,
+            strat,
+        )
+        r["Max profit done?"] = max_done
+        r["Sell now?"] = sell
+        r["Why sell?"] = why
+        r["Exit note"] = note
+        r["Session timing"] = session_pred
+        r["Ticker (.NS)"] = _breeze_code_to_ticker(str(r.get("stock_code", "")))
+        out_rows.append(r)
+    out = pd.DataFrame(out_rows)
+    prefer = (
+        "stock_code",
+        "Ticker (.NS)",
+        "action",
+        "quantity",
+        "average_price",
+        "average_cost",
+        "ltp",
+        "pnl",
+        "Max profit done?",
+        "Sell now?",
+        "Why sell?",
+        "Scan Target",
+        "Scan Stop",
+        "Scan Entry",
+        "Exit plan",
+        "Exit note",
+        "Session timing",
+        "product_type",
+        "order_type",
+        "status",
+        "order_datetime",
+        "order_id",
+        "trade_date",
+        "current_market_price",
+    )
+    ordered = [c for c in prefer if c in out.columns]
+    rest = [c for c in out.columns if c not in ordered]
+    return out[ordered + rest]
+
+
 def render_breeze_positions_page() -> None:
     """Show ICICI live positions, today's orders, and executed trades (purchased tickers)."""
     safe_set_page_config(page_title="ICICI Positions & Orders | StockSight", page_icon="📒", layout="wide")
@@ -1744,7 +2171,7 @@ def render_breeze_positions_page() -> None:
         "Traders who placed orders via the **ICICI Breeze Screener** and want to see open "
         "positions, today's orders, and executed trades in one place.",
         "Reads live data from your ICICI account via Breeze (positions, order book, trade book). "
-        "**Read-only view — no orders are placed here.**",
+        "You can also place **SELL** orders from the **Sell from screen** panel (with CONFIRM).",
     )
 
     try:
@@ -1779,6 +2206,17 @@ def render_breeze_positions_page() -> None:
     trd_rows, trd_err = st.session_state["bpos_trades"]
     hld_rows, hld_err = st.session_state["bpos_holdings"]
 
+    session_pred = compute_volume_time_prediction("NSE").prediction
+    has_scan = bool(_scan_plans_lookup())
+    st.info(
+        f"**Session timing (NSE):** {session_pred}  \n"
+        + (
+            "Linked to your last **ICICI Breeze / Intraday** scan (Entry/Stop/Target)."
+            if has_scan
+            else "Run **ICICI Breeze Screener** today so **Scan Target/Stop** and sell hints can populate."
+        )
+    )
+
     tab_pos, tab_ord, tab_trd, tab_hld = st.tabs(
         [
             f"📈 Open Positions ({len(pos_rows)})",
@@ -1788,21 +2226,44 @@ def render_breeze_positions_page() -> None:
         ]
     )
 
+    sell_candidates = _position_sell_candidates(pos_rows)
+
     with tab_pos:
-        st.caption("Live intraday / open positions on your ICICI account.")
+        st.caption(
+            "Live intraday positions · **Max profit done?**, **Sell now?**, and **Why sell?** "
+            "use your last scan Target/Stop vs current LTP."
+        )
         if pos_err:
             st.error(f"Could not load positions: {pos_err}")
         df = _breeze_rows_to_df(
             pos_rows,
             ("stock_code", "action", "quantity", "average_price", "ltp", "product_type", "pnl"),
         )
+        pos_enriched = pd.DataFrame()
+        hint: Optional[dict] = None
         if df.empty:
             st.info("No open positions right now.")
         else:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            pos_enriched = _enrich_breeze_portfolio_df(df, session_pred=session_pred)
+            st.caption("💡 Click a row to pre-fill **Sell from screen** with that position's signals.")
+            tbl = st.dataframe(
+                pos_enriched,
+                use_container_width=True,
+                hide_index=True,
+                selection_mode="single-row",
+                on_select="rerun",
+                key="bpos_pos_table",
+            )
+            try:
+                sel_rows = tbl.selection.rows  # type: ignore[union-attr]
+                if sel_rows:
+                    hint = pos_enriched.iloc[int(sel_rows[0])].to_dict()
+            except Exception:
+                hint = None
+        _render_breeze_sell_panel(sell_candidates, key_prefix="bpos", hint_row=hint)
 
     with tab_ord:
-        st.caption("Orders placed today (any status — open, executed, cancelled, rejected).")
+        st.caption("Today's orders — sell hints on filled BUY rows with a linked scan plan.")
         if ord_err:
             st.error(f"Could not load orders: {ord_err}")
         df = _breeze_rows_to_df(
@@ -1813,10 +2274,10 @@ def render_breeze_positions_page() -> None:
         if df.empty:
             st.info("No orders found for today.")
         else:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(_enrich_breeze_portfolio_df(df, session_pred=session_pred), use_container_width=True, hide_index=True)
 
     with tab_trd:
-        st.caption("Executed (filled) trades today — these are your actual purchases/sales.")
+        st.caption("Executed trades today — best view for open intraday buys and exit timing.")
         if trd_err:
             st.error(f"Could not load trades: {trd_err}")
         df = _breeze_rows_to_df(
@@ -1827,10 +2288,10 @@ def render_breeze_positions_page() -> None:
         if df.empty:
             st.info("No executed trades for today.")
         else:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(_enrich_breeze_portfolio_df(df, session_pred=session_pred), use_container_width=True, hide_index=True)
 
     with tab_hld:
-        st.caption("Delivery / demat holdings (multi-day positions).")
+        st.caption("Delivery holdings — exit hints apply if the symbol was in today's scan.")
         if hld_err:
             st.error(f"Could not load holdings: {hld_err}")
         df = _breeze_rows_to_df(
@@ -1840,7 +2301,26 @@ def render_breeze_positions_page() -> None:
         if df.empty:
             st.info("No holdings found.")
         else:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(_enrich_breeze_portfolio_df(df, session_pred=session_pred), use_container_width=True, hide_index=True)
+
+    with st.expander("ℹ How Max profit done? / Sell now? are calculated", expanded=False):
+        st.markdown(
+            """
+| Column | Meaning |
+|--------|---------|
+| **Max profit done?** | **✅ Yes** if LTP ≥ scan **Target**, or profit ≥ **1.5× risk** (Entry−Stop), or **🟡 Partial** at 1× risk. |
+| **Sell now?** | Combines Target/risk, scan **Prediction**, and **session timing** (lunch/close/forced volume). |
+| **Why sell?** | Plain-language reason for the **Sell now?** signal (prices, Target, Stop, session). |
+| **Scan Target / Stop / Entry** | From your last **ICICI Breeze** or **Intraday** scan (same session). |
+| **Exit plan** | Same one-line rule as the screener results table. |
+
+**🔴 Sell now** ≈ book profit or exit · **🟡** ≈ scale out (often 50% at Target) · **🟢 Hold** ≈ plan not complete yet.
+
+*Educational signals only — confirm on your broker before placing sells.*
+
+Use **⚠️ Sell from screen** below the positions table to send a Market or Limit **SELL** (after CONFIRM).
+"""
+        )
 
     st.caption(
         "Read-only snapshot from ICICI Breeze. Click **Refresh** to re-fetch. "
