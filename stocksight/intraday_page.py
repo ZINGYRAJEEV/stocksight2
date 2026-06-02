@@ -33,10 +33,23 @@ from intraday import (
     compute_volume_time_prediction,
     is_us_early_session,
     market_session_window,
+    benchmark_intraday_data_sources,
     resolve_universe,
     scan_gaps,
     scan_intraday,
 )
+try:
+    from scan_progress import (
+        ScanLiveState,
+        make_streamlit_scan_callback,
+        render_live_scan_status,
+    )
+except ImportError:
+    from .scan_progress import (  # type: ignore[no-redef]
+        ScanLiveState,
+        make_streamlit_scan_callback,
+        render_live_scan_status,
+    )
 from market_sentiment import add_market_sentiment_columns
 try:
     from quality_gate import (
@@ -837,6 +850,13 @@ def _render_diagnostic_panel(stats: IntradayScanStats, *, key_prefix: str) -> No
     c1.metric("Scanned", stats.total_scanned)
     c2.metric("Matched (tickers)", passed)
     c3.metric("Result rows", stats.result_rows)
+    elapsed = getattr(stats, "scan_elapsed_sec", 0.0) or 0.0
+    avg_t = getattr(stats, "avg_sec_per_ticker", 0.0) or 0.0
+    if elapsed > 0:
+        st.caption(
+            f"⏱ Scan took **{elapsed:.1f}s** total "
+            f"(~**{avg_t:.2f}s** per ticker including filters & sector lookup)."
+        )
     data_note = []
     api_label = {"auto": "Auto", "breeze": "Breeze", "yahoo": "Yahoo"}.get(
         getattr(stats, "data_source", "auto") or "auto", "—"
@@ -1170,6 +1190,76 @@ def _pick_breeze_data_source(key: str) -> str:
     return pick
 
 
+def _render_api_speed_benchmark(key: str, raw_tickers: list[str]) -> None:
+    """Compare ICICI Breeze vs Yahoo fetch speed on a small sample."""
+    n_avail = len(raw_tickers)
+    if n_avail < 1:
+        return
+    with st.expander("⚡ API speed test (Breeze vs Yahoo)", expanded=False):
+        st.caption(
+            "Times **one intraday + daily fetch per ticker** (no strategy logic). "
+            "Use this to see which API is faster for your session and universe size."
+        )
+        sample_n = st.slider(
+            "Sample size",
+            min_value=3,
+            max_value=min(25, n_avail),
+            value=min(10, n_avail),
+            key=f"{key}_bench_n",
+        )
+        run_bench = st.button("Run speed test", key=f"{key}_bench_run")
+        if run_bench:
+            bench_prog = st.progress(0, text="Starting benchmark…")
+            bench_detail = st.empty()
+
+            def _bench_cb(i: int, t: int, s: str, **kw: object) -> None:
+                msg = str(kw.get("message") or s)
+                bench_prog.progress(int(i / max(t, 1) * 100), text=f"{msg} ({i}/{t})")
+                bench_detail.caption(msg)
+
+            report = benchmark_intraday_data_sources(
+                raw_tickers,
+                max_tickers=sample_n,
+                progress_cb=_bench_cb,
+            )
+            bench_prog.empty()
+            bench_detail.empty()
+            st.session_state[f"{key}_bench_report"] = report
+
+        report = st.session_state.get(f"{key}_bench_report")
+        if not report:
+            return
+        tickers = report.get("tickers") or []
+        b = report.get("breeze") or {}
+        y = report.get("yahoo") or {}
+        winner = report.get("winner", "none")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Breeze avg / ticker", f"{b.get('avg_sec', 0):.2f}s")
+        c2.metric("Yahoo avg / ticker", f"{y.get('avg_sec', 0):.2f}s")
+        win_label = {"breeze": "ICICI Breeze", "yahoo": "Yahoo", "tie": "Roughly equal", "none": "—"}.get(
+            str(winner), str(winner)
+        )
+        c3.metric("Faster on sample", win_label)
+        rows = []
+        b_times = b.get("times_sec") or []
+        y_times = b.get("times_sec") or []
+        for i, t in enumerate(tickers):
+            rows.append(
+                {
+                    "Ticker": t,
+                    "Breeze (s)": round(b_times[i], 3) if i < len(b_times) else None,
+                    "Yahoo (s)": round(y_times[i], 3) if i < len(y_times) else None,
+                }
+            )
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption(
+            f"OK with data: Breeze **{b.get('ok', 0)}/{b.get('n', 0)}** · "
+            f"Yahoo **{y.get('ok', 0)}/{y.get('n', 0)}**. "
+            "Full scans also spend time on filters, sector lookup, and a small per-ticker delay."
+        )
+
+
 def _apply_scan_row_to_trade(key: str, row: "pd.Series") -> None:
     """Push a scan-results row into the Live Trade form (session state)."""
     raw = str(row.get("Raw", "") or "").strip()
@@ -1443,8 +1533,7 @@ def render_intraday_screener_page(
             "is valid, otherwise Yahoo. Same 6-strategy engine + 7-rule ranking as the Intraday Screener. "
             "**Educational only — confirm risk before trading.**",
         )
-    else:
-        data_source = "auto"
+    data_source = "auto"
     if not breeze_mode:
         st.markdown("### 📡 Intraday Screener — 6 strategies, NSE or US")
         page_audience_note(
@@ -1511,6 +1600,15 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
     flt = _filters_panel(key, market)
     _news_confirmation_controls()
 
+    if breeze_mode:
+        _render_api_speed_benchmark(key, raw_tickers)
+    elif market == "NSE":
+        data_source = _pick_breeze_data_source(key)
+        _render_api_speed_benchmark(key, raw_tickers)
+    else:
+        data_source = "yahoo"
+        st.caption("US scans use **Yahoo Finance** for intraday bars (ICICI Breeze is NSE/BSE only).")
+
     run = st.button("▶  RUN INTRADAY SCAN", use_container_width=True, key=f"{key}_run")
     if market == "US":
         st.caption(
@@ -1532,14 +1630,14 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
         if not strategies_picked:
             st.warning("Pick at least one strategy.")
             return
+        scan_api = data_source if market == "NSE" or breeze_mode else "yahoo"
+        st.session_state[f"{key}_data_source"] = scan_api
+
+        st.markdown("#### Live scan status")
+        live_detail = st.empty()
         prog = st.progress(0, text="Initialising…")
-
-        def cb(i: int, t: int, s: str) -> None:
-            prog.progress(int(i / max(t, 1) * 100), text=f"Scanning {s}… ({i}/{t})")
-
-        scan_api = data_source if breeze_mode else "auto"
-        if breeze_mode:
-            st.session_state[f"{key}_data_source"] = scan_api
+        live_state = ScanLiveState(total=len(raw_tickers), data_source=scan_api)
+        cb = make_streamlit_scan_callback(prog, live_detail, state=live_state)
 
         results, scan_stats = scan_intraday(
             raw_tickers,
@@ -1549,7 +1647,17 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
             market=market,
             data_source=scan_api,
         )
-        prog.empty()
+        prog.progress(100, text="Scan complete")
+        live_state.tick(
+            len(raw_tickers),
+            len(raw_tickers),
+            "",
+            stage="done",
+            message=f"Finished in {getattr(scan_stats, 'scan_elapsed_sec', 0):.1f}s",
+            matched=scan_stats.tickers_matched,
+            no_data=scan_stats.no_data,
+        )
+        render_live_scan_status(live_state, detail_slot=live_detail)
         st.session_state[f"{key}_results"] = results
         st.session_state[f"{key}_stats"] = scan_stats
         st.session_state[f"{key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")
@@ -1687,8 +1795,10 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
 
     overlap_note = " · 🎯 Gap-Scanner overlap only" if overlap_on else ""
     ds_note = ""
-    if breeze_mode:
-        ds_key = st.session_state.get(f"{key}_data_source", getattr(scan_stats, "data_source", "auto"))
+    ds_key = st.session_state.get(
+        f"{key}_data_source", getattr(scan_stats, "data_source", "auto") if scan_stats else "auto"
+    )
+    if scan_market == "NSE" or breeze_mode:
         ds_note = f" · Data API: **{_DATA_API_LABELS.get(ds_key, ds_key)}**"
     st.success(
         f"**{len(results)}** match(es) across {last_uni}{overlap_note}{ds_note}"

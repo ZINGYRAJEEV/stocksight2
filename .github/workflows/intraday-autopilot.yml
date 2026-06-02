@@ -15,6 +15,9 @@ on:
       phase:
         description: "Optional force phase (square_off, orb, etc.)"
         default: ""
+      data_source_nse:
+        description: "NSE bars: auto | breeze | yahoo (CI default yahoo)"
+        default: "yahoo"
   schedule:
     - cron: "20 3 * * 1-5"
     - cron: "5 4 * * 1-5"
@@ -45,6 +48,7 @@ jobs:
           python scripts/run_autopilot.py --once \
             --mode "${{ github.event.inputs.mode || 'paper' }}" \
             --markets "${{ github.event.inputs.markets || 'NSE' }}" \
+            --data-source-nse "${{ github.event.inputs.data_source_nse || 'yahoo' }}" \
             $EXTRA
       - uses: actions/upload-artifact@v4
         if: always()

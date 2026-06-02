@@ -34,6 +34,13 @@ def main() -> int:
     p.add_argument("--kill-switch-on", action="store_true")
     p.add_argument("--kill-switch-off", action="store_true")
     p.add_argument("--min-gate", type=int, default=58)
+    p.add_argument(
+        "--data-source-nse",
+        choices=("auto", "breeze", "yahoo"),
+        default="auto",
+        help="NSE bar API: auto (Breeze if connected), breeze, or yahoo",
+    )
+    p.add_argument("--max-tickers", type=int, default=60)
     args = p.parse_args()
 
     if args.kill_switch_on:
@@ -47,6 +54,8 @@ def main() -> int:
         mode=args.mode,
         markets=tuple(m.strip().upper() for m in args.markets.split(",") if m.strip()),
         min_gate_score=args.min_gate,
+        data_source_nse=args.data_source_nse,
+        max_intraday_tickers=max(10, args.max_tickers),
     )
     phase = args.phase.strip() or None
 

@@ -27,6 +27,11 @@ A comprehensive stock analysis platform featuring **6 trading strategies**, real
 - **Interactive charts** and visual indicators
 - **Direct links** to Yahoo Finance, Moneycontrol, TradingView
 
+### 🤖 **Intraday Autopilot** (Algo Strategy)
+Scheduled **NSE + US** intraday playbook: gap scan → opening → ORB → VWAP → square-off. Supports **dry-run**, **paper**, and **live** (ICICI Breeze) modes, **Yahoo or Breeze** data for NSE scans, live progress in the UI, and continuous ticks (browser or CLI).
+
+**Full user guide:** [docs/INTRADAY_AUTOPILOT.md](../docs/INTRADAY_AUTOPILOT.md)
+
 ## 🚀 Quick Start
 
 ### Run Locally

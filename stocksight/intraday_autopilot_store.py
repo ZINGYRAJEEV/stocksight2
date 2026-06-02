@@ -27,7 +27,20 @@ def _empty_state() -> dict[str, Any]:
         "log": [],
         "last_tick_at": None,
         "last_phase": {"NSE": "", "US": ""},
+        "runtime": {},
     }
+
+
+def set_runtime(state: dict[str, Any], **fields: Any) -> None:
+    """Live progress for UI / external monitors (updated during scans)."""
+    rt = dict(state.get("runtime") or {})
+    rt.update(fields)
+    rt["updated_at"] = datetime.now(timezone.utc).isoformat()
+    state["runtime"] = rt
+
+
+def clear_runtime(state: dict[str, Any]) -> None:
+    state["runtime"] = {}
 
 
 def load_state() -> dict[str, Any]:

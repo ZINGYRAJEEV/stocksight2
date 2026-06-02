@@ -290,10 +290,91 @@ class IntradayScanStats:
     bars_from_breeze: int = 0
     bars_from_yahoo: int = 0
     data_source: str = "auto"  # auto | breeze | yahoo — set per scan from UI
+    scan_elapsed_sec: float = 0.0
+    avg_sec_per_ticker: float = 0.0
 
 
 # Intraday/daily fetch preference for the current scan (``auto`` | ``breeze`` | ``yahoo``).
 DATA_SOURCE_OPTIONS = ("auto", "breeze", "yahoo")
+
+
+def _notify_progress(
+    progress_cb: Optional[Callable[..., None]],
+    index: int,
+    total: int,
+    ticker: str,
+    **extra: Any,
+) -> None:
+    """Call progress_cb; supports legacy 3-arg callbacks and extended kwargs."""
+    if not progress_cb:
+        return
+    try:
+        progress_cb(index, total, ticker, **extra)
+    except TypeError:
+        progress_cb(index, total, ticker)
+
+
+def _bar_source_label(bar_period: str) -> str:
+    if str(bar_period).startswith("breeze"):
+        return "Breeze"
+    if bar_period:
+        return "Yahoo"
+    return ""
+
+
+def benchmark_intraday_data_sources(
+    raw_tickers: list[str],
+    *,
+    max_tickers: int = 10,
+    progress_cb: Optional[Callable[..., None]] = None,
+) -> dict[str, Any]:
+    """Time per-ticker data fetch for Breeze vs Yahoo (same tickers, no strategy eval)."""
+    sample = [t for t in raw_tickers if t][: max(1, int(max_tickers))]
+    out: dict[str, Any] = {"tickers": sample, "breeze": {}, "yahoo": {}}
+    for ds in ("breeze", "yahoo"):
+        times: list[float] = []
+        ok = 0
+        for i, raw in enumerate(sample):
+            _notify_progress(
+                progress_cb,
+                i + 1,
+                len(sample) * 2,
+                raw,
+                stage="benchmark",
+                message=f"Benchmark {ds}: {raw}",
+                data_source=ds,
+            )
+            t0 = time.perf_counter()
+            bars, _iv, _per = _fetch_intraday_bars(raw, data_source=ds)
+            daily = _fetch_daily(raw, "1y", data_source=ds)
+            elapsed = time.perf_counter() - t0
+            times.append(elapsed)
+            if bars is not None and not bars.empty and daily is not None and not daily.empty:
+                ok += 1
+        total = sum(times)
+        out[ds] = {
+            "times_sec": times,
+            "total_sec": round(total, 3),
+            "avg_sec": round(total / len(times), 3) if times else 0.0,
+            "ok": ok,
+            "n": len(times),
+        }
+    b_avg = float(out["breeze"].get("avg_sec") or 0)
+    y_avg = float(out["yahoo"].get("avg_sec") or 0)
+    if b_avg > 0 and y_avg > 0:
+        if abs(b_avg - y_avg) < 0.05:
+            out["winner"] = "tie"
+        elif b_avg < y_avg:
+            out["winner"] = "breeze"
+        else:
+            out["winner"] = "yahoo"
+    elif b_avg > 0:
+        out["winner"] = "breeze"
+    elif y_avg > 0:
+        out["winner"] = "yahoo"
+    else:
+        out["winner"] = "none"
+    return out
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1362,21 +1443,58 @@ def scan_intraday(
     total = len(raw_tickers)
     session_pred = compute_volume_time_prediction(market)
     need_ath = "ATH" in strategies
+    scan_t0 = time.perf_counter()
 
     for i, raw in enumerate(raw_tickers):
-        if progress_cb:
-            progress_cb(i + 1, total, raw)
+        _notify_progress(
+            progress_cb,
+            i + 1,
+            total,
+            raw,
+            stage="fetch",
+            message=f"Loading intraday + daily ({ds})…",
+            data_source=ds,
+            matched=stats.tickers_matched,
+            no_data=stats.no_data,
+        )
+        t0 = time.perf_counter()
         ctx = _build_context(raw, need_ath=need_ath, data_source=ds)
+        fetch_ms = (time.perf_counter() - t0) * 1000.0
         if ctx is None:
             stats.no_data += 1
+            _notify_progress(
+                progress_cb,
+                i + 1,
+                total,
+                raw,
+                stage="done",
+                last_ms=fetch_ms,
+                last_outcome="no_data",
+                matched=stats.tickers_matched,
+                no_data=stats.no_data,
+            )
             continue
 
         interval = ctx.get("bar_interval") or ""
         bar_period = str(ctx.get("bar_period") or "")
+        bar_src = _bar_source_label(bar_period)
         if bar_period.startswith("breeze"):
             stats.bars_from_breeze += 1
         else:
             stats.bars_from_yahoo += 1
+        _notify_progress(
+            progress_cb,
+            i + 1,
+            total,
+            raw,
+            stage="evaluate",
+            message="Applying filters & strategies…",
+            data_source=ds,
+            last_ms=fetch_ms,
+            last_bar_source=bar_src,
+            matched=stats.tickers_matched,
+            no_data=stats.no_data,
+        )
         if interval == "5m":
             stats.bars_5m += 1
         elif interval == "15m":
@@ -1387,26 +1505,54 @@ def scan_intraday(
         uni_fail = _universal_fail_reason(ctx, flt)
         if uni_fail == "price":
             stats.failed_price += 1
+            _notify_progress(
+                progress_cb, i + 1, total, raw, stage="done",
+                last_outcome="filter:price", last_bar_source=bar_src, matched=stats.tickers_matched,
+            )
             continue
         if uni_fail == "avg_volume":
             stats.failed_avg_volume += 1
+            _notify_progress(
+                progress_cb, i + 1, total, raw, stage="done",
+                last_outcome="filter:volume", last_bar_source=bar_src, matched=stats.tickers_matched,
+            )
             continue
 
         sig_fail = _signal_fail_reason(ctx, flt)
         if sig_fail == "no_rsi":
             stats.failed_no_rsi += 1
+            _notify_progress(
+                progress_cb, i + 1, total, raw, stage="done",
+                last_outcome="filter:no_rsi", last_bar_source=bar_src, matched=stats.tickers_matched,
+            )
             continue
         if sig_fail == "no_volume_ratio":
             stats.failed_no_volume_ratio += 1
+            _notify_progress(
+                progress_cb, i + 1, total, raw, stage="done",
+                last_outcome="filter:no_vol_ratio", last_bar_source=bar_src, matched=stats.tickers_matched,
+            )
             continue
         if sig_fail == "volume_ratio":
             stats.failed_volume_ratio += 1
+            _notify_progress(
+                progress_cb, i + 1, total, raw, stage="done",
+                last_outcome="filter:vol_ratio", last_bar_source=bar_src, matched=stats.tickers_matched,
+            )
             continue
         if sig_fail == "rsi":
             stats.failed_rsi += 1
+            _notify_progress(
+                progress_cb, i + 1, total, raw, stage="done",
+                last_outcome="filter:rsi", last_bar_source=bar_src, matched=stats.tickers_matched,
+            )
             continue
         if sig_fail == "min_change":
             stats.failed_min_change += 1
+            _notify_progress(
+                progress_cb, i + 1, total, raw, stage="done",
+                last_outcome="filter:min_change", last_bar_source=bar_src, matched=stats.tickers_matched,
+            )
             continue
 
         sector = "—"
@@ -1418,6 +1564,10 @@ def scan_intraday(
         reject_reasons = _hard_reject_reasons(ctx)
         if reject_reasons:
             stats.failed_hard_reject += 1
+            _notify_progress(
+                progress_cb, i + 1, total, raw, stage="done",
+                last_outcome="reject", last_bar_source=bar_src, matched=stats.tickers_matched,
+            )
             continue
 
         matched_notes: dict[str, str] = {}
@@ -1450,9 +1600,25 @@ def scan_intraday(
         else:
             stats.no_strategy_match += 1
 
+        _notify_progress(
+            progress_cb,
+            i + 1,
+            total,
+            raw,
+            stage="done",
+            last_outcome="matched" if matched_this else "no_strategy",
+            last_bar_source=bar_src,
+            matched=stats.tickers_matched,
+            no_data=stats.no_data,
+        )
+
         if info_delay_sec > 0:
             time.sleep(info_delay_sec)
 
+    stats.scan_elapsed_sec = round(time.perf_counter() - scan_t0, 2)
+    stats.avg_sec_per_ticker = (
+        round(stats.scan_elapsed_sec / total, 3) if total else 0.0
+    )
     stats.result_rows = len(results)
     results.sort(
         key=lambda r: (
@@ -1472,18 +1638,23 @@ def scan_gaps(
     raw_tickers: list[str],
     *,
     min_gap_abs_pct: float = 0.5,
-    progress_cb: Optional[Callable[[int, int, str], None]] = None,
+    progress_cb: Optional[Callable[..., None]] = None,
     info_delay_sec: float = 0.05,
+    data_source: str = "auto",
 ) -> list[GapResult]:
     """Identify stocks with a meaningful gap-up / gap-down vs prev close."""
     out: list[GapResult] = []
     total = len(raw_tickers)
+    ds = (data_source or "auto").lower()
+    if ds not in DATA_SOURCE_OPTIONS:
+        ds = "auto"
     for i, raw in enumerate(raw_tickers):
-        if progress_cb:
-            progress_cb(i + 1, total, raw)
+        _notify_progress(
+            progress_cb, i + 1, total, raw, stage="gap_scan", data_source=ds,
+        )
         try:
-            bars, _interval, _period = _fetch_intraday_bars(raw)
-            daily = _fetch_daily(raw, "10d")
+            bars, _interval, _period = _fetch_intraday_bars(raw, data_source=ds)
+            daily = _fetch_daily(raw, "10d", data_source=ds)
             if bars is None or bars.empty or daily is None or daily.empty:
                 continue
             daily_close = hist_series(daily, "Close").astype(float).dropna()

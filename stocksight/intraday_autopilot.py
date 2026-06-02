@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from intraday import (
+    DATA_SOURCE_OPTIONS,
     STRATEGIES,
     STRATEGY_LABEL,
     GapResult,
@@ -26,7 +27,7 @@ from intraday import (
     scan_intraday,
     compute_market_mood as _compute_mood_from_gaps,
 )
-from intraday_autopilot_store import append_log, load_state, save_state
+from intraday_autopilot_store import append_log, clear_runtime, load_state, save_state, set_runtime
 
 
 @dataclass
@@ -46,6 +47,39 @@ class AutopilotConfig:
     priority_watchlist_size: int = 5
     min_rr: float = 1.2
     live_orders_enabled: bool = False
+    # NSE: auto (Breeze if connected) | breeze | yahoo — US always uses Yahoo for bars
+    data_source_nse: str = "auto"
+    data_source_us: str = "yahoo"
+
+
+_DATA_API_HINTS = {
+    "auto": "Breeze when session is valid, else Yahoo (best for live NSE orders)",
+    "breeze": "ICICI Breeze only — aligns with broker; slower on large universes",
+    "yahoo": "Yahoo only — usually faster scans; paper/dry-run friendly",
+}
+
+
+def resolve_autopilot_data_source(market: str, cfg: AutopilotConfig) -> str:
+    """Pick intraday bar API per market and trading mode."""
+    mkt = market.upper()
+    if mkt == "US":
+        return "yahoo"
+    ds = (cfg.data_source_nse or "auto").lower()
+    if ds not in DATA_SOURCE_OPTIONS:
+        ds = "auto"
+    if cfg.mode == "live" and ds == "yahoo":
+        # Live MIS orders need Breeze; still allow Yahoo for signal-only testing
+        return "yahoo"
+    return ds
+
+
+def data_source_recommendation(cfg: AutopilotConfig) -> str:
+    """Short UI hint for which API to pick."""
+    if cfg.mode == "live":
+        return "Live NSE orders: use **Auto** or **Breeze** so prices match ICICI Direct."
+    if (cfg.data_source_nse or "auto") == "yahoo":
+        return "Yahoo: faster scans for paper/dry-run testing."
+    return _DATA_API_HINTS.get(cfg.data_source_nse, "")
 
 
 @dataclass
@@ -305,13 +339,56 @@ def _square_off_market(market: str, cfg: AutopilotConfig) -> list[str]:
     return ["DRY-RUN square-off (no positions closed)"]
 
 
+def _autopilot_scan_progress(
+    state: dict[str, Any],
+    market: str,
+    phase: PhaseSpec,
+    data_source: str,
+    progress_cb: Optional[Callable[..., None]],
+    *,
+    persist_runtime: bool = True,
+) -> Callable[..., None]:
+    """Bridge scan_intraday progress into autopilot state + optional UI callback."""
+
+    _save_every = 5
+
+    def cb(index: int, total: int, ticker: str, **extra: Any) -> None:
+        set_runtime(
+            state,
+            status="scanning",
+            market=market,
+            phase_id=phase.id,
+            phase_label=phase.label,
+            data_source=data_source,
+            index=index,
+            total=total,
+            ticker=ticker,
+            stage=str(extra.get("stage") or ""),
+            message=str(extra.get("message") or ""),
+            last_outcome=str(extra.get("last_outcome") or ""),
+            last_bar_source=str(extra.get("last_bar_source") or ""),
+            matched=extra.get("matched"),
+            no_data=extra.get("no_data"),
+        )
+        if persist_runtime and ticker and index > 0 and (index % _save_every == 0 or index == total):
+            save_state(state)
+        if progress_cb:
+            try:
+                progress_cb(index, total, ticker, **extra)
+            except TypeError:
+                progress_cb(f"{market} · {phase.label} · {ticker} ({index}/{total})")
+
+    return cb
+
+
 def run_market_tick(
     market: str,
     cfg: AutopilotConfig,
     state: dict[str, Any],
     *,
     phase_override: Optional[str] = None,
-    progress_cb: Optional[Callable[[str], None]] = None,
+    progress_cb: Optional[Callable[..., None]] = None,
+    persist_runtime: bool = True,
 ) -> dict[str, Any]:
     """One autopilot cycle for a single market. Updates and saves state."""
     mkt = market.upper()
@@ -327,14 +404,46 @@ def run_market_tick(
     uni = cfg.universe_us if mkt == "US" else cfg.universe_nse
     tickers = resolve_universe(uni, mkt)[: cfg.max_intraday_tickers]
 
+    ds = resolve_autopilot_data_source(mkt, cfg)
+    if persist_runtime:
+        set_runtime(
+            state,
+            status="phase_start",
+            market=mkt,
+            phase_id=phase.id,
+            phase_label=phase.label,
+            data_source=ds,
+            mode=cfg.mode,
+        )
+        save_state(state)
     if progress_cb:
-        progress_cb(f"{mkt} · {phase.label}")
+        try:
+            progress_cb(0, 1, "", stage="phase", message=f"{mkt} · {phase.label}", data_source=ds)
+        except TypeError:
+            progress_cb(f"{mkt} · {phase.label}")
 
-    tick_out: dict[str, Any] = {"market": mkt, "phase": phase.id, "phase_label": phase.label}
+    tick_out: dict[str, Any] = {
+        "market": mkt,
+        "phase": phase.id,
+        "phase_label": phase.label,
+        "data_source": ds,
+    }
 
     # Pre-open / gap / mood
     if phase.id in ("pre_open", "gap_scan", "mood_shortlist"):
-        gaps = scan_gaps(tickers, min_gap_abs_pct=cfg.gap_min_pct)
+        if persist_runtime:
+            set_runtime(state, status="gap_scan", market=mkt, phase_id=phase.id, data_source=ds)
+            save_state(state)
+        gaps = scan_gaps(
+            tickers,
+            min_gap_abs_pct=cfg.gap_min_pct,
+            data_source=ds,
+            progress_cb=_autopilot_scan_progress(
+                state, mkt, phase, ds, progress_cb, persist_runtime=persist_runtime,
+            )
+            if persist_runtime
+            else progress_cb,
+        )
         reg, note = regime_from_gaps(gaps)
         mstate["regime"] = reg
         mstate["regime_note"] = note
@@ -385,13 +494,31 @@ def run_market_tick(
     watch = mstate.get("priority_watchlist") or []
     scan_list = list(dict.fromkeys(watch + tickers))[: cfg.max_intraday_tickers]
 
+    if persist_runtime:
+        set_runtime(
+            state,
+            status="intraday_scan",
+            market=mkt,
+            phase_id=phase.id,
+            strategies=",".join(strats),
+            data_source=ds,
+            scan_count=len(scan_list),
+        )
+        save_state(state)
+
     results, stats = scan_intraday(
         scan_list,
         strats,
         IntradayFilters(),
         market=mkt,
-        data_source="yahoo" if cfg.mode != "live" else "auto",
+        data_source=ds,
+        progress_cb=_autopilot_scan_progress(
+            state, mkt, phase, ds, progress_cb, persist_runtime=persist_runtime,
+        ),
     )
+    tick_out["scan_elapsed_sec"] = getattr(stats, "scan_elapsed_sec", 0)
+    tick_out["bars_from_breeze"] = stats.bars_from_breeze
+    tick_out["bars_from_yahoo"] = stats.bars_from_yahoo
     conf = _confluence_map(results)
     regime = mstate.get("regime", "neutral")
     ranked = _score_candidates(
@@ -428,7 +555,9 @@ def run_market_tick(
         }
     )
     append_log(state, "scan_execute", market=mkt, **{k: v for k, v in tick_out.items() if k != "executed"})
-    save_state(state)
+    if persist_runtime:
+        set_runtime(state, status="idle", market=mkt, phase_id=phase.id, message="Tick complete")
+        save_state(state)
     return tick_out
 
 
@@ -436,7 +565,8 @@ def run_autopilot_tick(
     cfg: Optional[AutopilotConfig] = None,
     *,
     phase_override: Optional[str] = None,
-    progress_cb: Optional[Callable[[str], None]] = None,
+    progress_cb: Optional[Callable[..., None]] = None,
+    persist_runtime: bool = True,
 ) -> dict[str, Any]:
     """Run one tick for all configured markets."""
     cfg = cfg or AutopilotConfig()
@@ -445,11 +575,30 @@ def run_autopilot_tick(
         and os.environ.get("AUTOPILOT_ENABLED", "").lower() in ("1", "true", "yes")
     )
     state = load_state()
-    out: dict[str, Any] = {"markets": {}, "mode": cfg.mode}
-    for m in cfg.markets:
-        out["markets"][m] = run_market_tick(
-            m, cfg, state, phase_override=phase_override, progress_cb=progress_cb,
-        )
+    if persist_runtime:
+        set_runtime(state, status="tick_start", mode=cfg.mode, markets=list(cfg.markets))
+        save_state(state)
+    out: dict[str, Any] = {
+        "markets": {},
+        "mode": cfg.mode,
+        "data_source_nse": cfg.data_source_nse,
+        "data_source_us": cfg.data_source_us,
+    }
+    try:
+        for m in cfg.markets:
+            out["markets"][m] = run_market_tick(
+                m,
+                cfg,
+                state,
+                phase_override=phase_override,
+                progress_cb=progress_cb,
+                persist_runtime=persist_runtime,
+            )
+    finally:
+        if persist_runtime:
+            clear_runtime(state)
+            state["runtime"] = {"status": "idle", "message": "Waiting for next tick"}
+            save_state(state)
     out["kill_switch"] = state.get("kill_switch", False)
     return out
 
