@@ -141,6 +141,12 @@ def page_paper_trading() -> None:
     exec_stocksight_page("Paper Trading.py")
 
 
+def page_intraday_autopilot() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Intraday Autopilot.py")
+
+
 def page_intraday_screener() -> None:
     from stocksight_page_loader import exec_stocksight_page
 

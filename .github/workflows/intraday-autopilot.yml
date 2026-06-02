@@ -1,0 +1,55 @@
+# Intraday autopilot — paper mode ticks on NSE/US schedule (UTC cron ≈ IST phases).
+# Live trading is NOT enabled in CI.
+
+name: Intraday autopilot (paper)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry_run | paper | live (use paper only in CI)"
+        default: "paper"
+      markets:
+        description: "NSE,US or NSE"
+        default: "NSE"
+      phase:
+        description: "Optional force phase (square_off, orb, etc.)"
+        default: ""
+  schedule:
+    - cron: "20 3 * * 1-5"
+    - cron: "5 4 * * 1-5"
+    - cron: "35 4 * * 1-5"
+    - cron: "0 9 * * 1-5"
+    - cron: "45 9 * * 1-5"
+
+jobs:
+  autopilot-tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run autopilot tick
+        env:
+          AUTOPILOT_ENABLED: "false"
+        run: |
+          EXTRA=""
+          if [ -n "${{ github.event.inputs.phase }}" ]; then
+            EXTRA="--phase ${{ github.event.inputs.phase }}"
+          fi
+          python scripts/run_autopilot.py --once \
+            --mode "${{ github.event.inputs.mode || 'paper' }}" \
+            --markets "${{ github.event.inputs.markets || 'NSE' }}" \
+            $EXTRA
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: autopilot-state-${{ github.run_id }}
+          path: stocksight/.intraday_autopilot_state.json
+          retention-days: 7
+          if-no-files-found: ignore
