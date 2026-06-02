@@ -129,6 +129,12 @@ def page_popular_screens() -> None:
     exec_stocksight_page("Popular Screens.py")
 
 
+def page_algo_strategy_hub() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Algo Strategy Hub.py")
+
+
 def page_intraday_screener() -> None:
     from stocksight_page_loader import exec_stocksight_page
 

@@ -23,6 +23,7 @@ from navigation_pages import (
     page_breakout_momentum,
     page_buy_hold_avoid,
     page_extreme_oversold,
+    page_algo_strategy_hub,
     page_gap_scanner,
     page_icici_breeze_screener,
     page_icici_positions,
@@ -102,6 +103,9 @@ NAV_PAGES = {
     "🌱 Theme Screens": [
         st.Page(page_multibagger, title="Multibagger Theme", icon="🌱"),
         st.Page(page_proven_multibaggers, title="Proven Multibaggers (500%+)", icon="🏆"),
+    ],
+    "🤖 Algo Strategy": [
+        st.Page(page_algo_strategy_hub, title="Algo Strategy Hub", icon="🤖"),
     ],
     "⚡ Intraday": [
         st.Page(page_gap_scanner, title="Gap Scanner (pre-market)", icon="🌅"),
