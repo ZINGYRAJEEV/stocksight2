@@ -27,7 +27,14 @@ from intraday import (
     scan_intraday,
     compute_market_mood as _compute_mood_from_gaps,
 )
-from intraday_autopilot_store import append_log, clear_runtime, load_state, save_state, set_runtime
+from intraday_autopilot_store import (
+    append_log,
+    clear_runtime,
+    load_state,
+    save_state,
+    set_runtime,
+    tick_out_log_fields,
+)
 
 
 @dataclass
@@ -452,7 +459,7 @@ def run_market_tick(
         tick_out["regime"] = reg
         tick_out["gaps"] = len(gaps)
         tick_out["watchlist"] = mstate.get("priority_watchlist", [])
-        append_log(state, phase.id, market=mkt, **tick_out)
+        append_log(state, phase.id, market=mkt, **tick_out_log_fields(tick_out))
         save_state(state)
         return tick_out
 
@@ -554,7 +561,7 @@ def run_market_tick(
             "session": sess.get("window"),
         }
     )
-    append_log(state, "scan_execute", market=mkt, **{k: v for k, v in tick_out.items() if k != "executed"})
+    append_log(state, "scan_execute", market=mkt, **tick_out_log_fields(tick_out, "executed"))
     if persist_runtime:
         set_runtime(state, status="idle", market=mkt, phase_id=phase.id, message="Tick complete")
         save_state(state)

@@ -69,3 +69,9 @@ def append_log(state: dict[str, Any], event: str, **fields: Any) -> None:
     row = {"at": datetime.now(timezone.utc).isoformat(), "event": event, **fields}
     state.setdefault("log", []).append(row)
     state["log"] = state["log"][-500:]
+
+
+def tick_out_log_fields(tick_out: dict[str, Any], *omit: str) -> dict[str, Any]:
+    """Extra log fields from a tick result without duplicating explicit append_log kwargs."""
+    skip = {"market", *omit}
+    return {k: v for k, v in tick_out.items() if k not in skip}
