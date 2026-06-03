@@ -10,16 +10,20 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent
 _STOCKSIGHT_PKG = _REPO / "stocksight"
-# Streamlit Cloud may not put the repo root on sys.path — navigation_pages and
-# `from stocksight.*` both need it. Page scripts use flat imports from stocksight/.
-for _p in (_REPO, _STOCKSIGHT_PKG):
-    _s = str(_p)
-    if _s not in sys.path:
-        sys.path.insert(0, _s)
+# Streamlit Cloud may only add stocksight/ to sys.path — put repo root first, then package dir.
+for _p in (str(_STOCKSIGHT_PKG), str(_REPO)):
+    if _p not in sys.path:
+        sys.path.append(_p)
+if str(_REPO) in sys.path:
+    sys.path.remove(str(_REPO))
+sys.path.insert(0, str(_REPO))
+if str(_STOCKSIGHT_PKG) not in sys.path:
+    sys.path.insert(1, str(_STOCKSIGHT_PKG))
 
 import streamlit as st
 
-from navigation_pages import (
+try:
+    from navigation_pages import (
     page_breakout_momentum,
     page_buy_hold_avoid,
     page_extreme_oversold,
@@ -53,9 +57,23 @@ from navigation_pages import (
     page_live_nse_screener,
     page_volume_no_confirm,
     page_watchlist_cross_scan,
-)
-from stocksight.app import render_overview
-from stocksight.ui_components import inject_app_chrome
+    )
+except ImportError as _nav_err:
+    st.error(
+        "Failed to load navigation_pages. "
+        f"Repo root on path: `{_REPO}`. Error: {_nav_err}"
+    )
+    raise
+
+try:
+    from stocksight.app import render_overview
+except ImportError:
+    from app import render_overview  # type: ignore[no-redef]
+
+try:
+    from stocksight.ui_components import inject_app_chrome
+except ImportError:
+    from ui_components import inject_app_chrome  # type: ignore[no-redef]
 
 try:
     st.set_page_config(
