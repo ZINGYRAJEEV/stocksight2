@@ -15,6 +15,7 @@ venv/
 # Local paper-trading ledger (per machine)
 stocksight/.paper_trading.json
 stocksight/.intraday_autopilot_state.json
+stocksight/.intrabot_state.json
 
 # Data / local
 *.csv

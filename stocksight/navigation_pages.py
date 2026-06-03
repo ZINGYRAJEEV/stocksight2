@@ -147,6 +147,12 @@ def page_intraday_autopilot() -> None:
     exec_stocksight_page("Intraday Autopilot.py")
 
 
+def page_intrabot() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("IntraBot.py")
+
+
 def page_intraday_screener() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
