@@ -51,6 +51,9 @@ def exec_stocksight_page(filename: str) -> None:
         "stage2_momentum",
         "stage2_momentum_page",
         "stage2_momentum_ui",
+        "volume_gravity",
+        "volume_gravity_page",
+        "volume_gravity_ui",
     ):
         sys.modules.pop(_m, None)
     path = _STOCKSIGHT / "pages" / filename

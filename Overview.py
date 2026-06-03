@@ -46,6 +46,7 @@ try:
         page_longterm_ath,
         page_ath_playbook,
         page_stage2_momentum,
+        page_volume_gravity,
         page_multibagger,
         page_popular_screens,
         page_proven_multibaggers,
@@ -146,6 +147,7 @@ NAV_PAGES = {
     ],
     "🎯 Stage 2 Momentum": [
         st.Page(page_stage2_momentum, title="Stage 2 + VCP Screener", icon="🎯"),
+        st.Page(page_volume_gravity, title="Volume Gravity (VWAP / POC)", icon="⚖️"),
     ],
     "📰 News & Sentiment": [
         st.Page(page_news_scanner, title="News Scanner + Rulebook", icon="📰"),

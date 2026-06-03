@@ -42,6 +42,7 @@ def render_algo_strategy_hub_page() -> None:
         "Maps VWAP/ORB/momentum/ATH-style setups to existing StockSight scanners. "
         "Intraday picks use the same **Unified score** as the Intraday Screener (gate + score/120 + timing + confluence + regime). "
         "For **swing / position** Stage 2 + VCP setups (Minervini-style), use **Stage 2 + VCP Screener** in the sidebar. "
+        "For **VWAP / RVOL / Volume Profile** (intraday or swing), use **Volume Gravity**. "
         "**Does not auto-trade** — SEBI requires broker-hosted algos with exchange approval and Algo IDs.",
     )
 

@@ -211,3 +211,9 @@ def page_stage2_momentum() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
     exec_stocksight_page("Stage 2 Momentum.py")
+
+
+def page_volume_gravity() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Volume Gravity.py")
