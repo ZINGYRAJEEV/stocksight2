@@ -1620,14 +1620,14 @@ def scan_intraday(
         round(stats.scan_elapsed_sec / total, 3) if total else 0.0
     )
     stats.result_rows = len(results)
-    results.sort(
-        key=lambda r: (
-            -(r.score_120 + _timing_weight_from_prediction(r.prediction)),
-            -r.score_120,
-            -(r.vol_ratio or 0.0),
-            -(r.rr_ratio or 0.0),
-        )
-    )
+    try:
+        from intraday_ranking import sort_intraday_results
+
+        results = sort_intraday_results(results, regime=None)
+    except ImportError:
+        from .intraday_ranking import sort_intraday_results  # type: ignore[no-redef]
+
+        results = sort_intraday_results(results, regime=None)
     return results, stats
 
 

@@ -45,6 +45,7 @@ try:
         page_weekly_swing_ath,
         page_longterm_ath,
         page_ath_playbook,
+        page_stage2_momentum,
         page_multibagger,
         page_popular_screens,
         page_proven_multibaggers,
@@ -142,6 +143,9 @@ NAV_PAGES = {
         st.Page(page_weekly_swing_ath, title="Weekly Swing ATH", icon="🏔️"),
         st.Page(page_longterm_ath, title="Long-Term ATH", icon="🚀"),
         st.Page(page_ath_playbook, title="ATH Strategy Playbook", icon="📖"),
+    ],
+    "🎯 Stage 2 Momentum": [
+        st.Page(page_stage2_momentum, title="Stage 2 + VCP Screener", icon="🎯"),
     ],
     "📰 News & Sentiment": [
         st.Page(page_news_scanner, title="News Scanner + Rulebook", icon="📰"),

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import html
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 import streamlit as st
@@ -624,15 +624,21 @@ def _results_to_df(
     *,
     market: str = "NSE",
     confluence_map: Optional[dict[str, list[str]]] = None,
-    sort_by_gate: bool = False,
+    sort_by_gate: bool = True,
+    regime: Any = None,
 ) -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
     conf = confluence_map if confluence_map is not None else _build_confluence_map(results)
+    try:
+        from intraday_ranking import unified_intraday_score
+    except ImportError:
+        from .intraday_ranking import unified_intraday_score  # type: ignore[no-redef]
 
     rows = []
     for rank, r in enumerate(results, start=1):
         codes = conf.get(r.raw_ticker, [r.strategy])
+        u_score, u_band, u_why = unified_intraday_score(r, len(codes), regime)
         row = {
             "S.No.": rank,
             "Rank": f"#{rank}",
@@ -640,6 +646,9 @@ def _results_to_df(
             "Raw": r.raw_ticker,
             "Confluence": _format_confluence(codes),
             "Strategy": STRATEGY_LABEL.get(r.strategy, r.strategy),
+            "Unified score": u_score,
+            "Unified band": u_band,
+            "Rank why (unified)": u_why,
             "Score /120": r.score_120,
             "Tier": r.rank_tier or "—",
             "Size": r.position_size or "—",
@@ -674,8 +683,8 @@ def _results_to_df(
         df = add_market_sentiment_columns(df, market=market, insert_after="Ticker")
         df = _add_intraday_news_scanner_columns(df, market=market)
         df = apply_quality_gate_columns(df, profile="intraday", confluence_map=conf)
-        if sort_by_gate and "Gate score" in df.columns:
-            df = df.sort_values("Gate score", ascending=False, kind="stable").reset_index(drop=True)
+        if sort_by_gate and "Unified score" in df.columns:
+            df = df.sort_values("Unified score", ascending=False, kind="stable").reset_index(drop=True)
             if "S.No." in df.columns:
                 df["S.No."] = range(1, len(df) + 1)
             if "Rank" in df.columns:
@@ -741,6 +750,13 @@ def _intraday_col_cfg(df: pd.DataFrame) -> dict:
                 "Quality Gate",
                 width="small",
                 help="A–D grade: strategy + sentiment + timing + news. Row colour matches band.",
+            ),
+            "Unified score": st.column_config.ProgressColumn(
+                "Unified score",
+                min_value=0,
+                max_value=100,
+                format="%d",
+                help="Same ranking as Algo Strategy Hub: gate + score/120 + timing + confluence + regime.",
             ),
             "Gate score": st.column_config.ProgressColumn(
                 "Gate score", min_value=0, max_value=100, format="%d",
@@ -1568,7 +1584,7 @@ Tier + action:
 - **25–49** → 🟡 OK (50%)
 - **< 25** → ⚠️ Avoid (Skip)
 
-Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best/good/mixed/avoid/dangerous).
+Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Quality Gate + Score/120 + timing + confluence + regime fit + vol/R:R.
 """
         )
 
@@ -1647,6 +1663,20 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
             market=market,
             data_source=scan_api,
         )
+        try:
+            from algo_selector import detect_market_regime
+            from intraday_ranking import sort_intraday_results
+        except ImportError:
+            from .algo_selector import detect_market_regime  # type: ignore[no-redef]
+            from .intraday_ranking import sort_intraday_results  # type: ignore[no-redef]
+
+        regime, regime_note = detect_market_regime(
+            market=market, sample_tickers=raw_tickers[:40],
+        )
+        st.session_state[f"{key}_regime"] = regime
+        st.session_state[f"{key}_regime_note"] = regime_note
+        results = sort_intraday_results(results, regime)
+
         prog.progress(100, text="Scan complete")
         live_state.tick(
             len(raw_tickers),
@@ -1804,15 +1834,23 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
         f"**{len(results)}** match(es) across {last_uni}{overlap_note}{ds_note}"
         + (f" · {scan_at}" if scan_at else "")
     )
+    regime_note = st.session_state.get(f"{key}_regime_note", "")
+    if regime_note:
+        st.info(f"**Market regime (Hub-aligned):** {regime_note}")
     st.caption(
-        "Rows are **colour-coded** by **Quality Gate** (A–D). See **Confluence** for multi-strategy "
-        "matches. **Exit plan** + **💰 When to sell** below."
+        "Sorted by **Unified score** (Screener + Hub). Rows are **colour-coded** by **Quality Gate** (A–D). "
+        "See **Confluence** for multi-strategy matches. **Exit plan** + **💰 When to sell** below."
     )
     render_quality_gate_legend(profile="intraday")
 
     conf_map = _build_confluence_map(results)
+    scan_regime = st.session_state.get(f"{key}_regime")
     df_all = _results_to_df(
-        results, market=scan_market, confluence_map=conf_map, sort_by_gate=True,
+        results,
+        market=scan_market,
+        confluence_map=conf_map,
+        sort_by_gate=True,
+        regime=scan_regime,
     )
     gap_raw_set = {getattr(g, "raw_ticker", "") for g in (st.session_state.get("gap_results") or []) if getattr(g, "raw_ticker", "")}
     tab_labels = ["📋 All matches"] + [STRATEGY_LABEL[s] for s in STRATEGIES if counts.get(s, 0)]
@@ -1857,7 +1895,11 @@ Rows are ranked by **Score/120**, then adjusted by **scan timing quality** (best
         with tabs[tab_idx]:
             sub_results = [r for r in results if r.strategy == s]
             sub_df = _results_to_df(
-                sub_results, market=scan_market, confluence_map=conf_map, sort_by_gate=True,
+                sub_results,
+                market=scan_market,
+                confluence_map=conf_map,
+                sort_by_gate=True,
+                regime=scan_regime,
             )
             st.caption(f"Best time-of-day: **{best_times.get(s, '')}**")
             _render_intraday_results_table(

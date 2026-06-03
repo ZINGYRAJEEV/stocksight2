@@ -205,3 +205,9 @@ def page_ath_playbook() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
     exec_stocksight_page("ATH Playbook.py")
+
+
+def page_stage2_momentum() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Stage 2 Momentum.py")

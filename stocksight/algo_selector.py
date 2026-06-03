@@ -126,6 +126,7 @@ class AlgoPick:
     rationale: str
     sebi_note: str
     source: str
+    score_120: float = 0.0
 
 
 @dataclass
@@ -225,30 +226,6 @@ def _intraday_pattern(strategy: str, regime: MarketRegime) -> tuple[str, str, st
     return pat, style, fit
 
 
-def _score_intraday(r: IntradayResult, regime: MarketRegime, confluence_n: int) -> tuple[float, str, str]:
-    row = {
-        "Score /120": r.score_120,
-        "Tier": r.rank_tier,
-        "Market sentiment": "",
-        "Prediction": r.prediction or "",
-        "Strategy": STRATEGY_LABEL.get(r.strategy, r.strategy),
-        "R:R": r.rr_ratio,
-    }
-    pack = compute_intraday_quality_gate(
-        row,
-        strategies_on_ticker=[r.strategy] * max(1, confluence_n),
-    )
-    base = float(pack["score"])
-    pat, _, _ = _intraday_pattern(r.strategy, regime)
-    if pat in regime.favored_patterns:
-        base += 8
-    if pat in regime.avoid_patterns:
-        base -= 15
-    if "avoid" in (r.rank_tier or "").lower():
-        base = min(base, 35)
-    return base, pack["band"], pack["why"]
-
-
 def _picks_from_intraday(
     results: list[IntradayResult],
     regime: MarketRegime,
@@ -257,15 +234,12 @@ def _picks_from_intraday(
 ) -> list[AlgoPick]:
     if not results:
         return []
-    by_raw: dict[str, list[IntradayResult]] = {}
-    for r in results:
-        by_raw.setdefault(r.raw_ticker, []).append(r)
-    scored: list[tuple[float, IntradayResult, int, str, str]] = []
-    for raw, group in by_raw.items():
-        best = max(group, key=lambda x: x.score_120)
-        sc, band, why = _score_intraday(best, regime, len(group))
-        scored.append((sc, best, len(group), band, why))
-    scored.sort(key=lambda x: x[0], reverse=True)
+    try:
+        from intraday_ranking import best_row_per_ticker
+    except ImportError:
+        from .intraday_ranking import best_row_per_ticker  # type: ignore[no-redef]
+
+    scored = best_row_per_ticker(results, regime)
 
     picks: list[AlgoPick] = []
     for i, (sc, r, n_conf, band, why) in enumerate(scored[:top_n], start=1):
@@ -277,6 +251,7 @@ def _picks_from_intraday(
                 horizon="intraday",
                 rank=i,
                 score=round(sc, 1),
+                score_120=float(r.score_120),
                 gate_band=band,
                 pattern=PATTERN_TAGS.get(pat, pat),
                 algo_style=style,
@@ -483,7 +458,8 @@ def picks_to_dataframe(picks: list[AlgoPick]):
                 "Ticker": p.ticker,
                 "Horizon": HORIZON_META.get(p.horizon, {}).get("label", p.horizon),
                 "Quality Gate": p.gate_band,
-                "Score": p.score,
+                "Unified score": p.score,
+                "Score /120": p.score_120,
                 "Pattern": p.pattern,
                 "Algo style": p.algo_style,
                 "Strategy": p.strategy,

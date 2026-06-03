@@ -31,6 +31,7 @@ def exec_stocksight_page(filename: str) -> None:
         "popular_screens",
         "popular_screens_page",
         "intraday",
+        "intraday_ranking",
         "intraday_page",
         "breeze_data",
         "scan_progress",
@@ -47,6 +48,9 @@ def exec_stocksight_page(filename: str) -> None:
         "paper_trading_store",
         "algo_selector",
         "algo_selector_page",
+        "stage2_momentum",
+        "stage2_momentum_page",
+        "stage2_momentum_ui",
     ):
         sys.modules.pop(_m, None)
     path = _STOCKSIGHT / "pages" / filename

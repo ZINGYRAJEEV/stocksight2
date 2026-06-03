@@ -40,6 +40,8 @@ def render_algo_strategy_hub_page() -> None:
         "Traders and investors who want **one screen** to rank the best names for "
         "**intraday, weekly, monthly, and long-term** horizons using pattern + regime logic.",
         "Maps VWAP/ORB/momentum/ATH-style setups to existing StockSight scanners. "
+        "Intraday picks use the same **Unified score** as the Intraday Screener (gate + score/120 + timing + confluence + regime). "
+        "For **swing / position** Stage 2 + VCP setups (Minervini-style), use **Stage 2 + VCP Screener** in the sidebar. "
         "**Does not auto-trade** — SEBI requires broker-hosted algos with exchange approval and Algo IDs.",
     )
 
