@@ -45,6 +45,7 @@ try:
         upsert_watchlist_fields,
     )
     from .market_sentiment import add_market_sentiment_columns, market_from_universe
+    from .news_scanner import attach_news_scanner_columns
     from .quality_gate import (
         GATE_COL,
         apply_quality_gate_columns,
@@ -79,6 +80,7 @@ except ImportError:
         upsert_watchlist_fields,
     )
     from market_sentiment import add_market_sentiment_columns, market_from_universe  # type: ignore[no-redef]
+    from news_scanner import attach_news_scanner_columns  # type: ignore[no-redef]
     from quality_gate import (  # type: ignore[no-redef]
         GATE_COL,
         apply_quality_gate_columns,
@@ -644,10 +646,6 @@ def prepare_scan_results_df(
                     skip_company_lookup=True,
                 )
                 mkt_for_news = "S&P 500 (NYSE)" if str(mkt).upper() == "US" else "Nifty 500 (NSE)"
-                try:
-                    from news_scanner import attach_news_scanner_columns
-                except ImportError:
-                    from .news_scanner import attach_news_scanner_columns  # type: ignore[no-redef]
                 enriched = attach_news_scanner_columns(
                     enriched,
                     universe_name=mkt_for_news,
