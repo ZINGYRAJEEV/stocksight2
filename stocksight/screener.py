@@ -750,31 +750,17 @@ def fetch_recent_quote_news(
     limit: int = 3,
     max_age_days: int = RECENT_NEWS_MAX_AGE_DAYS,
 ) -> list[str]:
-    """Headlines from Yahoo Finance published within ``max_age_days`` (dated for display)."""
-    try:
-        t = yf.Ticker(raw_ticker)
-        news = getattr(t, "news", None) or []
-    except Exception:
-        return []
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=int(max_age_days))
-    dated: list[tuple[datetime, str]] = []
-
-    for item in news:
-        if not isinstance(item, dict):
-            continue
-        title = _news_item_title(item)
-        if not title:
-            continue
-        published = _news_item_published_dt(item)
-        if published is None or published < cutoff:
-            continue
-        dated.append((published, title))
-
-    dated.sort(key=lambda x: x[0], reverse=True)
+    """Dated headline strings (multi-source) within ``max_age_days``."""
+    structured = fetch_structured_news(
+        raw_ticker, limit=limit, max_age_days=max_age_days
+    )
     out: list[str] = []
-    for published, title in dated[:limit]:
-        out.append(f"{_format_news_date_label(published)} · {title}")
+    for h in structured[:limit]:
+        if h.published is not None:
+            out.append(f"{_format_news_date_label(h.published)} · {h.title}")
+        else:
+            src = h.source or h.publisher or "News"
+            out.append(f"{src} · {h.title}")
     return out
 
 
@@ -797,6 +783,7 @@ class NewsHeadline:
     published: Optional[datetime] = None
     url: str = ""
     publisher: str = ""
+    source: str = ""  # e.g. Yahoo Finance, Google News
 
 
 def _news_item_url(item: dict) -> str:
@@ -824,35 +811,17 @@ def fetch_structured_news(
     limit: int = 15,
     max_age_days: int = RECENT_NEWS_MAX_AGE_DAYS,
 ) -> list[NewsHeadline]:
-    """Yahoo Finance headlines with publish time and link (for News Scanner)."""
+    """Headlines from Yahoo Finance + Google News RSS (News Scanner and tables)."""
     try:
-        news = getattr(yf.Ticker(raw_ticker), "news", None) or []
-    except Exception:
-        return []
+        from news_sources import fetch_aggregated_structured_news
+    except ImportError:
+        from .news_sources import fetch_aggregated_structured_news  # type: ignore[no-redef]
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=int(max_age_days))
-    out: list[NewsHeadline] = []
-
-    for item in news:
-        if not isinstance(item, dict):
-            continue
-        title = _news_item_title(item)
-        if not title:
-            continue
-        published = _news_item_published_dt(item)
-        if published is not None and published < cutoff:
-            continue
-        out.append(
-            NewsHeadline(
-                title=title,
-                published=published,
-                url=_news_item_url(item),
-                publisher=_news_item_publisher(item),
-            )
-        )
-
-    out.sort(key=lambda h: h.published or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-    return out[:limit]
+    return fetch_aggregated_structured_news(
+        raw_ticker,
+        limit=limit,
+        max_age_days=max_age_days,
+    )
 
 
 def enrich_dataframe_recent_news(

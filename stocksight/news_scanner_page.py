@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import urllib.parse
 from datetime import datetime
 
 import pandas as pd
@@ -59,10 +60,11 @@ def render_tier_reference_card() -> None:
 def _render_single_stock_tab(universe: str) -> None:
     st.markdown("### 🔍 Single stock deep-dive")
     st.caption(
-        "Type any ticker. Headlines from the last **4 days** are classified by tier with a **score** and **action**. "
-        "Use this to see if a move is backed by real news (Tier 1–2) or noise (Tier 4)."
+        "Headlines from **Yahoo Finance** + **Google News** (last N days). Classified by tier with **score** and **action**. "
+        "Google News often has fresher India/US coverage when Yahoo returns nothing."
     )
 
+    max_age = int(st.session_state.get("news_scan_max_age", 7))
     c1, c2 = st.columns([2, 1])
     with c1:
         ticker = st.text_input("Ticker", placeholder="e.g. RELIANCE, TCS, AAPL", key="news_scan_ticker")
@@ -74,8 +76,10 @@ def _render_single_stock_tab(universe: str) -> None:
         st.info("Enter a symbol and click **Analyze news**.")
         return
 
-    with st.spinner("Fetching & classifying headlines…"):
-        summary = analyze_ticker(ticker.strip(), universe_name=universe)
+    with st.spinner("Fetching from Yahoo + Google News…"):
+        summary = analyze_ticker(
+            ticker.strip(), universe_name=universe, max_age_days=int(max_age)
+        )
 
     raw = raw_ticker_from_display(ticker, universe)
     yahoo_url = f"https://finance.yahoo.com/quote/{raw}/news"
@@ -100,21 +104,32 @@ def _render_single_stock_tab(universe: str) -> None:
         unsafe_allow_html=True,
     )
 
-    st.caption(f"[Open full newsroom on Yahoo Finance]({yahoo_url})")
+    g_q = urllib.parse.quote(f"{summary.ticker} stock news")
+    st.caption(
+        f"Sources: **{summary.news_sources or '—'}** · "
+        f"[Yahoo Finance]({yahoo_url}) · "
+        f"[Google News search](https://news.google.com/search?q={g_q})"
+    )
 
     if not summary.items:
-        st.warning("No headlines in the last 4 days on Yahoo for this symbol.")
+        st.warning(
+            f"No headlines in the last **{max_age}** days from Yahoo or Google News. "
+            "Try a longer **News window**, or search the ticker on Google News manually."
+        )
         return
 
     rows = []
     for item in summary.items:
+        link = item.url if item.url.startswith("http") else None
         rows.append(
             {
                 "Age": item.age_label,
+                "Source": item.source or item.publisher or "—",
                 "Tier": f"T{item.tier}",
                 "Score": item.score,
                 "Polarity": item.polarity,
                 "Headline": item.title[:120],
+                "Link": link,
                 "Action": item.action,
                 "Why": item.reason,
             }
@@ -128,7 +143,9 @@ def _render_single_stock_tab(universe: str) -> None:
             df,
             {
                 "Score": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%d"),
+                "Source": st.column_config.TextColumn(width="small"),
                 "Headline": st.column_config.TextColumn(width="large"),
+                "Link": st.column_config.LinkColumn("Open", display_text="↗"),
                 "Action": st.column_config.TextColumn(width="medium"),
                 "Why": st.column_config.TextColumn(width="medium"),
             },
@@ -196,6 +213,8 @@ def _render_watchlist_tab(universe: str) -> None:
         st.warning("No tickers parsed. Use one symbol per line.")
         return
 
+    wl_age = int(st.session_state.get("news_scan_max_age", 7))
+
     if len(entries) > 35:
         st.warning(f"Scanning first 35 of {len(entries)} tickers (Yahoo rate limits).")
         entries = entries[:35]
@@ -204,7 +223,11 @@ def _render_watchlist_tab(universe: str) -> None:
     summaries = []
     for i, (sym, vol) in enumerate(entries):
         prog.progress(int((i + 1) / len(entries) * 100), text=f"{sym}…")
-        summaries.append(analyze_ticker(sym, universe_name=universe, vol_ratio=vol))
+        summaries.append(
+            analyze_ticker(
+                sym, universe_name=universe, vol_ratio=vol, max_age_days=wl_age
+            )
+        )
     prog.empty()
 
     summaries.sort(key=lambda s: (s.news_score, s.vol_ratio or 0), reverse=True)
@@ -340,14 +363,17 @@ def _render_universe_scan_tab(universe: str) -> None:
     raw_symbols = raw_symbols[:max_scan]
     if scan_full_universe and total > 300:
         st.warning(
-            "Full scan selected. This may take a few minutes due to Yahoo rate limits."
+            "Full scan selected. This may take a few minutes (Yahoo + Google News per symbol)."
         )
     prog = st.progress(0, text="Starting universe news scan…")
     summaries = []
     for i, (src_universe, raw) in enumerate(raw_symbols):
         disp = str(raw).replace(".NS", "").replace(".BO", "").strip().upper()
         prog.progress(int((i + 1) / len(raw_symbols) * 100), text=f"{disp}… ({i + 1}/{len(raw_symbols)})")
-        sm = analyze_ticker(disp or str(raw), universe_name=src_universe)
+        uni_age = int(st.session_state.get("news_scan_max_age", 7))
+        sm = analyze_ticker(
+            disp or str(raw), universe_name=src_universe, max_age_days=uni_age
+        )
         setattr(sm, "source_universe", src_universe)
         summaries.append(sm)
     prog.empty()
@@ -590,11 +616,34 @@ News + sentiment · Tier 1–4 · Pro rulebook</div>
 
     page_audience_note(
         "Traders who want to know if a move is real news or noise before entering.",
-        "Classifies Yahoo headlines into **4 tiers**, scores tradability, and scans a pasted watchlist. "
-        "Pair **high news score** with **high Vol×** from the Intraday Screener for best setups.",
+        "Pulls headlines from **Yahoo Finance** and **Google News RSS**, classifies into **4 tiers**, "
+        "and scores tradability. Pair **high news score** with **high Vol×** from the Intraday Screener.",
     )
 
+    with st.expander("📡 News sources (why Yahoo alone looked empty)", expanded=False):
+        st.markdown(
+            """
+| Source | Role |
+|--------|------|
+| **Yahoo Finance API** | Direct ticker feed (when available) |
+| **Google News RSS** | Backup search by company name + symbol — usually fresher for NSE names |
+
+If nothing appears in your chosen **News window**, the scanner automatically widens to **30 days** for context.
+
+**Tip:** Use **7–14 day** window for swing context; **3–5 days** for intraday catalysts only.
+"""
+        )
+
     st.markdown("---")
+
+    st.session_state.setdefault("news_scan_max_age", 7)
+    st.slider(
+        "News window (days) — all tabs",
+        3,
+        30,
+        int(st.session_state.get("news_scan_max_age", 7)),
+        key="news_scan_max_age",
+    )
 
     universe = st.selectbox(
         "Market / suffix",

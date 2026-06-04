@@ -94,6 +94,7 @@ class ClassifiedNews:
     age_label: str = ""
     url: str = ""
     publisher: str = ""
+    source: str = ""
     is_fresh: bool = False
 
 
@@ -111,6 +112,7 @@ class TickerNewsSummary:
     macro_tone: str = ""
     vol_ratio: Optional[float] = None
     combo_note: str = ""
+    news_sources: str = ""
 
 
 def _match_any(text: str, patterns: tuple[str, ...]) -> bool:
@@ -240,7 +242,8 @@ def classify_headlines(headlines: list[NewsHeadline]) -> list[ClassifiedNews]:
         c = classify_headline(h.title)
         c.published = h.published
         c.url = h.url
-        c.publisher = h.publisher
+        c.publisher = h.publisher or getattr(h, "source", "") or ""
+        c.source = getattr(h, "source", None) or c.publisher or "News"
         c.age_label, c.is_fresh = _age_label(h.published)
         out.append(c)
     return out
@@ -272,11 +275,16 @@ def analyze_ticker(
     display_ticker: str,
     *,
     universe_name: str = "Nifty 50 (NSE)",
-    max_age_days: int = 4,
+    max_age_days: int = 7,
     vol_ratio: Optional[float] = None,
 ) -> TickerNewsSummary:
     raw = raw_ticker_from_display(display_ticker, universe_name)
-    headlines = fetch_structured_news(raw, max_age_days=max_age_days, limit=15)
+    headlines = fetch_structured_news(raw, max_age_days=max_age_days, limit=20)
+    try:
+        from news_sources import news_source_summary
+    except ImportError:
+        from .news_sources import news_source_summary  # type: ignore[no-redef]
+    src_note = news_source_summary(headlines)
     items = classify_headlines(headlines)
     score, top_tier, top_hl, action = _aggregate_score(items)
 
@@ -310,6 +318,7 @@ def analyze_ticker(
         macro_tone=macro.macro_tone,
         vol_ratio=vol_ratio,
         combo_note=combo,
+        news_sources=src_note,
     )
 
 
@@ -367,11 +376,17 @@ def scan_watchlist_sentiment(
     entries: list[tuple[str, Optional[float]]],
     *,
     universe_name: str = "Nifty 50 (NSE)",
+    max_age_days: int = 7,
 ) -> list[TickerNewsSummary]:
     summaries: list[TickerNewsSummary] = []
     for sym, vol in entries:
         summaries.append(
-            analyze_ticker(sym, universe_name=universe_name, vol_ratio=vol)
+            analyze_ticker(
+                sym,
+                universe_name=universe_name,
+                vol_ratio=vol,
+                max_age_days=max_age_days,
+            )
         )
     summaries.sort(key=lambda s: (s.news_score, s.vol_ratio or 0), reverse=True)
     return summaries
