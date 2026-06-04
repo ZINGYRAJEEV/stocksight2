@@ -22,45 +22,114 @@ if str(_STOCKSIGHT_PKG) not in sys.path:
 
 import streamlit as st
 
-try:
-    from navigation_pages import (
-        page_breakout_momentum,
-        page_buy_hold_avoid,
-        page_extreme_oversold,
-        page_algo_strategy_hub,
-        page_paper_trading,
-        page_intraday_autopilot,
-        page_intrabot,
-        page_gap_scanner,
-        page_icici_breeze_screener,
-        page_icici_positions,
-        page_high_profit_category_leader,
-        page_high_profit_duopoly,
-        page_high_profit_monopoly,
-        page_high_profit_platform,
-        page_high_profit_regulatory_moat,
-        page_intraday_guide,
-        page_intraday_screener,
-        page_news_scanner,
-        page_weekly_swing_ath,
-        page_longterm_ath,
-        page_ath_playbook,
-        page_stage2_momentum,
-        page_volume_gravity,
-        page_multibagger,
-        page_popular_screens,
-        page_proven_multibaggers,
-        page_overbought_exit,
-        page_oversold_bounce,
-        page_portfolio,
-        page_scan_history,
-        page_stocksight,
-        page_value_technical,
-        page_healthy_dip,
-        page_live_nse_screener,
-        page_volume_no_confirm,
-        page_watchlist_cross_scan,
+def _import_navigation_pages():
+    """Load page callables — root shim first, direct file fallback for Cloud."""
+    import importlib.util
+
+    _NAV_NAMES = (
+        "page_breakout_momentum",
+        "page_buy_hold_avoid",
+        "page_extreme_oversold",
+        "page_algo_strategy_hub",
+        "page_paper_trading",
+        "page_intraday_autopilot",
+        "page_intrabot",
+        "page_gap_scanner",
+        "page_icici_breeze_screener",
+        "page_icici_positions",
+        "page_high_profit_category_leader",
+        "page_high_profit_duopoly",
+        "page_high_profit_monopoly",
+        "page_high_profit_platform",
+        "page_high_profit_regulatory_moat",
+        "page_intraday_guide",
+        "page_intraday_screener",
+        "page_news_scanner",
+        "page_weekly_swing_ath",
+        "page_longterm_ath",
+        "page_ath_playbook",
+        "page_stage2_momentum",
+        "page_volume_gravity",
+        "page_multibagger",
+        "page_popular_screens",
+        "page_proven_multibaggers",
+        "page_overbought_exit",
+        "page_oversold_bounce",
+        "page_portfolio",
+        "page_scan_history",
+        "page_stocksight",
+        "page_value_technical",
+        "page_healthy_dip",
+        "page_live_nse_screener",
+        "page_volume_no_confirm",
+        "page_watchlist_cross_scan",
     )
+
+    def _pick(mod: object) -> dict[str, object]:
+        missing = [n for n in _NAV_NAMES if not hasattr(mod, n)]
+        if missing:
+            raise ImportError(
+                f"navigation_pages missing: {', '.join(missing)} "
+                f"(module file: {getattr(mod, '__file__', '?')})"
+            )
+        return {n: getattr(mod, n) for n in _NAV_NAMES}
+
+    try:
+        import navigation_pages as nav_mod  # noqa: WPS433
+
+        return _pick(nav_mod)
+    except ImportError:
+        nav_path = _STOCKSIGHT_PKG / "navigation_pages.py"
+        if not nav_path.is_file():
+            raise
+        spec = importlib.util.spec_from_file_location(
+            "stocksight_navigation_pages_direct", nav_path,
+        )
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load navigation spec: {nav_path}") from None
+        direct = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(direct)
+        return _pick(direct)
+
+
+try:
+    _nav = _import_navigation_pages()
+    page_breakout_momentum = _nav["page_breakout_momentum"]
+    page_buy_hold_avoid = _nav["page_buy_hold_avoid"]
+    page_extreme_oversold = _nav["page_extreme_oversold"]
+    page_algo_strategy_hub = _nav["page_algo_strategy_hub"]
+    page_paper_trading = _nav["page_paper_trading"]
+    page_intraday_autopilot = _nav["page_intraday_autopilot"]
+    page_intrabot = _nav["page_intrabot"]
+    page_gap_scanner = _nav["page_gap_scanner"]
+    page_icici_breeze_screener = _nav["page_icici_breeze_screener"]
+    page_icici_positions = _nav["page_icici_positions"]
+    page_high_profit_category_leader = _nav["page_high_profit_category_leader"]
+    page_high_profit_duopoly = _nav["page_high_profit_duopoly"]
+    page_high_profit_monopoly = _nav["page_high_profit_monopoly"]
+    page_high_profit_platform = _nav["page_high_profit_platform"]
+    page_high_profit_regulatory_moat = _nav["page_high_profit_regulatory_moat"]
+    page_intraday_guide = _nav["page_intraday_guide"]
+    page_intraday_screener = _nav["page_intraday_screener"]
+    page_news_scanner = _nav["page_news_scanner"]
+    page_weekly_swing_ath = _nav["page_weekly_swing_ath"]
+    page_longterm_ath = _nav["page_longterm_ath"]
+    page_ath_playbook = _nav["page_ath_playbook"]
+    page_stage2_momentum = _nav["page_stage2_momentum"]
+    page_volume_gravity = _nav["page_volume_gravity"]
+    page_multibagger = _nav["page_multibagger"]
+    page_popular_screens = _nav["page_popular_screens"]
+    page_proven_multibaggers = _nav["page_proven_multibaggers"]
+    page_overbought_exit = _nav["page_overbought_exit"]
+    page_oversold_bounce = _nav["page_oversold_bounce"]
+    page_portfolio = _nav["page_portfolio"]
+    page_scan_history = _nav["page_scan_history"]
+    page_stocksight = _nav["page_stocksight"]
+    page_value_technical = _nav["page_value_technical"]
+    page_healthy_dip = _nav["page_healthy_dip"]
+    page_live_nse_screener = _nav["page_live_nse_screener"]
+    page_volume_no_confirm = _nav["page_volume_no_confirm"]
+    page_watchlist_cross_scan = _nav["page_watchlist_cross_scan"]
 except ImportError as _nav_err:
     st.error(
         "Failed to load navigation_pages. "

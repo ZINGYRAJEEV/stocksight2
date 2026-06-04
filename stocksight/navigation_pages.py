@@ -217,3 +217,43 @@ def page_volume_gravity() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
     exec_stocksight_page("Volume Gravity.py")
+
+
+__all__ = [
+    "page_stocksight",
+    "page_watchlist_cross_scan",
+    "page_scan_history",
+    "page_portfolio",
+    "page_breakout_momentum",
+    "page_oversold_bounce",
+    "page_extreme_oversold",
+    "page_value_technical",
+    "page_healthy_dip",
+    "page_live_nse_screener",
+    "page_overbought_exit",
+    "page_volume_no_confirm",
+    "page_buy_hold_avoid",
+    "page_high_profit_monopoly",
+    "page_high_profit_platform",
+    "page_high_profit_regulatory_moat",
+    "page_high_profit_duopoly",
+    "page_high_profit_category_leader",
+    "page_multibagger",
+    "page_proven_multibaggers",
+    "page_popular_screens",
+    "page_algo_strategy_hub",
+    "page_paper_trading",
+    "page_intraday_autopilot",
+    "page_intrabot",
+    "page_intraday_screener",
+    "page_gap_scanner",
+    "page_icici_breeze_screener",
+    "page_icici_positions",
+    "page_intraday_guide",
+    "page_news_scanner",
+    "page_weekly_swing_ath",
+    "page_longterm_ath",
+    "page_ath_playbook",
+    "page_stage2_momentum",
+    "page_volume_gravity",
+]
