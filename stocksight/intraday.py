@@ -215,10 +215,11 @@ INTRADAY_UNIVERSES_BY_MARKET: dict[str, dict[str, list[str]]] = {
 # Back-compat alias used by older code that imports INTRADAY_UNIVERSES directly.
 INTRADAY_UNIVERSES: dict[str, list[str]] = dict(NSE_INTRADAY_UNIVERSES)
 
-STRATEGIES = ("BROAD", "MOMENTUM", "VWAP", "ORB", "GAP", "ATH")
+STRATEGIES = ("BROAD", "EARLY", "MOMENTUM", "VWAP", "ORB", "GAP", "ATH")
 
 STRATEGY_LABEL = {
     "BROAD":    "🔍 Broad Movers (widest net)",
+    "EARLY":    "⚡ Early Burst (pre-bust)",
     "MOMENTUM": "🔥 Momentum Breakout",
     "VWAP":     "📈 VWAP Pullback",
     "ORB":      "🕯️ Opening Range Breakout",
@@ -232,6 +233,7 @@ STRATEGY_LABEL = {
 STRATEGY_BEST_TIME_BY_MARKET: dict[str, dict[str, str]] = {
     "NSE": {
         "BROAD":    "Any session window  ·  use when you want the widest list",
+        "EARLY":    "9:30 – 10:45 AM IST  ·  6:00 – 7:15 AM CEST (before full bust)",
         "MOMENTUM": "9:30 – 11:00 AM IST  ·  6:00 – 7:30 AM CEST",
         "VWAP":     "10:30 AM – 1:00 PM IST  ·  7:00 – 9:30 AM CEST",
         "ORB":      "9:45 – 10:15 AM IST only  ·  6:15 – 6:45 AM CEST",
@@ -240,6 +242,7 @@ STRATEGY_BEST_TIME_BY_MARKET: dict[str, dict[str, str]] = {
     },
     "US": {
         "BROAD":    "Any session window  ·  use when you want the widest list",
+        "EARLY":    "9:45 – 11:30 AM ET  ·  3:45 – 5:30 PM CEST (before full bust)",
         "MOMENTUM": "9:45 – 11:00 AM ET  ·  3:45 – 5:00 PM CEST",
         "VWAP":     "11:00 AM – 1:30 PM ET  ·  5:00 – 7:30 PM CEST",
         "ORB":      "9:45 – 10:00 AM ET only  ·  3:45 – 4:00 PM CEST",
@@ -536,6 +539,21 @@ def _suggest_setup(strategy: str, price: float, intraday_low: Optional[float],
         target = round(entry + 1.5 * risk, 2)
         return ("Active mover with volume — confirm direction on 5m chart · 1:1.5 R:R",
                 entry, stop, target)
+
+    if strategy == "EARLY":
+        entry = round((orb_high or price) * 1.001, 2) if orb_high else round(price * 1.001, 2)
+        base = min(intraday_low or price * 0.992, (orb_low or price * 0.992) if orb_low else price * 0.992)
+        stop = round(base, 2)
+        risk = entry - stop
+        if risk <= 0:
+            return ("Early burst: wait for ORB/base — define stop manually.", None, None, None)
+        target = round(entry + 2.0 * risk, 2)
+        return (
+            "Early burst — enter on ORB hold / vol surge · stop below ORB low · 1:2 R:R · exit before lunch fade",
+            entry,
+            stop,
+            target,
+        )
 
     if strategy == "MOMENTUM":
         entry = round(price * 1.001, 2)
@@ -968,7 +986,7 @@ try:
 except ImportError:
     from quality_gate import QUALITY_GATE_BANDS  # type: ignore[no-redef]
 
-_PATTERN_STRATEGIES = frozenset({"GAP", "MOMENTUM", "ORB", "ATH", "VWAP"})
+_PATTERN_STRATEGIES = frozenset({"GAP", "EARLY", "MOMENTUM", "ORB", "ATH", "VWAP"})
 
 
 def compute_intraday_quality_gate(
@@ -1032,6 +1050,8 @@ def compute_intraday_quality_gate(
         pts += 8
     if pattern_row and any(c in _PATTERN_STRATEGIES for c in codes):
         pts += 5
+    if "EARLY" in codes or "early burst" in strat_label.lower():
+        pts += 10
 
     try:
         if rr is not None and float(rr) >= 1.5:
@@ -1124,15 +1144,24 @@ def _score_intraday_rules(ctx: dict, *, strategy_hits: int, hard_rejects: list[s
     pct_ma50 = ctx.get("pct_vs_ma50d")
     pct_ma200 = ctx.get("pct_vs_ma200d")
 
-    # 1) Volume ratio (max +30)
+    d_surge = _daily_volume_surge(ctx)
+    s_part = _session_volume_participation(ctx)
+    p_vol = 0
+    if d_surge >= 3.0:
+        p_vol = 22
+    elif d_surge >= 2.0:
+        p_vol = 18
+    elif s_part >= 0.35:
+        p_vol = 16
+    # 1) Volume ratio (max +30) — can raise score further
     if vr >= 5.0:
-        p_vol = 30
+        p_vol = max(p_vol, 30)
     elif vr >= 3.0:
-        p_vol = 20
+        p_vol = max(p_vol, 20)
     elif vr >= 1.0:
-        p_vol = 10
-    else:
-        p_vol = 0
+        p_vol = max(p_vol, 10)
+    elif d_surge >= 1.8 or s_part >= 0.25:
+        p_vol = max(p_vol, 8)
 
     # 2) Gap quality (-25 to +20)
     if gap >= 3.0:
@@ -1319,6 +1348,54 @@ def _make_result(
     )
 
 
+def _daily_volume_surge(ctx: dict) -> float:
+    """Today daily volume vs prior ~20 sessions (Yahoo daily bars)."""
+    daily = ctx.get("daily")
+    if daily is None or len(daily) < 6:
+        return 0.0
+    try:
+        vols = hist_series(daily, "Volume").astype(float).dropna()
+        if len(vols) < 6:
+            return 0.0
+        today = float(vols.iloc[-1])
+        prior = float(vols.iloc[:-1].tail(20).mean())
+        return round(today / prior, 2) if prior > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _session_volume_participation(ctx: dict) -> float:
+    """Share of typical full-day volume already traded in this intraday session."""
+    avg_dvol = float(ctx.get("avg_dvol") or 0.0)
+    session = ctx.get("session")
+    if avg_dvol <= 0 or session is None or getattr(session, "empty", True):
+        return 0.0
+    try:
+        sess_vol = float(hist_series(session, "Volume").astype(float).sum())
+        interval = ctx.get("bar_interval") or "5m"
+        bars_per_day = 26.0 if interval == "15m" else 78.0
+        expected = avg_dvol
+        if expected <= 0:
+            return 0.0
+        return round(min(2.0, sess_vol / expected), 2)
+    except Exception:
+        return 0.0
+
+
+def _early_soft_hard_rejects(reasons: list[str], ctx: dict) -> bool:
+    """Allow Early Burst through thin last-bar volume or mild extension rejects."""
+    if not reasons:
+        return True
+    d_surge = _daily_volume_surge(ctx)
+    s_part = _session_volume_participation(ctx)
+    vr = float(ctx.get("vol_ratio") or 0.0)
+    hot = d_surge >= 1.6 or s_part >= 0.18 or vr >= 1.5
+    if not hot:
+        return False
+    soft = {"vol<1.0x", "RSI>72", "vsVWAP>+2%"}
+    return all(r in soft for r in reasons)
+
+
 def _evaluate(strategy: str, ctx: dict, flt: IntradayFilters) -> Optional[str]:
     """Return matching note string or None if the strategy doesn't match.
 
@@ -1341,6 +1418,37 @@ def _evaluate(strategy: str, ctx: dict, flt: IntradayFilters) -> Optional[str]:
         # Widest net: meaningful move + volume (signal filters already applied).
         move_note = f"{pct_chg:+.2f}% vs prev close"
         return f"Broad mover · {move_note} · vol {vr:.1f}× · RSI {rsi:.1f}"
+
+    if strategy == "EARLY":
+        d_surge = _daily_volume_surge(ctx)
+        s_part = _session_volume_participation(ctx)
+        vr_eff = float(vr or 0.0)
+        hot_vol = d_surge >= 2.0 or vr_eff >= 2.5 or s_part >= 0.35
+        max_chg = 15.0 if hot_vol else 8.0
+        if pct_chg < 0.35 or pct_chg > max_chg:
+            return None
+        if rsi is None or not (42.0 <= rsi <= 78.0):
+            return None
+        if d_surge < 1.6 and s_part < 0.18 and vr_eff < 1.1:
+            return None
+        near_orb = bool(orb_h and price >= float(orb_h) * 0.985 and price <= float(orb_h) * 1.06)
+        fresh_break = bool(orb_h and price > float(orb_h) and price <= float(orb_h) * 1.05)
+        vol_extension = hot_vol and pct_chg >= 0.8 and vr_eff >= 1.5
+        if not (near_orb or fresh_break or vol_extension):
+            return None
+        floor_52w = -28.0 if hot_vol else -18.0
+        if pct_52w is not None and float(pct_52w) < floor_52w:
+            return None
+        if fresh_break:
+            tag = "ORB break"
+        elif near_orb:
+            tag = "coiling at ORB"
+        else:
+            tag = "vol-led extension"
+        return (
+            f"Early burst · {tag} · day {pct_chg:+.2f}% · "
+            f"d-vol {d_surge:.1f}× · sess {s_part:.0%} · bar-vol {vr_eff:.1f}× · RSI {rsi:.1f}"
+        )
 
     if strategy == "VWAP":
         if pct_ma200 is None or pct_ma200 <= 0:
@@ -1562,7 +1670,9 @@ def scan_intraday(
             sector = "—"
 
         reject_reasons = _hard_reject_reasons(ctx)
-        if reject_reasons:
+        early_probe = "EARLY" in strategies
+        early_hit = _evaluate("EARLY", ctx, flt) if early_probe else None
+        if reject_reasons and not (early_hit and _early_soft_hard_rejects(reject_reasons, ctx)):
             stats.failed_hard_reject += 1
             _notify_progress(
                 progress_cb, i + 1, total, raw, stage="done",
@@ -1571,7 +1681,11 @@ def scan_intraday(
             continue
 
         matched_notes: dict[str, str] = {}
+        if early_hit:
+            matched_notes["EARLY"] = early_hit
         for strategy in strategies:
+            if strategy == "EARLY":
+                continue
             note = _evaluate(strategy, ctx, flt)
             if note:
                 matched_notes[strategy] = note

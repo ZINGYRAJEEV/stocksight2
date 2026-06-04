@@ -965,6 +965,13 @@ STRATEGY_PLAYBOOK: dict[str, dict[str, str]] = {
         "means": "Low specificity — a *starting point*, not a setup. Confirm direction on the 5m chart "
                  "before acting.",
     },
+    "EARLY": {
+        "does": "Catches **pre-bust** movers: day up **0.35–8%**, RSI 45–72, **daily volume surge** "
+                "(e.g. 2×+ vs 20-day avg) or heavy session participation, price **coiling or just breaking** ORB.",
+        "use":  "First 60–75 minutes after open — **before** Momentum/ORB filters fire on a fully extended move.",
+        "means": "Designed for names like TEJASNET / ZENTEC-style bursts. Can pass even if the **last bar** "
+                 "volume is thin (bypasses vol<1.0 hard-reject when surge is real).",
+    },
     "MOMENTUM": {
         "does": "Strong stocks pushing higher — RSI ≥ 55, price above the 9-EMA, up on the day, "
                 "near the 52-week high, with volume.",
@@ -1002,11 +1009,12 @@ STRATEGY_PLAYBOOK: dict[str, dict[str, str]] = {
 
 # Strategies ordered by where they fire in the trading session (earliest → latest).
 # BROAD is time-agnostic so it sits last.
-STRATEGY_TIME_ORDER = ("GAP", "MOMENTUM", "ORB", "ATH", "VWAP", "BROAD")
+STRATEGY_TIME_ORDER = ("GAP", "EARLY", "MOMENTUM", "ORB", "ATH", "VWAP", "BROAD")
 
 # One-line exit hint shown on each scan row (matches scanner Target / Stop / R:R logic).
 EXIT_HINT_BY_STRATEGY: dict[str, str] = {
     "GAP": "Book 50% at Target (1:2) · exit all if gap fills · flat by close",
+    "EARLY": "Book partial at 1× risk · trail under ORB low · exit before lunch fade",
     "MOMENTUM": "Book 50% at Target (1:2) · trail stop under 5m swing lows",
     "ORB": "Book 50–100% at Target (1:1.5) · exit if loses ORB high",
     "ATH": "Book 50% at Target (1:2) · trail stop on new highs",
@@ -1527,6 +1535,84 @@ def _render_breeze_status_banner() -> None:
         _render_breeze_token_refresh()
 
 
+def _filters_to_dict(flt: IntradayFilters) -> dict[str, float]:
+    return {
+        "min_price": flt.min_price,
+        "max_price": flt.max_price,
+        "min_avg_volume_20d": flt.min_avg_volume_20d,
+        "min_volume_ratio": flt.min_volume_ratio,
+        "min_rsi": flt.min_rsi,
+        "max_rsi": flt.max_rsi,
+        "min_pct_change": flt.min_pct_change,
+    }
+
+
+def _filters_from_dict(d: dict[str, float]) -> IntradayFilters:
+    return IntradayFilters(
+        min_price=float(d.get("min_price", 50.0)),
+        max_price=float(d.get("max_price", 5000.0)),
+        min_avg_volume_20d=float(d.get("min_avg_volume_20d", 500_000.0)),
+        min_volume_ratio=float(d.get("min_volume_ratio", 1.0)),
+        min_rsi=float(d.get("min_rsi", 40.0)),
+        max_rsi=float(d.get("max_rsi", 80.0)),
+        min_pct_change=float(d.get("min_pct_change", 0.0)),
+    )
+
+
+def _run_intraday_scan_core(
+    *,
+    key: str,
+    raw_tickers: list[str],
+    strategies: tuple[str, ...],
+    flt: IntradayFilters,
+    market: str,
+    scan_api: str,
+    uni_label: str,
+    live_detail,
+    prog,
+    live_state: ScanLiveState,
+    cb,
+) -> tuple[list[IntradayResult], IntradayScanStats]:
+    results, scan_stats = scan_intraday(
+        raw_tickers,
+        strategies,
+        flt,
+        progress_cb=cb,
+        market=market,
+        data_source=scan_api,
+    )
+    try:
+        from algo_selector import detect_market_regime
+        from intraday_ranking import sort_intraday_results
+    except ImportError:
+        from .algo_selector import detect_market_regime  # type: ignore[no-redef]
+        from .intraday_ranking import sort_intraday_results  # type: ignore[no-redef]
+
+    regime, regime_note = detect_market_regime(market=market, sample_tickers=raw_tickers[:40])
+    st.session_state[f"{key}_regime"] = regime
+    st.session_state[f"{key}_regime_note"] = regime_note
+    results = sort_intraday_results(results, regime)
+
+    prog.progress(100, text="Scan complete")
+    live_state.tick(
+        len(raw_tickers),
+        len(raw_tickers),
+        "",
+        stage="done",
+        message=f"Finished in {getattr(scan_stats, 'scan_elapsed_sec', 0):.1f}s",
+        matched=scan_stats.tickers_matched,
+        no_data=scan_stats.no_data,
+    )
+    render_live_scan_status(live_state, detail_slot=live_detail)
+    st.session_state[f"{key}_results"] = results
+    st.session_state[f"{key}_stats"] = scan_stats
+    st.session_state[f"{key}_at"] = datetime.now().strftime("%d %b %Y %H:%M:%S")
+    st.session_state[f"{key}_universe"] = uni_label
+    st.session_state[f"{key}_scan_market"] = market
+    st.session_state[f"{key}_data_source"] = scan_api
+    return results, scan_stats
+
+
 def render_intraday_screener_page(
     *,
     key: str = "id",
@@ -1602,14 +1688,17 @@ Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Qu
         with c1:
             uni_label, raw_tickers = _universe_picker(key, market)
         with c2:
-            _default_strats = [s for s in ("BROAD", "MOMENTUM", "VWAP", "ORB", "GAP") if s in STRATEGIES]
+            _default_strats = [
+                s for s in ("BROAD", "EARLY", "MOMENTUM", "VWAP", "ORB", "GAP") if s in STRATEGIES
+            ]
             strategies_picked: list[str] = st.multiselect(
                 "Strategies to scan",
                 STRATEGIES,
                 default=_default_strats,
                 format_func=lambda s: STRATEGY_LABEL.get(s, s),
                 key=f"{key}_strats",
-                help="Enable **Broad Movers** for the widest net. Pattern strategies are stricter.",
+                help="Enable **⚡ Early Burst** to catch pre-bust movers (TEJASNET-style volume surge). "
+                "**Broad Movers** for the widest net.",
             )
             _render_strategy_playbook(market)
 
@@ -1625,7 +1714,27 @@ Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Qu
         data_source = "yahoo"
         st.caption("US scans use **Yahoo Finance** for intraday bars (ICICI Breeze is NSE/BSE only).")
 
-    run = st.button("▶  RUN INTRADAY SCAN", use_container_width=True, key=f"{key}_run")
+    r1, r2, r3 = st.columns([1.0, 1.1, 1.0])
+    with r1:
+        run = st.button("▶  RUN INTRADAY SCAN", use_container_width=True, key=f"{key}_run")
+    with r2:
+        st.session_state.setdefault(f"{key}_auto_scan", True)
+        auto_scan = st.checkbox(
+            "Auto-refresh scan (live)",
+            key=f"{key}_auto_scan",
+            help="Re-runs the same universe + filters on a timer. Keep this tab open.",
+        )
+    with r3:
+        scan_iv = st.slider(
+            "Refresh every (sec)",
+            30,
+            180,
+            int(st.session_state.get(f"{key}_scan_iv", 60)),
+            5,
+            key=f"{key}_scan_iv",
+            disabled=not auto_scan,
+        )
+
     if market == "US":
         st.caption(
             f"Universe: **{uni_label}** ({len(raw_tickers)} tickers). "
@@ -1635,66 +1744,107 @@ Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Qu
     else:
         st.caption(
             f"Universe: **{uni_label}** ({len(raw_tickers)} tickers). "
-            "Best run at **6:00 AM CEST** (9:30 AM IST) for breakouts · "
-            "**7:00 AM CEST** (10:30 AM IST) for VWAP pullbacks."
+            "Use **⚡ Early Burst** + auto-refresh 9:30–10:45 IST to catch movers **before** they extend."
         )
 
-    if run:
+    with st.expander("⚡ Why TEJASNET / ZENTEC-style moves were easy to miss", expanded=False):
+        st.markdown(
+            """
+**What happened (Yahoo daily data):**
+- **TEJASNET** — ~**5×** daily volume vs prior weeks; multi-day trend (+25% / 5d) with a sharp **Jun 3–4** burst.
+- **ZENTEC** — quiet name until **today’s volume explosion** (~10× typical) and a **+7–8%** session.
+
+**Why the old screener lagged:**
+1. **Momentum** wants RSI≥55 + extension — often fires **after** the first leg.
+2. **Hard reject `vol<1.0×`** on the **last 5m bar** — fails when volume already printed earlier in the session.
+3. No rule for **daily volume surge** independent of the latest bar.
+
+**What we added:**
+- **⚡ Early Burst** — ORB coil/break **or** vol-led extension when **daily vol ≥2×**; up to **+15%** day move on hot volume; recovery names up to **~28%** below 52W high.
+- Scoring / Quality Gate boost for volume surge; thin **last-bar** volume no longer hard-rejects Early hits.
+- **Auto-refresh** so the table updates without clicking RUN again.
+
+*Tip: Nifty 50 + Early Burst + 60s refresh during the first hour.*
+"""
+        )
+
+    scan_cfg_ready = bool(raw_tickers and strategies_picked)
+    scan_api = data_source if market == "NSE" or breeze_mode else "yahoo"
+
+    if run and scan_cfg_ready:
+        st.session_state[f"{key}_scan_cfg"] = {
+            "tickers": list(raw_tickers),
+            "strategies": tuple(strategies_picked),
+            "filters": _filters_to_dict(flt),
+            "market": market,
+            "scan_api": scan_api,
+            "uni_label": uni_label,
+        }
+        st.markdown("#### Live scan status")
+        live_detail = st.empty()
+        prog = st.progress(0, text="Initialising…")
+        live_state = ScanLiveState(total=len(raw_tickers), data_source=scan_api)
+        cb = make_streamlit_scan_callback(prog, live_detail, state=live_state)
+        results, scan_stats = _run_intraday_scan_core(
+            key=key,
+            raw_tickers=raw_tickers,
+            strategies=tuple(strategies_picked),
+            flt=flt,
+            market=market,
+            scan_api=scan_api,
+            uni_label=uni_label,
+            live_detail=live_detail,
+            prog=prog,
+            live_state=live_state,
+            cb=cb,
+        )
+        if breeze_mode and results:
+            _apply_scan_row_to_trade(key, pd.Series(_results_to_df([results[0]], market=market).iloc[0]))
+    elif run:
         if not raw_tickers:
             st.warning("Universe is empty. Pick a list or paste tickers.")
             return
         if not strategies_picked:
             st.warning("Pick at least one strategy.")
             return
-        scan_api = data_source if market == "NSE" or breeze_mode else "yahoo"
-        st.session_state[f"{key}_data_source"] = scan_api
 
-        st.markdown("#### Live scan status")
-        live_detail = st.empty()
-        prog = st.progress(0, text="Initialising…")
-        live_state = ScanLiveState(total=len(raw_tickers), data_source=scan_api)
-        cb = make_streamlit_scan_callback(prog, live_detail, state=live_state)
+    cfg = st.session_state.get(f"{key}_scan_cfg")
+    if auto_scan and cfg and scan_cfg_ready:
+        if len(raw_tickers) > 120:
+            st.warning("Auto-refresh works best on **≤120** tickers — use Nifty 50 / 100 for speed.")
+        st.info(f"**Live scan** — refreshing every **{scan_iv}s** (same universe & filters). Keep this tab open.")
 
-        results, scan_stats = scan_intraday(
-            raw_tickers,
-            tuple(strategies_picked),
-            flt,
-            progress_cb=cb,
-            market=market,
-            data_source=scan_api,
-        )
-        try:
-            from algo_selector import detect_market_regime
-            from intraday_ranking import sort_intraday_results
-        except ImportError:
-            from .algo_selector import detect_market_regime  # type: ignore[no-redef]
-            from .intraday_ranking import sort_intraday_results  # type: ignore[no-redef]
+        @st.fragment(run_every=timedelta(seconds=max(30, int(scan_iv))))
+        def _intraday_auto_scan() -> None:
+            if not st.session_state.get(f"{key}_auto_scan", False):
+                return
+            c = st.session_state.get(f"{key}_scan_cfg") or cfg
+            tickers = c.get("tickers") or raw_tickers
+            strats = tuple(c.get("strategies") or strategies_picked)
+            flt_c = _filters_from_dict(c.get("filters") or _filters_to_dict(flt))
+            mkt = c.get("market") or market
+            api = c.get("scan_api") or scan_api
+            uni = c.get("uni_label") or uni_label
+            st.markdown("#### Live scan status")
+            live_detail = st.empty()
+            prog = st.progress(0, text="Refreshing…")
+            live_state = ScanLiveState(total=len(tickers), data_source=api)
+            cb = make_streamlit_scan_callback(prog, live_detail, state=live_state)
+            _run_intraday_scan_core(
+                key=key,
+                raw_tickers=tickers,
+                strategies=strats,
+                flt=flt_c,
+                market=mkt,
+                scan_api=api,
+                uni_label=uni,
+                live_detail=live_detail,
+                prog=prog,
+                live_state=live_state,
+                cb=cb,
+            )
 
-        regime, regime_note = detect_market_regime(
-            market=market, sample_tickers=raw_tickers[:40],
-        )
-        st.session_state[f"{key}_regime"] = regime
-        st.session_state[f"{key}_regime_note"] = regime_note
-        results = sort_intraday_results(results, regime)
-
-        prog.progress(100, text="Scan complete")
-        live_state.tick(
-            len(raw_tickers),
-            len(raw_tickers),
-            "",
-            stage="done",
-            message=f"Finished in {getattr(scan_stats, 'scan_elapsed_sec', 0):.1f}s",
-            matched=scan_stats.tickers_matched,
-            no_data=scan_stats.no_data,
-        )
-        render_live_scan_status(live_state, detail_slot=live_detail)
-        st.session_state[f"{key}_results"] = results
-        st.session_state[f"{key}_stats"] = scan_stats
-        st.session_state[f"{key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")
-        st.session_state[f"{key}_universe"] = uni_label
-        st.session_state[f"{key}_scan_market"] = market
-        if breeze_mode and results:
-            _apply_scan_row_to_trade(key, pd.Series(_results_to_df([results[0]], market=market).iloc[0]))
+        _intraday_auto_scan()
 
     results: list[IntradayResult] = st.session_state.get(f"{key}_results", [])
     scan_stats: Optional[IntradayScanStats] = st.session_state.get(f"{key}_stats")

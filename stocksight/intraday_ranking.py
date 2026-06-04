@@ -32,6 +32,7 @@ _STRATEGY_PATTERN: dict[str, str] = {
     "ORB": "orb_breakout",
     "MOMENTUM": "momentum",
     "GAP": "orb_breakout",
+    "EARLY": "momentum",
     "ATH": "ath_breakout",
     "BROAD": "grid_range",
 }
@@ -110,6 +111,15 @@ def unified_intraday_score(
         why = f"{why} · regime {int(reg_adj)}"
     if confluence_n >= 2:
         why = f"{why} · {confluence_n} strategies"
+    if r.strategy == "EARLY":
+        score = min(100.0, score + 6.0)
+        why = f"{why} · early-burst priority"
+    try:
+        if r.vol_ratio is not None and float(r.vol_ratio) >= 1.5 and r.strategy == "EARLY":
+            score = min(100.0, score + 4.0)
+    except (TypeError, ValueError):
+        pass
+    score = max(0.0, min(100.0, round(score, 1)))
     return score, str(pack.get("label", "—")), why
 
 
