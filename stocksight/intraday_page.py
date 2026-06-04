@@ -973,6 +973,13 @@ STRATEGY_PLAYBOOK: dict[str, dict[str, str]] = {
         "means": "Designed for names like TEJASNET / ZENTEC-style bursts. Can pass even if the **last bar** "
                  "volume is thin (bypasses vol<1.0 hard-reject when surge is real).",
     },
+    "GRIND": {
+        "does": "**Sector steady grind** — themed name (e.g. **Defence & Aerospace**), vol **≥1.35×**, "
+                "price **+0.35–6% vs open** (smooth, not one spike), **≥68%** of session bars **above VWAP**, "
+                "**15m higher highs**, max 5m bar **≤2.8%** (institutional accumulation, not FOMO).",
+        "use":  "Mid-morning through early afternoon when sector peers drift up together (ZENTEC / MIDHANI style).",
+        "means": "Slow slope + volume = smart money staging in. Different from Early Burst (fast burst) or Gap (open pop).",
+    },
     "MOMENTUM": {
         "does": "Strong stocks pushing higher — RSI ≥ 55, price above the 9-EMA, up on the day, "
                 "near the 52-week high, with volume.",
@@ -1010,12 +1017,13 @@ STRATEGY_PLAYBOOK: dict[str, dict[str, str]] = {
 
 # Strategies ordered by where they fire in the trading session (earliest → latest).
 # BROAD is time-agnostic so it sits last.
-STRATEGY_TIME_ORDER = ("GAP", "EARLY", "MOMENTUM", "ORB", "ATH", "VWAP", "BROAD")
+STRATEGY_TIME_ORDER = ("GAP", "EARLY", "GRIND", "MOMENTUM", "ORB", "ATH", "VWAP", "BROAD")
 
 # One-line exit hint shown on each scan row (matches scanner Target / Stop / R:R logic).
 EXIT_HINT_BY_STRATEGY: dict[str, str] = {
     "GAP": "Book 50% at Target (1:2) · exit all if gap fills · flat by close",
     "EARLY": "Book partial at 1× risk · trail under ORB low · exit before lunch fade",
+    "GRIND": "Book 50% at Target (1:1.5) · trail under VWAP · exit if 5m closes below VWAP",
     "MOMENTUM": "Book 50% at Target (1:2) · trail stop under 5m swing lows",
     "ORB": "Book 50–100% at Target (1:1.5) · exit if loses ORB high",
     "ATH": "Book 50% at Target (1:2) · trail stop on new highs",
@@ -1202,7 +1210,8 @@ Without a gap scan this session: rely on **Early Burst + Broad** + auto-refresh;
 
 | Situation | Universe | Strategies | Filters | Auto-refresh | Extra |
 |-----------|----------|------------|---------|--------------|-------|
-| **Normal morning** | Nifty 50/100 | Early, Broad, GAP, ORB, Momentum | Vol **1.0×**, RSI **40–80**, Min change **0** | **60s** until ~{open_window.split("–")[-1].strip()} | Gap **overlap** on |
+| **Normal morning** | Nifty 50/100 | Early, **Grind**, Broad, GAP, ORB, Momentum | Vol **1.0×**, RSI **40–80**, Min change **0** | **60s** until ~{open_window.split("–")[-1].strip()} | Gap **overlap** on |
+| **Sector slow grind** | Nifty 500 / defence peers | **Grind**, Broad, VWAP | Same · RSI **50–72** on chart | **60–90s** 9:45–14:00 | Theme = Defence & Aerospace |
 | **Missed gap, still morning** | Nifty 50 | Early, Broad, Momentum, ORB | Same | **60s** | Run gap when you can |
 | **Late morning** | Nifty 50 | Early, Broad, Momentum, VWAP | Same | **90–120s** | Overlap optional |
 | **Afternoon only** | Watchlist / Nifty 50 | Broad, Momentum | Same | Off or **180s** | Square off by **{square_off}** |
@@ -1215,7 +1224,7 @@ Without a gap scan this session: rely on **Early Burst + Broad** + auto-refresh;
 
 | Session window | Emphasize |
 |----------------|-----------|
-| **{open_window}** | Early Burst, GAP, ORB, Momentum + auto-refresh |
+| **{open_window}** | Early Burst, Sector Grind, GAP, ORB, Momentum + auto-refresh |
 | **{vwap_window}** | VWAP, Momentum, Broad |
 | **{lunch_note}** | Manage open trades only |
 | **Before close** | No new entries · square off ~**{square_off}** |
@@ -1715,12 +1724,12 @@ def render_intraday_screener_page(
             "Active **NSE (India)** intraday traders who want candidates with Entry / Stop / Target "
             "attached, using **ICICI Breeze** or **Yahoo Finance** data (your choice per scan).",
             "Pick the data API above before each scan. **Auto** uses Breeze when your session token "
-            "is valid, otherwise Yahoo. Same 7-strategy engine + 7-rule ranking as the Intraday Screener. "
+            "is valid, otherwise Yahoo. Same 8-strategy engine + 7-rule ranking as the Intraday Screener. "
             "**Educational only — confirm risk before trading.**",
         )
     data_source = "auto"
     if not breeze_mode:
-        st.markdown("### 📡 Intraday Screener — 7 strategies, NSE or US")
+        st.markdown("### 📡 Intraday Screener — 8 strategies, NSE or US")
         page_audience_note(
             "Active intraday traders on **NSE (India)** or **US (NYSE & NASDAQ)** who want "
             "pre-screened candidates with Entry / Stop / Target attached.",
@@ -1773,7 +1782,7 @@ Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Qu
             uni_label, raw_tickers = _universe_picker(key, market)
         with c2:
             _default_strats = [
-                s for s in ("BROAD", "EARLY", "MOMENTUM", "VWAP", "ORB", "GAP") if s in STRATEGIES
+                s for s in ("BROAD", "EARLY", "GRIND", "MOMENTUM", "VWAP", "ORB", "GAP") if s in STRATEGIES
             ]
             strategies_picked: list[str] = st.multiselect(
                 "Strategies to scan",
@@ -1829,6 +1838,27 @@ Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Qu
         st.caption(
             f"Universe: **{uni_label}** ({len(raw_tickers)} tickers). "
             "Use **⚡ Early Burst** + auto-refresh 9:30–10:45 IST to catch movers **before** they extend."
+        )
+
+    with st.expander("📐 Sector Steady Grind — ZENTEC / MIDHANI logic", expanded=False):
+        st.markdown(
+            """
+**Common pattern:** peers in the same **theme** (e.g. **Defence & Aerospace**) rise **slowly since open** — no single news spike, 
+**volume ≥1.35×**, price **holds above VWAP** most of the session, **15m higher highs**, and **no violent 5m candles** (max bar ≤ ~2.8%).
+
+| Check | Rule in screener |
+|-------|------------------|
+| Specialization | Yahoo sector/industry keywords **or** known theme tickers (HAL, BEL, ZENTEC, MIDHANI, …) |
+| Volume | Bar or daily vol **≥1.35×** average |
+| vs open | **+0.35% to +6%** (wider if daily vol very hot) |
+| VWAP | **≥68%** of session bars close above VWAP |
+| Structure | **15m higher-high score ≥50%** · smooth 5m bodies |
+| RSI | **52–72** (or **40–72** when VWAP-hold + smooth grind) |
+
+Enable **📐 Sector Steady Grind** in strategies. Use **Nifty 500** or a defence watchlist + **auto-refresh** mid-morning.
+
+*Early Burst* = fast burst · *Grind* = slow institutional slope in a themed sector.
+"""
         )
 
     with st.expander("⚡ Why TEJASNET / ZENTEC-style moves were easy to miss", expanded=False):

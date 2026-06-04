@@ -215,11 +215,12 @@ INTRADAY_UNIVERSES_BY_MARKET: dict[str, dict[str, list[str]]] = {
 # Back-compat alias used by older code that imports INTRADAY_UNIVERSES directly.
 INTRADAY_UNIVERSES: dict[str, list[str]] = dict(NSE_INTRADAY_UNIVERSES)
 
-STRATEGIES = ("BROAD", "EARLY", "MOMENTUM", "VWAP", "ORB", "GAP", "ATH")
+STRATEGIES = ("BROAD", "EARLY", "GRIND", "MOMENTUM", "VWAP", "ORB", "GAP", "ATH")
 
 STRATEGY_LABEL = {
     "BROAD":    "🔍 Broad Movers (widest net)",
     "EARLY":    "⚡ Early Burst (pre-bust)",
+    "GRIND":    "📐 Sector Steady Grind",
     "MOMENTUM": "🔥 Momentum Breakout",
     "VWAP":     "📈 VWAP Pullback",
     "ORB":      "🕯️ Opening Range Breakout",
@@ -234,6 +235,7 @@ STRATEGY_BEST_TIME_BY_MARKET: dict[str, dict[str, str]] = {
     "NSE": {
         "BROAD":    "Any session window  ·  use when you want the widest list",
         "EARLY":    "9:30 – 10:45 AM IST  ·  6:00 – 7:15 AM CEST (before full bust)",
+        "GRIND":    "9:45 AM – 2:00 PM IST  ·  slow sector accumulation (Defence, etc.)",
         "MOMENTUM": "9:30 – 11:00 AM IST  ·  6:00 – 7:30 AM CEST",
         "VWAP":     "10:30 AM – 1:00 PM IST  ·  7:00 – 9:30 AM CEST",
         "ORB":      "9:45 – 10:15 AM IST only  ·  6:15 – 6:45 AM CEST",
@@ -243,6 +245,7 @@ STRATEGY_BEST_TIME_BY_MARKET: dict[str, dict[str, str]] = {
     "US": {
         "BROAD":    "Any session window  ·  use when you want the widest list",
         "EARLY":    "9:45 – 11:30 AM ET  ·  3:45 – 5:30 PM CEST (before full bust)",
+        "GRIND":    "10:00 AM – 2:00 PM ET  ·  slow sector grind (Defence, etc.)",
         "MOMENTUM": "9:45 – 11:00 AM ET  ·  3:45 – 5:00 PM CEST",
         "VWAP":     "11:00 AM – 1:30 PM ET  ·  5:00 – 7:30 PM CEST",
         "ORB":      "9:45 – 10:00 AM ET only  ·  3:45 – 4:00 PM CEST",
@@ -550,6 +553,21 @@ def _suggest_setup(strategy: str, price: float, intraday_low: Optional[float],
         target = round(entry + 2.0 * risk, 2)
         return (
             "Early burst — enter on ORB hold / vol surge · stop below ORB low · 1:2 R:R · exit before lunch fade",
+            entry,
+            stop,
+            target,
+        )
+
+    if strategy == "GRIND":
+        entry = round(price * 1.001, 2)
+        base = vwap if vwap else (intraday_low or price * 0.992)
+        stop = round(min(base, price * 0.992), 2)
+        risk = entry - stop
+        if risk <= 0:
+            return ("Sector grind: wait for VWAP/base — define stop manually.", None, None, None)
+        target = round(entry + 1.5 * risk, 2)
+        return (
+            "Sector grind — add on VWAP hold / 15m higher highs · stop below VWAP · 1:1.5 R:R · book before lunch fade",
             entry,
             stop,
             target,
@@ -986,7 +1004,7 @@ try:
 except ImportError:
     from quality_gate import QUALITY_GATE_BANDS  # type: ignore[no-redef]
 
-_PATTERN_STRATEGIES = frozenset({"GAP", "EARLY", "MOMENTUM", "ORB", "ATH", "VWAP"})
+_PATTERN_STRATEGIES = frozenset({"GAP", "EARLY", "GRIND", "MOMENTUM", "ORB", "ATH", "VWAP"})
 
 
 def compute_intraday_quality_gate(
@@ -1052,6 +1070,8 @@ def compute_intraday_quality_gate(
         pts += 5
     if "EARLY" in codes or "early burst" in strat_label.lower():
         pts += 10
+    if "GRIND" in codes or "sector grind" in strat_label.lower():
+        pts += 8
 
     try:
         if rr is not None and float(rr) >= 1.5:
@@ -1162,6 +1182,8 @@ def _score_intraday_rules(ctx: dict, *, strategy_hits: int, hard_rejects: list[s
         p_vol = max(p_vol, 10)
     elif d_surge >= 1.8 or s_part >= 0.25:
         p_vol = max(p_vol, 8)
+    if ctx.get("sector_theme") and float(ctx.get("session_above_vwap") or 0) >= 0.68:
+        p_vol = max(p_vol, 10)
 
     # 2) Gap quality (-25 to +20)
     if gap >= 3.0:
@@ -1450,6 +1472,47 @@ def _evaluate(strategy: str, ctx: dict, flt: IntradayFilters) -> Optional[str]:
             f"d-vol {d_surge:.1f}× · sess {s_part:.0%} · bar-vol {vr_eff:.1f}× · RSI {rsi:.1f}"
         )
 
+    if strategy == "GRIND":
+        theme = ctx.get("sector_theme")
+        if not theme:
+            return None
+        pct_open = float(ctx.get("pct_vs_open") or 0.0)
+        pct_chg_f = float(pct_chg or 0.0)
+        d_surge = _daily_volume_surge(ctx)
+        vr_eff = float(vr or 0.0)
+        sess_vwap = float(ctx.get("session_above_vwap") or 0.0)
+        hh = float(ctx.get("grind_hh_score") or 0.0)
+        hot = d_surge >= 2.0 or vr_eff >= 2.0
+        max_open = 10.0 if hot else 6.0
+        move = max(pct_open, pct_chg_f)
+        if move < 0.35:
+            return None
+        if pct_open > max_open and pct_chg_f > max_open + 2.0:
+            return None
+        if rsi is None:
+            return None
+        rsi_lo = 40.0 if (sess_vwap >= 0.72 and ctx.get("grind_smooth")) else 52.0
+        if not (rsi_lo <= rsi <= 72.0):
+            return None
+        if vr_eff < 1.35 and d_surge < 1.35:
+            return None
+        if sess_vwap < 0.68:
+            return None
+        vwap_floor = -1.0 if sess_vwap >= 0.70 else -0.2
+        if pct_vwap is not None and float(pct_vwap) < vwap_floor:
+            return None
+        if hh < 0.34 and not ctx.get("grind_higher_highs"):
+            return None
+        if not ctx.get("grind_smooth") and float(ctx.get("grind_max_bar_pct") or 99) > 3.2:
+            return None
+        if pct_chg_f <= 0 and pct_open <= 0:
+            return None
+        return (
+            f"Sector grind · {theme} · vs open {pct_open:+.2f}% · day {pct_chg_f:+.2f}% · "
+            f"VWAP hold {sess_vwap:.0%} · 15m HH {hh:.0%} · max bar {float(ctx.get('grind_max_bar_pct') or 0):.1f}% · "
+            f"vol {vr_eff:.1f}× · RSI {rsi:.1f}"
+        )
+
     if strategy == "VWAP":
         if pct_ma200 is None or pct_ma200 <= 0:
             return None
@@ -1664,10 +1727,23 @@ def scan_intraday(
             continue
 
         sector = "—"
+        industry = ""
         try:
-            sector, _ = get_sector_industry(yf.Ticker(raw))
+            sector, industry = get_sector_industry(yf.Ticker(raw))
         except Exception:
             sector = "—"
+            industry = ""
+        if "GRIND" in strategies:
+            try:
+                from intraday_grind import enrich_ctx_for_grind
+            except ImportError:
+                from .intraday_grind import enrich_ctx_for_grind  # type: ignore[no-redef]
+            sector, industry, _ = enrich_ctx_for_grind(
+                ctx, raw, sector=sector, industry=industry, market=market,
+            )
+        else:
+            ctx["sector_name"] = sector
+            ctx["industry"] = industry
 
         reject_reasons = _hard_reject_reasons(ctx)
         early_probe = "EARLY" in strategies
