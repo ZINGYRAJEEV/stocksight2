@@ -9,7 +9,7 @@ Pages:
 from __future__ import annotations
 
 import html
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 import pandas as pd
@@ -2176,8 +2176,7 @@ def _render_breeze_sell_panel(
             )
             if ok:
                 st.success(msg)
-                for k in ("bpos_positions", "bpos_orders", "bpos_trades", "bpos_holdings"):
-                    st.session_state.pop(k, None)
+                _bpos_clear_cache()
                 st.rerun()
             else:
                 st.error(msg)
@@ -2392,6 +2391,7 @@ def _enrich_breeze_portfolio_df(df: "pd.DataFrame", *, session_pred: str) -> "pd
         "pnl",
         "Max profit done?",
         "Sell now?",
+        "Profit health",
         "Why sell?",
         "Scan Target",
         "Scan Stop",
@@ -2409,50 +2409,100 @@ def _enrich_breeze_portfolio_df(df: "pd.DataFrame", *, session_pred: str) -> "pd
     )
     ordered = [c for c in prefer if c in out.columns]
     rest = [c for c in out.columns if c not in ordered]
-    return out[ordered + rest]
+    out = out[ordered + rest]
+    if "Sell now?" in out.columns and "Profit health" not in out.columns:
+        loc = int(out.columns.get_loc("Sell now?")) + 1
+        out.insert(loc, "Profit health", out.apply(_profit_health_label, axis=1))
+    return out
 
 
-def render_breeze_positions_page() -> None:
-    """Show ICICI live positions, today's orders, and executed trades (purchased tickers)."""
-    safe_set_page_config(page_title="ICICI Positions & Orders | StockSight", page_icon="📒", layout="wide")
-    inject_css()
+def _profit_health_label(row: "pd.Series") -> str:
+    sell = str(row.get("Sell now?") or "")
+    if "🔴" in sell:
+        return "🔴 Act — exit / protect"
+    if "🟡" in sell:
+        return "🟡 Caution — scale or trail"
+    pnl = _row_float(row, "pnl")
+    if pnl is not None:
+        if pnl > 0:
+            return "🟢 Healthy — in profit"
+        if pnl < 0:
+            return "🔴 Underwater"
+    max_done = str(row.get("Max profit done?") or "")
+    if "✅" in max_done:
+        return "🟢 Target / plan hit"
+    return "🟢 Hold — plan intact"
 
-    st.markdown("### 📒 ICICI Positions & Orders — your purchased tickers")
-    _render_breeze_status_banner()
-    page_audience_note(
-        "Traders who placed orders via the **ICICI Breeze Screener** and want to see open "
-        "positions, today's orders, and executed trades in one place.",
-        "Reads live data from your ICICI account via Breeze (positions, order book, trade book). "
-        "You can also place **SELL** orders from the **Sell from screen** panel (with CONFIRM).",
+
+_BPOS_CACHE_KEYS = ("bpos_positions", "bpos_orders", "bpos_trades", "bpos_holdings", "bpos_fetched_at")
+
+
+def _bpos_clear_cache() -> None:
+    for k in _BPOS_CACHE_KEYS:
+        st.session_state.pop(k, None)
+
+
+def _bpos_fetch_snapshot(*, force: bool = False) -> None:
+    """Load positions, orders, trades, holdings from ICICI Breeze into session state."""
+    if not force and "bpos_positions" in st.session_state:
+        return
+    from breeze_data import get_holdings, get_order_book, get_positions, get_trade_book
+
+    st.session_state["bpos_positions"] = get_positions()
+    st.session_state["bpos_orders"] = get_order_book(days=1)
+    st.session_state["bpos_trades"] = get_trade_book(days=1)
+    st.session_state["bpos_holdings"] = get_holdings()
+    st.session_state["bpos_fetched_at"] = datetime.now().strftime("%H:%M:%S")
+
+
+def _render_bpos_live_summary(pos_enriched: "pd.DataFrame") -> None:
+    """Headline P/L and sell-signal counts for open positions."""
+    fetched = st.session_state.get("bpos_fetched_at", "—")
+    auto = st.session_state.get("bpos_auto_refresh", False)
+    iv = st.session_state.get("bpos_refresh_sec", 60)
+    mode = f"Auto every **{iv}s**" if auto else "Manual"
+    st.caption(f"Last ICICI fetch: **{fetched}** · {mode}")
+
+    if pos_enriched.empty:
+        return
+
+    total_pnl = 0.0
+    has_pnl = False
+    if "pnl" in pos_enriched.columns:
+        for v in pos_enriched["pnl"]:
+            try:
+                if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                    total_pnl += float(v)
+                    has_pnl = True
+            except (TypeError, ValueError):
+                pass
+
+    sell_col = pos_enriched.get("Sell now?", pd.Series(dtype=str)).astype(str)
+    n_exit = int(sell_col.str.contains("🔴", na=False).sum())
+    n_caution = int(sell_col.str.contains("🟡", na=False).sum())
+    n_hold = int(sell_col.str.contains("🟢", na=False).sum())
+    n_at_target = int(
+        pos_enriched.get("Max profit done?", pd.Series(dtype=str))
+        .astype(str)
+        .str.contains("✅", na=False)
+        .sum()
     )
 
-    try:
-        from breeze_data import (
-            breeze_configured,
-            get_holdings,
-            get_order_book,
-            get_positions,
-            get_trade_book,
-        )
-    except Exception:
-        st.error("Breeze module unavailable.")
-        return
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Open positions", len(pos_enriched))
+    if has_pnl:
+        m2.metric("Total P/L (₹)", f"{total_pnl:,.0f}")
+    else:
+        m2.metric("Total P/L (₹)", "—")
+    m3.metric("🔴 Sell now", n_exit)
+    m4.metric("🟡 Scale / trail", n_caution)
+    m5.metric("✅ Plan complete", n_at_target)
+    if n_hold:
+        st.caption(f"**{n_hold}** position(s) marked **🟢 Hold** — refresh updates LTP and profit health.")
 
-    if not breeze_configured():
-        st.warning("🟠 Breeze isn't connected — add credentials / refresh the daily token above.")
-        return
 
-    if st.button("🔄 Refresh from ICICI", key="bpos_refresh", use_container_width=True):
-        for k in ("bpos_positions", "bpos_orders", "bpos_trades", "bpos_holdings"):
-            st.session_state.pop(k, None)
-
-    if "bpos_positions" not in st.session_state:
-        with st.spinner("Fetching positions, orders and trades from ICICI…"):
-            st.session_state["bpos_positions"] = get_positions()
-            st.session_state["bpos_orders"] = get_order_book(days=1)
-            st.session_state["bpos_trades"] = get_trade_book(days=1)
-            st.session_state["bpos_holdings"] = get_holdings()
-
+def _render_breeze_positions_content() -> None:
+    """Tabs + tables — expects ``_bpos_fetch_snapshot`` to have run."""
     pos_rows, pos_err = st.session_state["bpos_positions"]
     ord_rows, ord_err = st.session_state["bpos_orders"]
     trd_rows, trd_err = st.session_state["bpos_trades"]
@@ -2482,8 +2532,8 @@ def render_breeze_positions_page() -> None:
 
     with tab_pos:
         st.caption(
-            "Live intraday positions · **Max profit done?**, **Sell now?**, and **Why sell?** "
-            "use your last scan Target/Stop vs current LTP."
+            "Live intraday positions · **Profit health**, **Max profit done?**, **Sell now?** "
+            "refresh with LTP when auto-refresh is on."
         )
         if pos_err:
             st.error(f"Could not load positions: {pos_err}")
@@ -2497,6 +2547,7 @@ def render_breeze_positions_page() -> None:
             st.info("No open positions right now.")
         else:
             pos_enriched = _enrich_breeze_portfolio_df(df, session_pred=session_pred)
+            _render_bpos_live_summary(pos_enriched)
             st.caption("💡 Click a row to pre-fill **Sell from screen** with that position's signals.")
             tbl = st.dataframe(
                 pos_enriched,
@@ -2555,6 +2606,85 @@ def render_breeze_positions_page() -> None:
         else:
             st.dataframe(_enrich_breeze_portfolio_df(df, session_pred=session_pred), use_container_width=True, hide_index=True)
 
+
+def render_breeze_positions_page() -> None:
+    """Show ICICI live positions, today's orders, and executed trades (purchased tickers)."""
+    safe_set_page_config(page_title="ICICI Positions & Orders | StockSight", page_icon="📒", layout="wide")
+    inject_css()
+
+    st.markdown("### 📒 ICICI Positions & Orders — your purchased tickers")
+    _render_breeze_status_banner()
+    page_audience_note(
+        "Traders who placed orders via the **ICICI Breeze Screener** and want to see open "
+        "positions, today's orders, and executed trades in one place.",
+        "Reads live data from your ICICI account via Breeze (positions, order book, trade book). "
+        "You can also place **SELL** orders from the **Sell from screen** panel (with CONFIRM).",
+    )
+
+    try:
+        from breeze_data import (
+            breeze_configured,
+            get_holdings,
+            get_order_book,
+            get_positions,
+            get_trade_book,
+        )
+    except Exception:
+        st.error("Breeze module unavailable.")
+        return
+
+    if not breeze_configured():
+        st.warning("🟠 Breeze isn't connected — add credentials / refresh the daily token above.")
+        return
+
+    st.session_state.setdefault("bpos_auto_refresh", True)
+    st.session_state.setdefault("bpos_refresh_sec", 45)
+
+    t1, t2, t3 = st.columns([1.0, 1.1, 1.0])
+    with t1:
+        if st.button("🔄 Refresh now", key="bpos_refresh", use_container_width=True):
+            _bpos_clear_cache()
+            st.rerun()
+    with t2:
+        auto_refresh = st.checkbox(
+            "Auto-refresh positions (live P/L & sell signals)",
+            key="bpos_auto_refresh",
+            help="Keeps this tab open and re-fetches from ICICI on a timer.",
+        )
+    with t3:
+        refresh_sec = st.slider(
+            "Refresh every (seconds)",
+            15,
+            120,
+            int(st.session_state.get("bpos_refresh_sec", 45)),
+            5,
+            key="bpos_refresh_sec",
+            disabled=not auto_refresh,
+        )
+
+    if auto_refresh:
+        st.info(
+            f"**Live mode** — open positions, P/L, and **Profit health** update every "
+            f"**{refresh_sec}** seconds. Keep this page open during the session."
+        )
+
+        @st.fragment(run_every=timedelta(seconds=max(15, int(refresh_sec))))
+        def _bpos_live_refresh() -> None:
+            if not st.session_state.get("bpos_auto_refresh", False):
+                return
+            with st.spinner("Updating from ICICI…"):
+                _bpos_fetch_snapshot(force=True)
+            _render_breeze_positions_content()
+
+        _bpos_live_refresh()
+    else:
+        if "bpos_positions" not in st.session_state:
+            with st.spinner("Fetching positions, orders and trades from ICICI…"):
+                _bpos_fetch_snapshot(force=True)
+        else:
+            _bpos_fetch_snapshot(force=False)
+        _render_breeze_positions_content()
+
     with st.expander("ℹ How Max profit done? / Sell now? are calculated", expanded=False):
         st.markdown(
             """
@@ -2575,8 +2705,8 @@ Use **⚠️ Sell from screen** below the positions table to send a Market or Li
         )
 
     st.caption(
-        "Read-only snapshot from ICICI Breeze. Click **Refresh** to re-fetch. "
-        "Always verify against the official ICICI Direct order book."
+        "Data from ICICI Breeze. Use **Auto-refresh** for continuous open-position P/L and sell signals, "
+        "or **Refresh now** for a one-off update. Always verify against ICICI Direct."
     )
 
 
