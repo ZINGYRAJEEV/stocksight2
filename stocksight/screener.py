@@ -690,7 +690,8 @@ def next_earnings_label(ticker_obj: yf.Ticker) -> str:
     return ""
 
 
-RECENT_NEWS_MAX_AGE_DAYS = 4
+RECENT_NEWS_MAX_AGE_DAYS = 7
+RECENT_NEWS_COL_LABEL = "Recent news (7d)"
 
 
 def _news_item_content(item: dict) -> dict:
@@ -786,6 +787,27 @@ class NewsHeadline:
     source: str = ""  # e.g. Yahoo Finance, Google News
 
 
+def format_structured_news_cell(
+    items: list[NewsHeadline],
+    *,
+    max_items: int = 2,
+) -> str:
+    """Compact cell from structured headlines (Yahoo + Google News)."""
+    if not items:
+        return "—"
+    parts: list[str] = []
+    for h in items[:max_items]:
+        title = (h.title or "").strip()
+        if not title:
+            continue
+        if h.published is not None:
+            prefix = _format_news_date_label(h.published)
+        else:
+            prefix = (h.source or h.publisher or "News").strip()
+        parts.append(f"{prefix} · {title[:85]}")
+    return " | ".join(parts) if parts else "—"
+
+
 def _news_item_url(item: dict) -> str:
     c = _news_item_content(item)
     for key in ("canonicalUrl", "clickThroughUrl"):
@@ -835,12 +857,16 @@ def enrich_dataframe_recent_news(
     max_age_days: int = RECENT_NEWS_MAX_AGE_DAYS,
     limit_per_ticker: int = 2,
     max_rows: int = 50,
-    delay_sec: float = 0.12,
+    delay_sec: float = 0.08,
     insert_after: str = "Sentiment why",
+    skip_company_lookup: bool = True,
 ) -> pd.DataFrame:
-    """Add ``Recent news (<4d)`` column (extra Yahoo calls — capped for performance)."""
-    if df is None or df.empty or "Recent news (<4d)" in df.columns:
+    """Add recent-news column (Yahoo Finance + Google News RSS — capped for performance)."""
+    if df is None or df.empty:
         return df
+    for existing in (RECENT_NEWS_COL_LABEL, "Recent news (<4d)", "Recent news (<7d)"):
+        if existing in df.columns:
+            return df
 
     out = df.copy()
     headlines: list[str] = []
@@ -852,14 +878,21 @@ def enrich_dataframe_recent_news(
             raw = str(row[raw_ticker_col] or "").strip()
         else:
             raw = raw_ticker_from_display(str(row.get(ticker_col, "")), universe_name)
+        if raw and not raw.upper().endswith((".NS", ".BO")) and "NSE" in str(universe_name).upper():
+            raw = raw_ticker_from_display(raw, universe_name)
         if not raw:
             headlines.append("—")
             continue
-        items = fetch_recent_quote_news(
-            raw, limit=limit_per_ticker, max_age_days=max_age_days
+        items = fetch_structured_news(
+            raw,
+            limit=max(limit_per_ticker, 3),
+            max_age_days=max_age_days,
+            skip_company_lookup=skip_company_lookup,
         )
         headlines.append(
-            format_recent_news_cell(items) if items else "No headlines in last 4d"
+            format_structured_news_cell(items, max_items=limit_per_ticker)
+            if items
+            else f"No headlines ({max_age_days}d window)"
         )
         if delay_sec > 0:
             time.sleep(delay_sec)
@@ -867,7 +900,7 @@ def enrich_dataframe_recent_news(
     pos = len(out.columns)
     if insert_after in out.columns:
         pos = out.columns.get_loc(insert_after) + 1
-    out.insert(pos, "Recent news (<4d)", headlines)
+    out.insert(pos, RECENT_NEWS_COL_LABEL, headlines)
     return out
 
 

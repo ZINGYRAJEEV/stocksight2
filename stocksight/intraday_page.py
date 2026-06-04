@@ -64,9 +64,9 @@ except ImportError:
         render_quality_gate_legend,
     )
 try:
-    from news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker
+    from news_scanner import attach_news_scanner_columns
 except ImportError:
-    from .news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker  # type: ignore[no-redef]
+    from .news_scanner import attach_news_scanner_columns  # type: ignore[no-redef]
 from ui_components import (
     SCAN_RESULTS_NEWS_COL,
     ensure_session_choice,
@@ -126,77 +126,35 @@ def _add_intraday_news_scanner_columns(
     market: str = "NSE",
     max_rows: int = 80,
 ) -> pd.DataFrame:
-    """Add News Scanner confirmation columns to intraday/gap tables."""
+    """Add News Scanner confirmation columns (Yahoo + Google News) to intraday/gap tables."""
     if df is None or df.empty:
         return df
-    if "News score" in df.columns:
-        return df
-
-    enabled = bool(st.session_state.get("intraday_news_confirm_enabled", True))
-    if not enabled:
+    if not bool(st.session_state.get("intraday_news_confirm_enabled", True)):
         return df
 
     max_rows = int(st.session_state.get("intraday_news_confirm_max_rows", max_rows))
-    out = df.copy()
-    universe_name = _news_universe_for_market(market)
-    cache: dict[str, object] = st.session_state.setdefault("_intraday_news_scanner_cache", {})
-
-    news_scores: list[Optional[int]] = []
-    top_tiers: list[str] = []
-    tier_refs: list[str] = []
-    top_headlines: list[str] = []
-    confirm_actions: list[str] = []
-
-    for i, (_, row) in enumerate(out.iterrows()):
-        if i >= max_rows:
-            news_scores.append(None)
-            top_tiers.append("—")
-            tier_refs.append("—")
-            top_headlines.append("—")
-            confirm_actions.append("— (narrow list for full news scoring)")
-            continue
-
-        raw = str(row.get("Raw") or row.get("Ticker") or "").strip()
-        if not raw:
-            news_scores.append(None)
-            top_tiers.append("—")
-            tier_refs.append("—")
-            top_headlines.append("—")
-            confirm_actions.append("—")
-            continue
-
-        ckey = f"{universe_name}|{raw.upper()}"
-        summary = cache.get(ckey)
-        if summary is None:
-            summary = analyze_ticker(raw, universe_name=universe_name)
-            cache[ckey] = summary
-
-        score = int(getattr(summary, "news_score", 0) or 0)
-        top_tier = int(getattr(summary, "top_tier", 4) or 4)
-        headline = str(getattr(summary, "top_headline", "") or "").strip()
-        action = str(getattr(summary, "action", "") or "").strip()
-
-        news_scores.append(score)
-        top_tiers.append(f"{TIER_EMOJI.get(top_tier, '•')} T{top_tier}")
-        tier_refs.append(f"{TIER_EMOJI.get(top_tier, '•')} {TIER_LABELS.get(top_tier, f'Tier {top_tier}')}")
-        top_headlines.append(headline[:95] if headline else "—")
-        confirm_actions.append(action[:95] if action else "—")
-
-    out["News score"] = news_scores
-    out["Top tier"] = top_tiers
-    out["Tier reference"] = tier_refs
-    out["Top headline"] = top_headlines
-    out["Confirm action"] = confirm_actions
-    return out
+    max_age = int(st.session_state.get("news_scan_max_age", 7))
+    return attach_news_scanner_columns(
+        df,
+        universe_name=_news_universe_for_market(market),
+        max_rows=max_rows,
+        max_age_days=max_age,
+        fast_universe=True,
+        cache_key="_intraday_news_scanner_cache",
+    )
 
 
 def _news_confirmation_controls() -> None:
     with st.expander("📰 News confirmation settings", expanded=False):
+        st.caption(
+            "Headlines from **Yahoo Finance + Google News RSS** (same engine as News Scanner). "
+            "Uses **News window (days)** from the News Scanner page when set (default **7**)."
+        )
         st.checkbox(
             "Enable News Scanner confirmation columns",
             value=bool(st.session_state.get("intraday_news_confirm_enabled", True)),
             key="intraday_news_confirm_enabled",
-            help="Adds News score / Top tier / Tier reference / Top headline / Confirm action.",
+            help="Adds News score, tier, headline, sources, and confirm action.",
         )
         st.slider(
             "Max rows for news scoring",
@@ -206,6 +164,14 @@ def _news_confirmation_controls() -> None:
             step=10,
             key="intraday_news_confirm_max_rows",
             help="Higher values provide broader scoring but take longer.",
+        )
+        st.session_state.setdefault("news_scan_max_age", 7)
+        st.slider(
+            "News window (days)",
+            3,
+            30,
+            int(st.session_state.get("news_scan_max_age", 7)),
+            key="news_scan_max_age",
         )
 
 
@@ -736,6 +702,7 @@ def _intraday_col_cfg(df: pd.DataFrame) -> dict:
             "Sentiment why": st.column_config.TextColumn("Sentiment why", width="large"),
             SCAN_RESULTS_NEWS_COL: st.column_config.TextColumn(SCAN_RESULTS_NEWS_COL, width="large"),
             "News score": st.column_config.ProgressColumn("News score", min_value=0, max_value=100, format="%d"),
+            "News sources": st.column_config.TextColumn("News sources", width="small"),
             "Top tier": st.column_config.TextColumn("Top tier", width="small"),
             "Tier reference": st.column_config.TextColumn("Tier reference", width="medium"),
             "Top headline": st.column_config.TextColumn("Top headline", width="large"),
@@ -831,6 +798,7 @@ def _gap_col_cfg(df: pd.DataFrame) -> dict:
             "Sentiment why": st.column_config.TextColumn("Sentiment why", width="large"),
             SCAN_RESULTS_NEWS_COL: st.column_config.TextColumn(SCAN_RESULTS_NEWS_COL, width="large"),
             "News score": st.column_config.ProgressColumn("News score", min_value=0, max_value=100, format="%d"),
+            "News sources": st.column_config.TextColumn("News sources", width="small"),
             "Top tier": st.column_config.TextColumn("Top tier", width="small"),
             "Tier reference": st.column_config.TextColumn("Tier reference", width="medium"),
             "Top headline": st.column_config.TextColumn("Top headline", width="large"),

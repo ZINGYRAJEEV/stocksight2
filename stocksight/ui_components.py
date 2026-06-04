@@ -45,7 +45,6 @@ try:
         upsert_watchlist_fields,
     )
     from .market_sentiment import add_market_sentiment_columns, market_from_universe
-    from .news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker
     from .quality_gate import (
         GATE_COL,
         apply_quality_gate_columns,
@@ -80,7 +79,6 @@ except ImportError:
         upsert_watchlist_fields,
     )
     from market_sentiment import add_market_sentiment_columns, market_from_universe  # type: ignore[no-redef]
-    from news_scanner import TIER_EMOJI, TIER_LABELS, analyze_ticker  # type: ignore[no-redef]
     from quality_gate import (  # type: ignore[no-redef]
         GATE_COL,
         apply_quality_gate_columns,
@@ -454,7 +452,7 @@ def scenario_advanced_panel(key_prefix: str) -> dict:
             key=f"{key_prefix}_nodivbear",
         )
         fetch_news = st.checkbox(
-            "Fetch recent Yahoo headlines for matches (last 4 days, extra calls)",
+            "Fetch recent headlines for matches (Yahoo + Google News, 7d window, extra calls)",
             value=True,
             key=f"{key_prefix}_news",
         )
@@ -521,7 +519,10 @@ def scenario_advanced_panel(key_prefix: str) -> dict:
     }
 
 
-SCAN_RESULTS_NEWS_COL = "Recent news (<4d)"
+try:
+    from screener import RECENT_NEWS_COL_LABEL as SCAN_RESULTS_NEWS_COL
+except ImportError:
+    from .screener import RECENT_NEWS_COL_LABEL as SCAN_RESULTS_NEWS_COL  # type: ignore[no-redef]
 SCAN_NEWS_SCORE_COL = "News score"
 SCAN_TOP_TIER_COL = "Top tier"
 SCAN_TIER_REF_COL = "Tier reference"
@@ -534,12 +535,12 @@ def maybe_enrich_news(
     enabled: bool = True,
     max_names: int = 35,
 ) -> None:
-    """Fetch dated Yahoo headlines (last 4 days) for cards and fall-context helpers."""
+    """Fetch dated headlines (Yahoo + Google News) for cards and fall-context helpers."""
     if not enabled or not results:
         return
     if len(results) > max_names:
         st.warning(
-            f"Headlines skipped — more than {max_names} matches (too many Yahoo calls). "
+            f"Headlines skipped — more than {max_names} matches (too many news API calls). "
             "Narrow filters or disable headlines in Advanced."
         )
         return
@@ -579,6 +580,7 @@ def _scan_table_news_column_config() -> dict:
         SCAN_TIER_REF_COL: st.column_config.TextColumn(SCAN_TIER_REF_COL, width="medium"),
         SCAN_TOP_HEADLINE_COL: st.column_config.TextColumn(SCAN_TOP_HEADLINE_COL, width="large"),
         SCAN_CONFIRM_ACTION_COL: st.column_config.TextColumn(SCAN_CONFIRM_ACTION_COL, width="medium"),
+        "News sources": st.column_config.TextColumn("News sources", width="small"),
         **quality_gate_column_config(),
     }
 
@@ -616,7 +618,7 @@ def prepare_scan_results_df(
     if "Market sentiment" not in df.columns:
         df = add_market_sentiment_columns(df, market=mkt, insert_after=insert_after)
 
-    if SCAN_RESULTS_NEWS_COL in df.columns:
+    if SCAN_RESULTS_NEWS_COL in df.columns or "Recent news (<4d)" in df.columns:
         return _finish(df)
 
     raw_col = raw_ticker_col
@@ -631,40 +633,29 @@ def prepare_scan_results_df(
 
     if len(df) <= max_news_rows:
         if news_cache_key not in st.session_state:
-            with st.spinner("Loading recent headlines (last 4 days)…"):
+            max_age = int(st.session_state.get("news_scan_max_age", 7))
+            with st.spinner("Loading headlines (Yahoo + Google News)…"):
                 enriched = enrich_dataframe_recent_news(
                     df,
                     universe_name=universe_name,
                     raw_ticker_col=raw_col,
+                    max_age_days=max_age,
                     insert_after="Sentiment why" if "Sentiment why" in df.columns else insert_after,
+                    skip_company_lookup=True,
                 )
                 mkt_for_news = "S&P 500 (NYSE)" if str(mkt).upper() == "US" else "Nifty 500 (NSE)"
-                scores: list[Optional[int]] = []
-                tiers: list[str] = []
-                refs: list[str] = []
-                headlines: list[str] = []
-                actions: list[str] = []
-                for _, row in enriched.iterrows():
-                    raw = str(row.get(raw_col) if raw_col else row.get("Ticker", "")).strip()
-                    if not raw:
-                        scores.append(None)
-                        tiers.append("—")
-                        refs.append("—")
-                        headlines.append("—")
-                        actions.append("—")
-                        continue
-                    s = analyze_ticker(raw, universe_name=mkt_for_news)
-                    tier = int(getattr(s, "top_tier", 4) or 4)
-                    scores.append(int(getattr(s, "news_score", 0) or 0))
-                    tiers.append(f"{TIER_EMOJI.get(tier, '•')} T{tier}")
-                    refs.append(f"{TIER_EMOJI.get(tier, '•')} {TIER_LABELS.get(tier, f'Tier {tier}')}")
-                    headlines.append(str(getattr(s, "top_headline", "") or "—")[:95])
-                    actions.append(str(getattr(s, "action", "") or "—")[:95])
-                enriched[SCAN_NEWS_SCORE_COL] = scores
-                enriched[SCAN_TOP_TIER_COL] = tiers
-                enriched[SCAN_TIER_REF_COL] = refs
-                enriched[SCAN_TOP_HEADLINE_COL] = headlines
-                enriched[SCAN_CONFIRM_ACTION_COL] = actions
+                try:
+                    from news_scanner import attach_news_scanner_columns
+                except ImportError:
+                    from .news_scanner import attach_news_scanner_columns  # type: ignore[no-redef]
+                enriched = attach_news_scanner_columns(
+                    enriched,
+                    universe_name=mkt_for_news,
+                    max_rows=len(enriched),
+                    max_age_days=max_age,
+                    fast_universe=True,
+                    cache_key=f"{news_cache_key}_confirm",
+                )
                 st.session_state[news_cache_key] = enriched
         return _finish(st.session_state[news_cache_key])
 

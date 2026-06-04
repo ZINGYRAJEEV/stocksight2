@@ -656,7 +656,7 @@ def _fetch(
 
 
 def enrich_results_news(results: list[SignalResult], limit_per_ticker: int = 3) -> None:
-    """Populate news headlines (extra Yahoo calls — use only for small result sets)."""
+    """Populate news headlines (Yahoo + Google News — use only for small result sets)."""
     for r in results:
         r.news_headlines = fetch_quote_news(r.raw_ticker, limit_per_ticker)
         r.news_sentiment = headline_sentiment_label(r.news_headlines)
@@ -710,7 +710,7 @@ def summarize_why_it_fell(
                 tape.append("holding up vs index despite dip")
         tape_bit = (" (" + "; ".join(tape) + ")") if tape else ""
         return (
-            "No recent headlines in Yahoo — may be broad market / sector rotation"
+            "No recent headlines in news feeds — may be broad market / sector rotation"
             + tape_bit
             + ". Check Screener.in or the latest concall."
         )
@@ -756,7 +756,7 @@ def summarize_why_it_fell(
 
 
 def enrich_healthy_dip_fall_context(results: list[SignalResult], limit_per_ticker: int = 4) -> None:
-    """Fetch headlines and set `fall_context` for Healthy Dip matches (extra Yahoo calls)."""
+    """Fetch headlines and set `fall_context` for Healthy Dip matches (multi-source news)."""
     for r in results:
         headlines = fetch_quote_news(r.raw_ticker, limit_per_ticker)
         r.news_headlines = headlines

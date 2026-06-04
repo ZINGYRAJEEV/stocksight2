@@ -23,6 +23,9 @@ _USER_AGENT = (
 )
 _FETCH_TIMEOUT = 18
 
+DEFAULT_NEWS_MAX_AGE_DAYS = 7
+RELAX_NEWS_MAX_AGE_DAYS = 30
+
 
 def _http_get(url: str) -> bytes:
     req = urllib.request.Request(

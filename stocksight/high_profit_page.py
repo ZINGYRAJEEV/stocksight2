@@ -191,9 +191,12 @@ def render_high_profit_page(archetype_id: str) -> None:
         )
         if view == "Cards":
             if len(results) <= 35:
-                with st.spinner("Loading recent headlines (last 4 days)…"):
+                max_age = int(st.session_state.get("news_scan_max_age", 7))
+                with st.spinner("Loading recent headlines (Yahoo + Google News)…"):
                     for r in results:
-                        r.news_headlines = fetch_recent_quote_news(r.raw_ticker, limit=3)
+                        r.news_headlines = fetch_recent_quote_news(
+                            r.raw_ticker, limit=3, max_age_days=max_age
+                        )
             for rank, r in enumerate(results, start=1):
                 high_profit_detail_card(r, rank)
 

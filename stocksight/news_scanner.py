@@ -10,7 +10,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 try:
     from .screener import (
@@ -376,6 +379,110 @@ def parse_watchlist_lines(text: str) -> list[tuple[str, Optional[float]]]:
                 pass
         rows.append((sym, vol))
     return rows
+
+
+def _resolve_raw_for_news(row, universe_name: str) -> str:
+    """Map a scan table row to a yfinance symbol."""
+    try:
+        raw = str(row.get("Raw", "") or "").strip()
+        ticker = str(row.get("Ticker", "") or "").strip()
+    except Exception:
+        raw = ""
+        ticker = ""
+    if not raw:
+        raw = raw_ticker_from_display(ticker, universe_name)
+    elif not raw.upper().endswith((".NS", ".BO")) and "NSE" in str(universe_name).upper():
+        raw = raw_ticker_from_display(raw, universe_name)
+    return raw
+
+
+def attach_news_scanner_columns(
+    df: "pd.DataFrame",
+    *,
+    universe_name: str,
+    max_rows: int = 80,
+    max_age_days: int = 7,
+    fast_universe: bool = True,
+    cache_key: str = "_intraday_news_scanner_cache",
+) -> "pd.DataFrame":
+    """
+    Add News Scanner columns to intraday / gap / hub tables.
+
+    Uses Yahoo Finance + Google News RSS (same as News Scanner page).
+    """
+    import pandas as pd
+
+    if df is None or df.empty or "News score" in df.columns:
+        return df
+
+    out = df.copy()
+    try:
+        import streamlit as st
+
+        cache: dict[str, object] = st.session_state.setdefault(cache_key, {})
+    except Exception:
+        cache = {}
+
+    news_scores: list[Optional[int]] = []
+    top_tiers: list[str] = []
+    tier_refs: list[str] = []
+    top_headlines: list[str] = []
+    confirm_actions: list[str] = []
+    news_sources: list[str] = []
+
+    for i, (_, row) in enumerate(out.iterrows()):
+        if i >= max_rows:
+            news_scores.append(None)
+            top_tiers.append("—")
+            tier_refs.append("—")
+            top_headlines.append("—")
+            confirm_actions.append("— (narrow list for full news scoring)")
+            news_sources.append("—")
+            continue
+
+        raw = _resolve_raw_for_news(row, universe_name)
+        if not raw:
+            news_scores.append(None)
+            top_tiers.append("—")
+            tier_refs.append("—")
+            top_headlines.append("—")
+            confirm_actions.append("—")
+            news_sources.append("—")
+            continue
+
+        ckey = f"{universe_name}|{raw.upper()}|{max_age_days}"
+        summary = cache.get(ckey)
+        if summary is None:
+            summary = analyze_ticker(
+                raw,
+                universe_name=universe_name,
+                max_age_days=max_age_days,
+                fast_universe=fast_universe,
+            )
+            cache[ckey] = summary
+
+        score = int(getattr(summary, "news_score", 0) or 0)
+        top_tier = int(getattr(summary, "top_tier", 4) or 4)
+        headline = str(getattr(summary, "top_headline", "") or "").strip()
+        action = str(getattr(summary, "action", "") or "").strip()
+        src = str(getattr(summary, "news_sources", "") or "").strip()
+
+        news_scores.append(score)
+        top_tiers.append(f"{TIER_EMOJI.get(top_tier, '•')} T{top_tier}")
+        tier_refs.append(
+            f"{TIER_EMOJI.get(top_tier, '•')} {TIER_LABELS.get(top_tier, f'Tier {top_tier}')}"
+        )
+        top_headlines.append(headline[:95] if headline else "—")
+        confirm_actions.append(action[:95] if action else "—")
+        news_sources.append(src or "—")
+
+    out["News score"] = news_scores
+    out["Top tier"] = top_tiers
+    out["Tier reference"] = tier_refs
+    out["Top headline"] = top_headlines
+    out["Confirm action"] = confirm_actions
+    out["News sources"] = news_sources
+    return out
 
 
 def scan_watchlist_sentiment(

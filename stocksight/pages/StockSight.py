@@ -171,7 +171,7 @@ with col_h2:
 page_audience_note(
     "Anyone building a daily or weekly shortlist—beginners can start with Nifty 50; active users can tune PE, volume, and RSI.",
     "Runs the core screen across your chosen universe, ranks by composite score, and shows table/cards with "
-    "Yahoo / Moneycontrol / TradingView links, recent headlines (last 4 days) in the results table, and watchlist alerts.",
+    "Yahoo / Moneycontrol / TradingView links, recent headlines (Yahoo + Google News, 7d) in the results table, and watchlist alerts.",
 )
 
 st.markdown("---")

@@ -195,7 +195,7 @@ def high_profit_detail_card(r, rank: int) -> None:
         )
         news_html = (
             "<div style='margin-top:12px;font-size:0.72rem;color:#c8d8e8;'>"
-            "<b>Recent news (last 4 days)</b>"
+            "<b>Recent news (7d, Yahoo + Google)</b>"
             f"<ul style='margin:6px 0 0 18px;'>{lis}</ul></div>"
         )
 
