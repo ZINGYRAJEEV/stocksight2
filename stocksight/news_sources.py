@@ -25,7 +25,14 @@ _FETCH_TIMEOUT = 18
 
 
 def _http_get(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Accept": "application/rss+xml, application/xml, text/xml, */*",
+            "Accept-Language": "en-IN,en;q=0.9",
+        },
+    )
     with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
         return resp.read()
 
@@ -203,6 +210,7 @@ def fetch_aggregated_structured_news(
     limit: int = 15,
     max_age_days: int = 7,
     relax_days_if_empty: int = 30,
+    skip_company_lookup: bool = False,
 ) -> list["NewsHeadline"]:
     """
     Merge Yahoo Finance + Google News RSS; dedupe by headline.
@@ -215,7 +223,7 @@ def fetch_aggregated_structured_news(
 
     is_india = raw.upper().endswith((".NS", ".BO"))
     hl, gl = ("en-IN", "IN") if is_india else ("en-US", "US")
-    company = resolve_company_name(raw)
+    company = _display_symbol(raw) if skip_company_lookup else resolve_company_name(raw)
 
     def _collect(age_days: int) -> list["NewsHeadline"]:
         from screener import NewsHeadline

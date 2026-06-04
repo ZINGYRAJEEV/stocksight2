@@ -810,6 +810,7 @@ def fetch_structured_news(
     *,
     limit: int = 15,
     max_age_days: int = RECENT_NEWS_MAX_AGE_DAYS,
+    skip_company_lookup: bool = False,
 ) -> list[NewsHeadline]:
     """Headlines from Yahoo Finance + Google News RSS (News Scanner and tables)."""
     try:
@@ -821,6 +822,7 @@ def fetch_structured_news(
         raw_ticker,
         limit=limit,
         max_age_days=max_age_days,
+        skip_company_lookup=skip_company_lookup,
     )
 
 

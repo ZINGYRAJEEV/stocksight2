@@ -330,21 +330,24 @@ def _render_universe_scan_tab(universe: str) -> None:
             "Min news score",
             min_value=0,
             max_value=100,
-            value=65,
-            step=1,
+            value=0,
+            step=5,
             key="news_scan_universe_min_score",
+            help="Default 0 shows all scanned names. Raise to 50–70 for a shortlist.",
         )
     with f2:
         only_t12 = st.checkbox(
             "Only Tier 1–2",
-            value=True,
+            value=False,
             key="news_scan_universe_only_t12",
+            help="Keep off to see Tier 3 context rows too.",
         )
     with f3:
         only_with_news = st.checkbox(
             "Only with headlines",
-            value=True,
+            value=False,
             key="news_scan_universe_only_with_news",
+            help="When on, hides names where no headline was found in the news window.",
         )
 
     if not run_scan:
@@ -372,16 +375,21 @@ def _render_universe_scan_tab(universe: str) -> None:
         prog.progress(int((i + 1) / len(raw_symbols) * 100), text=f"{disp}… ({i + 1}/{len(raw_symbols)})")
         uni_age = int(st.session_state.get("news_scan_max_age", 7))
         sm = analyze_ticker(
-            disp or str(raw), universe_name=src_universe, max_age_days=uni_age
+            disp or str(raw),
+            universe_name=src_universe,
+            max_age_days=uni_age,
+            fast_universe=True,
         )
         setattr(sm, "source_universe", src_universe)
         summaries.append(sm)
     prog.empty()
 
     summaries.sort(key=lambda s: s.news_score, reverse=True)
+    with_headlines = sum(1 for s in summaries if (s.top_headline or "").strip())
     rows = []
     for s in summaries:
         raw = s.raw_ticker or raw_ticker_from_display(s.ticker, getattr(s, "source_universe", universe))
+        hl = (s.top_headline or "").strip()
         rows.append(
             {
                 "Ticker": s.ticker,
@@ -390,7 +398,10 @@ def _render_universe_scan_tab(universe: str) -> None:
                 "Yahoo Finance": f"https://finance.yahoo.com/quote/{raw}",
                 "Google Finance": f"https://www.google.com/finance/quote/{raw}",
                 "News score": s.news_score,
+                "Top tier #": s.top_tier,
                 "Top tier": f"{TIER_EMOJI.get(s.top_tier, '•')} T{s.top_tier}",
+                "Headlines": len(s.items),
+                "Sources": s.news_sources or "—",
                 "Tier reference": f"{TIER_EMOJI.get(s.top_tier, '•')} {TIER_LABELS.get(s.top_tier, f'Tier {s.top_tier}')}",
                 "Tier action": (
                     "⚡ React fast (2–15 min), confirm volume"
@@ -403,28 +414,43 @@ def _render_universe_scan_tab(universe: str) -> None:
                 ),
                 "Polarity": s.polarity,
                 "Macro": s.macro_tone,
-                "Top headline": (s.top_headline or "—")[:95],
+                "Top headline": (hl or "—")[:95],
                 "Action": s.action[:90] if s.action else "—",
                 "Tier1": s.tier_counts.get(1, 0),
                 "Tier2": s.tier_counts.get(2, 0),
             }
         )
-    df = pd.DataFrame(rows)
+    df_all = pd.DataFrame(rows)
+    df = df_all.copy()
     if min_score > 0:
         df = df[df["News score"] >= min_score]
     if only_t12:
-        df = df[df["Top tier"].isin(("T1", "T2"))]
+        df = df[df["Top tier #"].isin((1, 2))]
     if only_with_news:
-        df = df[df["Top headline"].astype(str).str.strip().ne("—")]
+        df = df[df["Headlines"] > 0]
     df = df.reset_index(drop=True)
 
+    if df_all.empty:
+        st.error(
+            "Scan returned no rows — check network access on the server (Yahoo + Google News RSS)."
+        )
+        return
+
     if df.empty:
-        st.warning("No names match current filters. Lower min score or disable Tier/news filters.")
+        st.warning(
+            f"**{len(df_all)}** symbols scanned · **{with_headlines}** had headlines · "
+            f"**0** match your filters (min score **{min_score}**, Tier 1–2 only: **{only_t12}**, "
+            f"headlines only: **{only_with_news}**). "
+            "Set **Min news score** to **0**, turn off **Only Tier 1–2**, or increase **News window** (top of page)."
+        )
+        with st.expander("Preview — top 15 by score (ignoring filters)", expanded=True):
+            preview = df_all.sort_values("News score", ascending=False).head(15)
+            st.dataframe(preview, use_container_width=True, hide_index=True)
         return
 
     st.success(
-        f"Scanned **{len(raw_symbols)}** symbols from **{'all universes' if scan_all_universes else universe}** · "
-        f"**{len(df)}** match current filters."
+        f"Scanned **{len(raw_symbols)}** symbols · **{with_headlines}** with headlines · "
+        f"**{len(df)}** shown after filters (of {len(df_all)})."
     )
     st.dataframe(
         df,

@@ -277,9 +277,15 @@ def analyze_ticker(
     universe_name: str = "Nifty 50 (NSE)",
     max_age_days: int = 7,
     vol_ratio: Optional[float] = None,
+    fast_universe: bool = False,
 ) -> TickerNewsSummary:
     raw = raw_ticker_from_display(display_ticker, universe_name)
-    headlines = fetch_structured_news(raw, max_age_days=max_age_days, limit=20)
+    headlines = fetch_structured_news(
+        raw,
+        max_age_days=max_age_days,
+        limit=20,
+        skip_company_lookup=fast_universe,
+    )
     try:
         from news_sources import news_source_summary
     except ImportError:
@@ -377,6 +383,7 @@ def scan_watchlist_sentiment(
     *,
     universe_name: str = "Nifty 50 (NSE)",
     max_age_days: int = 7,
+    fast_universe: bool = False,
 ) -> list[TickerNewsSummary]:
     summaries: list[TickerNewsSummary] = []
     for sym, vol in entries:
@@ -386,6 +393,7 @@ def scan_watchlist_sentiment(
                 universe_name=universe_name,
                 vol_ratio=vol,
                 max_age_days=max_age_days,
+                fast_universe=fast_universe,
             )
         )
     summaries.sort(key=lambda s: (s.news_score, s.vol_ratio or 0), reverse=True)
