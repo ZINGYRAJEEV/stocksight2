@@ -2437,6 +2437,267 @@ def _profit_health_label(row: "pd.Series") -> str:
 _BPOS_CACHE_KEYS = ("bpos_positions", "bpos_orders", "bpos_trades", "bpos_holdings", "bpos_fetched_at")
 
 
+def _parse_breeze_trade_row(row: dict) -> Optional[dict]:
+    """Normalize one Breeze trade-book row."""
+    if not isinstance(row, dict):
+        return None
+    code = str(row.get("stock_code") or "").strip().upper()
+    if not code:
+        return None
+    action = str(row.get("action") or "").strip().lower()
+    try:
+        qty = int(float(row.get("quantity") or 0))
+    except (TypeError, ValueError):
+        qty = 0
+    if qty <= 0:
+        return None
+    price = _row_float(row, "average_cost", "price", "average_price")
+    if price is None or price <= 0:
+        return None
+    return {
+        "stock_code": code,
+        "action": action,
+        "quantity": qty,
+        "price": price,
+        "trade_date": str(row.get("trade_date") or row.get("order_datetime") or ""),
+        "order_id": str(row.get("order_id") or ""),
+        "product_type": str(row.get("product_type") or ""),
+    }
+
+
+def _latest_order_status_by_code(ord_rows: list) -> dict[str, str]:
+    """Most recent order status string per stock_code."""
+    latest: dict[str, tuple[str, str]] = {}
+    for row in ord_rows or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("stock_code") or "").strip().upper()
+        if not code:
+            continue
+        ts = str(row.get("order_datetime") or row.get("trade_date") or "")
+        status = str(row.get("status") or "—")
+        action = str(row.get("action") or "")
+        label = f"{action} · {status}".strip(" · ")
+        if code not in latest or ts >= latest[code][0]:
+            latest[code] = (ts, label)
+    return {k: v[1] for k, v in latest.items()}
+
+
+def _build_todays_trades_summary(
+    trd_rows: list,
+    pos_rows: list,
+    ord_rows: list,
+) -> pd.DataFrame:
+    """
+    One row per ticker: buys + sells today, open vs closed, LTP, realized/unrealized P/L.
+    """
+    agg: dict[str, dict] = {}
+
+    for row in trd_rows or []:
+        t = _parse_breeze_trade_row(row)
+        if not t:
+            continue
+        code = t["stock_code"]
+        bucket = agg.setdefault(
+            code,
+            {
+                "stock_code": code,
+                "buy_qty": 0,
+                "sell_qty": 0,
+                "buy_value": 0.0,
+                "sell_value": 0.0,
+                "trade_count": 0,
+                "last_trade": "",
+            },
+        )
+        bucket["trade_count"] += 1
+        if t["trade_date"] >= bucket["last_trade"]:
+            bucket["last_trade"] = t["trade_date"]
+        if t["action"] == "sell":
+            bucket["sell_qty"] += t["quantity"]
+            bucket["sell_value"] += t["quantity"] * t["price"]
+        else:
+            bucket["buy_qty"] += t["quantity"]
+            bucket["buy_value"] += t["quantity"] * t["price"]
+
+    pos_by_code: dict[str, dict] = {}
+    for row in pos_rows or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("stock_code") or "").strip().upper()
+        if code:
+            pos_by_code[code] = row
+
+    order_status = _latest_order_status_by_code(ord_rows)
+
+    try:
+        from breeze_data import get_ltp
+    except Exception:
+        get_ltp = None  # type: ignore[assignment,misc]
+
+    summary_rows: list[dict] = []
+    for code, b in agg.items():
+        buy_qty = int(b["buy_qty"])
+        sell_qty = int(b["sell_qty"])
+        net_qty = buy_qty - sell_qty
+        avg_buy = round(b["buy_value"] / buy_qty, 2) if buy_qty > 0 else None
+        avg_sell = round(b["sell_value"] / sell_qty, 2) if sell_qty > 0 else None
+
+        pos = pos_by_code.get(code)
+        ltp = None
+        if pos:
+            ltp = _row_float(pd.Series(pos), "ltp", "current_market_price")
+        if ltp is None and get_ltp:
+            try:
+                ltp = get_ltp(_breeze_code_to_ticker(code))
+            except Exception:
+                ltp = None
+        if ltp is not None:
+            ltp = round(float(ltp), 2)
+
+        if net_qty > 0 and sell_qty > 0:
+            position_status = "🟡 Partially sold — still open"
+        elif net_qty > 0:
+            position_status = "🟢 Open"
+        elif sell_qty > 0 and buy_qty > 0:
+            position_status = "✅ Closed — sold today"
+        elif sell_qty > 0:
+            position_status = "🔴 Sell only"
+        elif buy_qty > 0:
+            position_status = "🟢 Bought — check positions"
+        else:
+            position_status = "—"
+
+        matched = min(buy_qty, sell_qty)
+        realized_pnl = None
+        if matched > 0 and avg_buy is not None and avg_sell is not None:
+            realized_pnl = round(matched * (avg_sell - avg_buy), 2)
+
+        unrealized_pnl = None
+        ref_avg = avg_buy
+        if pos and pos.get("average_price") is not None:
+            try:
+                ref_avg = float(pos["average_price"])
+            except (TypeError, ValueError):
+                pass
+        if net_qty > 0 and ltp is not None and ref_avg is not None:
+            unrealized_pnl = round(net_qty * (ltp - ref_avg), 2)
+
+        total_pnl = None
+        if realized_pnl is not None or unrealized_pnl is not None:
+            total_pnl = round((realized_pnl or 0.0) + (unrealized_pnl or 0.0), 2)
+
+        summary_rows.append(
+            {
+                "stock_code": code,
+                "Ticker (.NS)": _breeze_code_to_ticker(code),
+                "Position status": position_status,
+                "Latest order": order_status.get(code, "—"),
+                "Buy qty": buy_qty,
+                "Sell qty": sell_qty,
+                "Net qty": net_qty,
+                "Avg buy ₹": avg_buy,
+                "Avg sell ₹": avg_sell,
+                "ltp": ltp,
+                "Realized P/L ₹": realized_pnl,
+                "Unrealized P/L ₹": unrealized_pnl,
+                "Total P/L ₹": total_pnl,
+                "Trades today": b["trade_count"],
+                "Last trade": b["last_trade"] or "—",
+                "average_price": ref_avg if net_qty > 0 else avg_buy,
+                "action": "buy" if net_qty >= 0 else "sell",
+                "quantity": net_qty if net_qty > 0 else sell_qty,
+                "pnl": total_pnl,
+            }
+        )
+
+    if not summary_rows:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(summary_rows)
+    prefer = (
+        "stock_code",
+        "Ticker (.NS)",
+        "Position status",
+        "Latest order",
+        "ltp",
+        "Total P/L ₹",
+        "Realized P/L ₹",
+        "Unrealized P/L ₹",
+        "Buy qty",
+        "Sell qty",
+        "Net qty",
+        "Avg buy ₹",
+        "Avg sell ₹",
+        "Trades today",
+        "Last trade",
+    )
+    ordered = [c for c in prefer if c in out.columns]
+    rest = [c for c in out.columns if c not in ordered]
+    return out[ordered + rest]
+
+
+def _render_bpos_trades_tab(
+    trd_rows: list,
+    pos_rows: list,
+    ord_rows: list,
+    *,
+    trd_err: Optional[str],
+    session_pred: str,
+) -> None:
+    """Today's trades: per-ticker summary including sold/closed + all executions."""
+    st.caption(
+        "Every ticker you **bought or sold today** — including **already sold** names — "
+        "with **latest LTP**, order status, and realized / unrealized P/L."
+    )
+    if trd_err:
+        st.error(f"Could not load trades: {trd_err}")
+        return
+
+    summary = _build_todays_trades_summary(trd_rows, pos_rows, ord_rows)
+    if summary.empty:
+        st.info("No executed trades for today.")
+        return
+
+    n_closed = int(summary["Position status"].astype(str).str.contains("Closed", na=False).sum())
+    n_open = int(summary["Position status"].astype(str).str.contains("Open", na=False).sum())
+    n_partial = int(summary["Position status"].astype(str).str.contains("Partially", na=False).sum())
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Tickers traded", len(summary))
+    c2.metric("Still open", n_open + n_partial)
+    c3.metric("Sold / closed today", n_closed)
+    if "Total P/L ₹" in summary.columns:
+        pnl_vals = []
+        for v in summary["Total P/L ₹"]:
+            try:
+                if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                    pnl_vals.append(float(v))
+            except (TypeError, ValueError):
+                pass
+        if pnl_vals:
+            c4.metric("Combined P/L ₹", f"{sum(pnl_vals):,.0f}")
+
+    enriched = _enrich_breeze_portfolio_df(summary, session_pred=session_pred)
+    st.markdown("#### By ticker (open + sold)")
+    st.dataframe(enriched, use_container_width=True, hide_index=True)
+
+    raw_df = _breeze_rows_to_df(
+        trd_rows,
+        ("stock_code", "action", "quantity", "average_cost", "price", "product_type",
+         "trade_date", "order_id"),
+    )
+    with st.expander(f"📋 All executions today ({len(raw_df)} fills)", expanded=False):
+        if raw_df.empty:
+            st.caption("No raw fills.")
+        else:
+            st.dataframe(
+                _enrich_breeze_portfolio_df(raw_df, session_pred=session_pred),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+
 def _bpos_clear_cache() -> None:
     for k in _BPOS_CACHE_KEYS:
         st.session_state.pop(k, None)
@@ -2519,11 +2780,14 @@ def _render_breeze_positions_content() -> None:
         )
     )
 
+    trd_summary_n = len(
+        {_parse_breeze_trade_row(r)["stock_code"] for r in (trd_rows or []) if _parse_breeze_trade_row(r)}
+    )
     tab_pos, tab_ord, tab_trd, tab_hld = st.tabs(
         [
             f"📈 Open Positions ({len(pos_rows)})",
             f"🧾 Today's Orders ({len(ord_rows)})",
-            f"✅ Today's Trades ({len(trd_rows)})",
+            f"✅ Today's Trades ({trd_summary_n or len(trd_rows)} tickers)",
             f"🏦 Holdings ({len(hld_rows)})",
         ]
     )
@@ -2580,18 +2844,9 @@ def _render_breeze_positions_content() -> None:
             st.dataframe(_enrich_breeze_portfolio_df(df, session_pred=session_pred), use_container_width=True, hide_index=True)
 
     with tab_trd:
-        st.caption("Executed trades today — best view for open intraday buys and exit timing.")
-        if trd_err:
-            st.error(f"Could not load trades: {trd_err}")
-        df = _breeze_rows_to_df(
-            trd_rows,
-            ("stock_code", "action", "quantity", "average_cost", "price", "product_type",
-             "trade_date", "order_id"),
+        _render_bpos_trades_tab(
+            trd_rows, pos_rows, ord_rows, trd_err=trd_err, session_pred=session_pred,
         )
-        if df.empty:
-            st.info("No executed trades for today.")
-        else:
-            st.dataframe(_enrich_breeze_portfolio_df(df, session_pred=session_pred), use_container_width=True, hide_index=True)
 
     with tab_hld:
         st.caption("Delivery holdings — exit hints apply if the symbol was in today's scan.")
