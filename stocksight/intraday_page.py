@@ -2200,11 +2200,17 @@ def _plan_for_breeze_code(stock_code: str, plans: dict[str, dict]) -> Optional[d
     return None
 
 
-def _row_float(row: "pd.Series", *keys: str) -> Optional[float]:
+def _row_float(row: Any, *keys: str) -> Optional[float]:
+    """Read a numeric field from a DataFrame row (Series) or Breeze API dict."""
     for k in keys:
-        if k not in row.index:
-            continue
-        v = row[k]
+        if isinstance(row, dict):
+            if k not in row:
+                continue
+            v = row.get(k)
+        else:
+            if k not in row.index:
+                continue
+            v = row[k]
         if v is None or (isinstance(v, float) and pd.isna(v)):
             continue
         try:
@@ -2437,6 +2443,15 @@ def _profit_health_label(row: "pd.Series") -> str:
 _BPOS_CACHE_KEYS = ("bpos_positions", "bpos_orders", "bpos_trades", "bpos_holdings", "bpos_fetched_at")
 
 
+def _count_trade_tickers(trd_rows: list) -> int:
+    codes: set[str] = set()
+    for row in trd_rows or []:
+        t = _parse_breeze_trade_row(row)
+        if t:
+            codes.add(t["stock_code"])
+    return len(codes)
+
+
 def _parse_breeze_trade_row(row: dict) -> Optional[dict]:
     """Normalize one Breeze trade-book row."""
     if not isinstance(row, dict):
@@ -2546,7 +2561,7 @@ def _build_todays_trades_summary(
         pos = pos_by_code.get(code)
         ltp = None
         if pos:
-            ltp = _row_float(pd.Series(pos), "ltp", "current_market_price")
+            ltp = _row_float(pos, "ltp", "current_market_price")
         if ltp is None and get_ltp:
             try:
                 ltp = get_ltp(_breeze_code_to_ticker(code))
@@ -2780,9 +2795,7 @@ def _render_breeze_positions_content() -> None:
         )
     )
 
-    trd_summary_n = len(
-        {_parse_breeze_trade_row(r)["stock_code"] for r in (trd_rows or []) if _parse_breeze_trade_row(r)}
-    )
+    trd_summary_n = _count_trade_tickers(trd_rows)
     tab_pos, tab_ord, tab_trd, tab_hld = st.tabs(
         [
             f"📈 Open Positions ({len(pos_rows)})",
