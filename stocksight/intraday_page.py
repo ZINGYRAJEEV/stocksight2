@@ -1864,26 +1864,32 @@ Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Qu
             "scan_api": scan_api,
             "uni_label": uni_label,
         }
-        st.markdown("#### Live scan status")
-        live_detail = st.empty()
-        prog = st.progress(0, text="Initialising…")
-        live_state = ScanLiveState(total=len(raw_tickers), data_source=scan_api)
-        cb = make_streamlit_scan_callback(prog, live_detail, state=live_state)
-        results, scan_stats = _run_intraday_scan_core(
-            key=key,
-            raw_tickers=raw_tickers,
-            strategies=tuple(strategies_picked),
-            flt=flt,
-            market=market,
-            scan_api=scan_api,
-            uni_label=uni_label,
-            live_detail=live_detail,
-            prog=prog,
-            live_state=live_state,
-            cb=cb,
-        )
-        if breeze_mode and results:
-            _apply_scan_row_to_trade(key, pd.Series(_results_to_df([results[0]], market=market).iloc[0]))
+        # When auto-refresh is on, only the fragment runs the scan (avoids duplicate UI).
+        if not auto_scan:
+            st.markdown("#### Live scan status")
+            live_detail = st.empty()
+            prog = st.progress(0, text="Initialising…")
+            live_state = ScanLiveState(total=len(raw_tickers), data_source=scan_api)
+            cb = make_streamlit_scan_callback(prog, live_detail, state=live_state)
+            results, scan_stats = _run_intraday_scan_core(
+                key=key,
+                raw_tickers=raw_tickers,
+                strategies=tuple(strategies_picked),
+                flt=flt,
+                market=market,
+                scan_api=scan_api,
+                uni_label=uni_label,
+                live_detail=live_detail,
+                prog=prog,
+                live_state=live_state,
+                cb=cb,
+            )
+            if breeze_mode and results:
+                _apply_scan_row_to_trade(
+                    key, pd.Series(_results_to_df([results[0]], market=market).iloc[0])
+                )
+        elif auto_scan:
+            st.caption("Auto-refresh will run the scan below — one live status panel.")
     elif run:
         if not raw_tickers:
             st.warning("Universe is empty. Pick a list or paste tickers.")
