@@ -966,8 +966,9 @@ STRATEGY_PLAYBOOK: dict[str, dict[str, str]] = {
                  "before acting.",
     },
     "EARLY": {
-        "does": "Catches **pre-bust** movers: day up **0.35–8%**, RSI 45–72, **daily volume surge** "
-                "(e.g. 2×+ vs 20-day avg) or heavy session participation, price **coiling or just breaking** ORB.",
+        "does": "Catches **pre-bust** movers: day up **0.35–8%** (up to **15%** on hot volume), RSI 42–78, "
+                "**daily volume surge** (e.g. 2×+ vs 20-day avg) or heavy session participation, ORB coil/break "
+                "or **vol-led extension**.",
         "use":  "First 60–75 minutes after open — **before** Momentum/ORB filters fire on a fully extended move.",
         "means": "Designed for names like TEJASNET / ZENTEC-style bursts. Can pass even if the **last bar** "
                  "volume is thin (bypasses vol<1.0 hard-reject when surge is real).",
@@ -1143,6 +1144,88 @@ def _render_strategy_playbook(market: str) -> None:
             "off-window yields few/no matches by design.\n\n"
             "**Tip:** select **more** strategies for the widest net + confluence detection; select "
             "**fewer** for a faster, more focused scan."
+        )
+
+
+def _render_intraday_settings_cheatsheet(market: str) -> None:
+    """Gap vs intraday workflow and recommended scanner settings by situation."""
+    mkt = (market or "NSE").upper()
+    if mkt == "US":
+        gap_when = "**Gap Scanner** ~9:00 AM ET (3:00 PM CEST) · **Intraday** from ~9:45 AM ET"
+        open_window = "9:45–11:00 AM ET"
+        vwap_window = "11:00 AM – 1:30 PM ET"
+        lunch_note = "1:30–3:00 PM ET — low conviction"
+        square_off = "3:45 PM ET"
+    else:
+        gap_when = "**Gap Scanner** ~9:15 AM IST (5:45 AM CEST) · **Intraday** from ~9:30 AM IST"
+        open_window = "9:30–11:00 AM IST"
+        vwap_window = "10:30 AM – 1:00 PM IST"
+        lunch_note = "1:00–2:00 PM IST — avoid new entries"
+        square_off = "3:15 PM IST"
+
+    with st.expander("📋 Settings cheat sheet — Gap missed or not missed", expanded=False):
+        st.markdown(
+            f"""
+**What each tool does**
+
+| Tool | When | Purpose |
+|------|------|---------|
+| **Gap Scanner** (sidebar) | {gap_when} | Gaps + **market mood** before you trade |
+| **Intraday Screener** (this page) | After open | Live setups, Quality Gate, optional **overlap** with gap list |
+
+Gap = **plan** · Intraday = **confirm** the setup live.
+
+---
+
+### Path A — Gap Scanner **not** missed (ideal)
+
+1. **Gap scan** your universe → read mood, shortlist **3–5** names.
+2. **RUN INTRADAY SCAN** at open → enable **Auto-refresh** (**60s**) for the first hour.
+3. After results, toggle **Show only Gap Scanner overlap** for the tightest list.
+4. Sort by **Unified score** · prefer Quality Gate **A/B**.
+
+---
+
+### Path B — Gap Scanner **missed**
+
+| How late | What to do |
+|----------|------------|
+| **Few min** (just after open) | Run Gap scan **anyway**, then intraday + overlap filter |
+| **30+ min** | **Early Burst + Broad + Momentum**; ORB/GAP will be sparse — expected |
+| **Afternoon** | **Broad + Momentum** only; manage exits, few new entries |
+
+Without a gap scan this session: rely on **Early Burst + Broad** + auto-refresh; overlap filter stays off until you run Gap Scanner.
+
+---
+
+### Settings by situation
+
+| Situation | Universe | Strategies | Filters | Auto-refresh | Extra |
+|-----------|----------|------------|---------|--------------|-------|
+| **Normal morning** | Nifty 50/100 | Early, Broad, GAP, ORB, Momentum | Vol **1.0×**, RSI **40–80**, Min change **0** | **60s** until ~{open_window.split("–")[-1].strip()} | Gap **overlap** on |
+| **Missed gap, still morning** | Nifty 50 | Early, Broad, Momentum, ORB | Same | **60s** | Run gap when you can |
+| **Late morning** | Nifty 50 | Early, Broad, Momentum, VWAP | Same | **90–120s** | Overlap optional |
+| **Afternoon only** | Watchlist / Nifty 50 | Broad, Momentum | Same | Off or **180s** | Square off by **{square_off}** |
+
+**Base filters (all paths):** Min price per market default · Min 20d avg volume default · Vol ratio **1.0×** · RSI **40–80** · Min |change %| **0**.
+
+---
+
+### Re-scan through the session ({MARKET_LABEL.get(mkt, mkt)})
+
+| Session window | Emphasize |
+|----------------|-----------|
+| **{open_window}** | Early Burst, GAP, ORB, Momentum + auto-refresh |
+| **{vwap_window}** | VWAP, Momentum, Broad |
+| **{lunch_note}** | Manage open trades only |
+| **Before close** | No new entries · square off ~**{square_off}** |
+
+---
+
+**Quick rules:** Run **Gap before Intraday** when you can · **One RUN**, then auto-refresh · **Early Burst** for volume-led movers · **Broad** always on as safety net · Stop after **2 losses** · Never rely on a single scan at 10:30 for a 9:35 mover.
+
+*Overlap = stocks in **both** Gap Scanner and this screener — highest-probability setups of the day.*
+"""
         )
 
 
@@ -1632,12 +1715,12 @@ def render_intraday_screener_page(
             "Active **NSE (India)** intraday traders who want candidates with Entry / Stop / Target "
             "attached, using **ICICI Breeze** or **Yahoo Finance** data (your choice per scan).",
             "Pick the data API above before each scan. **Auto** uses Breeze when your session token "
-            "is valid, otherwise Yahoo. Same 6-strategy engine + 7-rule ranking as the Intraday Screener. "
+            "is valid, otherwise Yahoo. Same 7-strategy engine + 7-rule ranking as the Intraday Screener. "
             "**Educational only — confirm risk before trading.**",
         )
     data_source = "auto"
     if not breeze_mode:
-        st.markdown("### 📡 Intraday Screener — 6 strategies, NSE or US")
+        st.markdown("### 📡 Intraday Screener — 7 strategies, NSE or US")
         page_audience_note(
             "Active intraday traders on **NSE (India)** or **US (NYSE & NASDAQ)** who want "
             "pre-screened candidates with Entry / Stop / Target attached.",
@@ -1647,7 +1730,7 @@ def render_intraday_screener_page(
         )
     st.info(
         "⚙ **Recommended for results:** Vol ratio **1.0×** · RSI **40–80** · "
-        "enable **🔍 Broad Movers** · Min change % = **0** · start with **Nifty 50**."
+        "enable **🔍 Broad Movers** + **⚡ Early Burst** · Min change % = **0** · start with **Nifty 50**."
     )
     with st.expander("🏅 Ranking scorebook (7 rules · max 120)", expanded=False):
         st.markdown(
@@ -1682,6 +1765,7 @@ Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Qu
     _live_market_clocks()
     _session_banner(market)
     _render_market_schedule(market)
+    _render_intraday_settings_cheatsheet(market)
 
     with st.container(border=True):
         c1, c2 = st.columns([1.1, 1.0])
