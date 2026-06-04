@@ -95,6 +95,8 @@ class Stage2MomentumResult:
     ma200: Optional[float] = None
     vol_ratio_50d: Optional[float] = None
     composite_score: float = 0.0
+    rank_score: float = 0.0
+    rank_why: str = ""
     action_hint: str = "Watchlist"
     entry_hint: str = ""
     stop_hint: str = "Plan 7–8% max loss below entry before you buy."
@@ -388,6 +390,85 @@ def _composite_score(trend_pass: int, vcp_score: float, rs_rank: float) -> float
     return round(min(100.0, tt + vcp + rs), 1)
 
 
+def compute_stage2_rank_score(
+    *,
+    composite_score: float,
+    rs_rank: float,
+    vcp_score: float,
+    pct_from_pivot: Optional[float],
+    vol_ratio_50d: Optional[float],
+    stage_label: str,
+    action_hint: str,
+    pocket_pivot: bool,
+    volume_dryup: bool,
+) -> tuple[float, str]:
+    """
+    Unified ranking for Stage 2 + VCP scan (sort key for the results table).
+
+    Weights: Composite 45%, RS rank 20%, VCP 15%, plus pivot proximity, volume,
+    stage/action, pocket pivot, and vol dry-up bonuses/penalties.
+    """
+    score = 0.0
+    why: list[str] = []
+
+    c_part = float(composite_score) * 0.45
+    score += c_part
+    why.append(f"Composite×0.45 +{c_part:.0f}")
+
+    rs_part = float(rs_rank) * 0.20
+    score += rs_part
+    why.append(f"RS×0.20 +{rs_part:.0f}")
+
+    vcp_part = float(vcp_score) * 0.15
+    score += vcp_part
+    why.append(f"VCP×0.15 +{vcp_part:.0f}")
+
+    if pct_from_pivot is not None:
+        p = float(pct_from_pivot)
+        prox = 0.0
+        if p <= 1.5:
+            prox = 14.0
+        elif p <= 3.0:
+            prox = 10.0
+        elif p <= 5.0:
+            prox = 6.0
+        elif p <= 8.0:
+            prox = 3.0
+        if prox:
+            score += prox
+            why.append(f"near pivot +{prox:.0f}")
+        if p > 4.0:
+            pen = min(24.0, (p - 4.0) * 2.5)
+            score -= pen
+            why.append(f"below pivot −{pen:.0f}")
+
+    vol_part = min(float(vol_ratio_50d or 0.0), 3.0) * 3.0
+    if vol_part > 0:
+        score += vol_part
+        why.append(f"vol×50d +{vol_part:.0f}")
+
+    if "Stage 2" in stage_label:
+        score += 8.0
+        why.append("Stage 2 +8")
+    if "High-conviction watch" in action_hint:
+        score += 10.0
+        why.append("high-conviction +10")
+    elif "Watchlist" in action_hint:
+        score += 2.0
+        why.append("watchlist +2")
+    if "Hold / trim only" in action_hint:
+        score -= 8.0
+        why.append("hold/trim −8")
+    if pocket_pivot:
+        score += 5.0
+        why.append("pocket pivot +5")
+    if volume_dryup:
+        score += 4.0
+        why.append("dry-up +4")
+
+    return round(score, 1), " · ".join(why[:9])
+
+
 def _fetch_hist(raw: str) -> Optional[pd.DataFrame]:
     try:
         hist = yf.Ticker(raw).history(period="2y", interval="1d", auto_adjust=True)
@@ -511,6 +592,19 @@ def scan_stage2_momentum(
         action, entry, stop, sell, warnings = _action_hints(stage, vcp, extra, trend_pass_full)
         comp = _composite_score(trend_pass_full, float(vcp["vcp_score"]), rs_rank)
         price = float(extra.get("price") or 0.0)
+        pocket = bool(vcp.get("pocket_pivot"))
+        dryup = bool(vcp.get("volume_dryup"))
+        rank_score, rank_why = compute_stage2_rank_score(
+            composite_score=comp,
+            rs_rank=rs_rank,
+            vcp_score=float(vcp["vcp_score"]),
+            pct_from_pivot=vcp.get("pct_from_pivot"),
+            vol_ratio_50d=row.get("vol_ratio"),
+            stage_label=stage,
+            action_hint=action,
+            pocket_pivot=pocket,
+            volume_dryup=dryup,
+        )
 
         badge = "🏆 Stage 2" if "Stage 2" in stage else ("⚠️ Stage 3/4 risk" if "Stage 3" in stage or "Stage 4" in stage else "👀 Watch")
 
@@ -540,6 +634,8 @@ def scan_stage2_momentum(
                 ma200=round(float(extra["ma200"]), 2) if extra.get("ma200") else None,
                 vol_ratio_50d=row.get("vol_ratio"),
                 composite_score=comp,
+                rank_score=rank_score,
+                rank_why=rank_why,
                 action_hint=action,
                 entry_hint=entry,
                 stop_hint=stop,
@@ -550,7 +646,9 @@ def scan_stage2_momentum(
             )
         )
 
-    results.sort(key=lambda r: (-r.composite_score, -r.trend_pass, -r.vcp_score, -r.rs_rank))
+    results.sort(
+        key=lambda r: (-r.rank_score, -r.composite_score, -r.trend_pass, -r.vcp_score, -r.rs_rank)
+    )
     stats.tickers_matched = len(results)
     stats.tickers_scanned = len(tickers)
     stats.scan_elapsed_sec = round(time.time() - t0, 2)

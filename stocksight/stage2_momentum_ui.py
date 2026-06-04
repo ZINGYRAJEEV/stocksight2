@@ -84,6 +84,30 @@ then enter when price **breaks out** from a **tight base** (VCP) with strong vol
 """
         )
 
+    with st.expander("🏅 Ranking score (how rows are sorted)", expanded=False):
+        st.markdown(
+            """
+Results are sorted by **Rank score** (higher = top of table):
+
+| Component | Points |
+|-----------|--------|
+| **Composite × 0.45** | Trend Template + VCP + RS blend (0–100 scale) |
+| **RS rank × 0.20** | Percentile vs index in this scan |
+| **VCP score × 0.15** | Tightening / dry-up / pivot quality |
+| **Pivot proximity** | +14 / +10 / +6 / +3 when **% below pivot** is small |
+| **Far below pivot** | −2.5 pts per % **above 4%** below pivot (capped) |
+| **Vol vs 50d avg** | `min(ratio, 3) × 3` |
+| **Stage 2** in label | +8 |
+| **High-conviction watch** | +10 |
+| **Watchlist** action | +2 |
+| **Hold / trim only** | −8 |
+| **Pocket pivot** = Yes | +5 |
+| **Vol dry-up** = Yes | +4 |
+
+**Composite** (column) is still shown for context; **Rank score** is the primary sort key.
+"""
+        )
+
     with st.expander("🎯 Entry, stops & selling (discipline)", expanded=False):
         st.markdown(
             """
@@ -109,6 +133,8 @@ def results_to_dataframe(results: list[Stage2MomentumResult]) -> pd.DataFrame:
             "Ticker": r.ticker,
             "Raw": r.raw_ticker,
             "Stage": r.stage_label,
+            "Rank score": r.rank_score,
+            "Rank why": r.rank_why,
             "Composite": r.composite_score,
             "Trend pass": f"{r.trend_pass}/{r.trend_max}",
             "VCP score": r.vcp_score,
@@ -163,6 +189,8 @@ def stage2_results_table(
         st.caption(f"Scan completed · {scan_at}")
 
     col_cfg: dict = {
+        "Rank score": st.column_config.NumberColumn("Rank score", format="%.1f"),
+        "Rank why": st.column_config.TextColumn("Rank why", width="large"),
         "Composite": st.column_config.ProgressColumn("Composite", min_value=0, max_value=100, format="%d"),
         "VCP score": st.column_config.ProgressColumn("VCP score", min_value=0, max_value=100, format="%d"),
         "RS rank (scan)": st.column_config.ProgressColumn("RS rank", min_value=0, max_value=100, format="%d"),
@@ -188,17 +216,19 @@ def stage2_results_table(
         column_config=col_cfg,
         hide_index=True,
         height=min(580, 52 + len(df) * 40),
-        caption="💡 Click a row for chart + research. Entry / stop / sell plans are in the table columns.",
+        caption="💡 Sorted by **Rank score**. Click a row for chart + research; see **Rank why** for the breakdown.",
     )
 
 
 def stage2_detail_card(r: Stage2MomentumResult) -> None:
     st.markdown(f"#### {r.ticker} — {r.stage_label}")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Composite", f"{r.composite_score:.0f}")
-    c2.metric("Trend Template", f"{r.trend_pass}/{r.trend_max}")
+    c1.metric("Rank score", f"{r.rank_score:.1f}")
+    c2.metric("Composite", f"{r.composite_score:.0f}")
     c3.metric("VCP score", f"{r.vcp_score:.0f}")
     c4.metric("RS rank", f"{r.rs_rank:.0f}")
+    st.caption(r.rank_why or "—")
+    st.markdown(f"**Trend Template:** {r.trend_pass}/{r.trend_max}")
     st.info(f"**Action:** {r.action_hint}")
     st.markdown(f"**Entry:** {r.entry_hint}")
     st.markdown(f"**Stop:** {r.stop_hint}")

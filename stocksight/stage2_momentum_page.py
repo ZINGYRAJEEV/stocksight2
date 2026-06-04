@@ -154,7 +154,8 @@ def render_stage2_momentum_page() -> None:
 
     st.success(f"**{len(results)}** Stage 2 / VCP candidate(s)" + (f" · {scan_at}" if scan_at else ""))
     st.markdown(
-        "Click a row for chart research below. **Composite** blends Trend Template, VCP, and RS rank. "
+        "Click a row for chart research below. Rows are sorted by **Rank score** "
+        "(Composite×0.45 + RS×0.20 + VCP×0.15 + pivot/volume/action bonuses). "
         "Always confirm the base on TradingView before risking capital."
     )
 
