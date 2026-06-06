@@ -36,6 +36,8 @@ _STRATEGY_PATTERN: dict[str, str] = {
     "GRIND": "vwap_pullback",
     "ATH": "ath_breakout",
     "BROAD": "grid_range",
+    "VOL_BUY": "momentum",
+    "VOL_DUMP": "momentum",
 }
 
 
@@ -118,6 +120,12 @@ def unified_intraday_score(
     if r.strategy == "GRIND":
         score = min(100.0, score + 5.0)
         why = f"{why} · sector-grind priority"
+    if r.strategy == "VOL_BUY":
+        score = min(100.0, score + 5.0)
+        why = f"{why} · vol-accel buy priority"
+    if r.strategy == "VOL_DUMP":
+        score = min(100.0, score + 3.0)
+        why = f"{why} · vol-accel sell flag"
     try:
         if r.vol_ratio is not None and float(r.vol_ratio) >= 1.5 and r.strategy == "EARLY":
             score = min(100.0, score + 4.0)

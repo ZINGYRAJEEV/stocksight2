@@ -215,7 +215,10 @@ INTRADAY_UNIVERSES_BY_MARKET: dict[str, dict[str, list[str]]] = {
 # Back-compat alias used by older code that imports INTRADAY_UNIVERSES directly.
 INTRADAY_UNIVERSES: dict[str, list[str]] = dict(NSE_INTRADAY_UNIVERSES)
 
-STRATEGIES = ("BROAD", "EARLY", "GRIND", "MOMENTUM", "VWAP", "ORB", "GAP", "ATH")
+STRATEGIES = (
+    "BROAD", "EARLY", "GRIND", "MOMENTUM", "VWAP", "ORB", "GAP", "ATH",
+    "VOL_BUY", "VOL_DUMP",
+)
 
 STRATEGY_LABEL = {
     "BROAD":    "🔍 Broad Movers (widest net)",
@@ -226,6 +229,8 @@ STRATEGY_LABEL = {
     "ORB":      "🕯️ Opening Range Breakout",
     "GAP":      "📊 Gap-Up with Strength",
     "ATH":      "🏔️ All-Time High Breakout",
+    "VOL_BUY":  "📈 Fast Volume Buy (accumulation)",
+    "VOL_DUMP": "📉 Fast Volume Sell (distribution)",
 }
 
 # Best-time-of-day per strategy, per market. Each entry shows the *market-local*
@@ -241,6 +246,8 @@ STRATEGY_BEST_TIME_BY_MARKET: dict[str, dict[str, str]] = {
         "ORB":      "9:45 – 10:15 AM IST only  ·  6:15 – 6:45 AM CEST",
         "GAP":      "Pre-open + 9:15 – 9:30 AM IST  ·  5:45 – 6:00 AM CEST",
         "ATH":      "After 10:00 AM IST (post-ORB)  ·  6:30 – 9:00 AM CEST",
+        "VOL_BUY":  "9:20 – 11:30 AM IST  ·  volume accelerating on green bars (best entry window)",
+        "VOL_DUMP": "Any session  ·  volume accelerating on red bars (exit / avoid longs)",
     },
     "US": {
         "BROAD":    "Any session window  ·  use when you want the widest list",
@@ -251,6 +258,8 @@ STRATEGY_BEST_TIME_BY_MARKET: dict[str, dict[str, str]] = {
         "ORB":      "9:45 – 10:00 AM ET only  ·  3:45 – 4:00 PM CEST",
         "GAP":      "Pre-market + 9:30 – 9:45 AM ET  ·  3:30 – 3:45 PM CEST",
         "ATH":      "After 10:00 AM ET (post-ORB)  ·  4:00 – 6:00 PM CEST",
+        "VOL_BUY":  "9:35 – 12:00 PM ET  ·  volume accelerating on green bars",
+        "VOL_DUMP": "Any session  ·  volume accelerating on red bars (distribution)",
     },
 }
 
@@ -403,6 +412,8 @@ class IntradayResult:
     pct_vs_vwap: Optional[float] = None
     pct_vs_ma50d: Optional[float] = None
     pct_vs_ma200d: Optional[float] = None
+    pct_vs_ma500d: Optional[float] = None
+    ma500_trend: str = ""                       # Rising / Falling / —
     pct_vs_52w_high: Optional[float] = None
     orb_high: Optional[float] = None
     orb_low: Optional[float] = None
@@ -419,6 +430,9 @@ class IntradayResult:
     rank_tier: str = ""                         # Elite / Strong / Watchlist / Avoid
     rank_why: str = ""                          # short reason for ranking
     position_size: str = ""                     # suggested position size by tier
+    vol_accel: Optional[float] = None           # recent-bar volume acceleration
+    session_volume: Optional[float] = None    # shares traded this session
+    vol_flow: str = ""                          # Fast buying / Fast selling / —
 
 
 @dataclass
@@ -619,6 +633,40 @@ def _suggest_setup(strategy: str, price: float, intraday_low: Optional[float],
         return (f"Gap-up {gap_pct:+.2f}% · buy strength continuation · 1:2 R:R",
                 entry, stop, target)
 
+    if strategy == "VOL_BUY":
+        entry = round(price * 1.001, 2)
+        base = min(intraday_low or price * 0.992, (vwap or price * 0.992))
+        stop = round(base, 2)
+        risk = entry - stop
+        if risk <= 0:
+            return ("Vol buy: wait for pullback — define stop manually.", None, None, None)
+        target = round(entry + 2.0 * risk, 2)
+        return (
+            "Fast accumulation — enter on 5m hold above VWAP · stop below session low/VWAP · 1:2 R:R",
+            entry,
+            stop,
+            target,
+        )
+
+    if strategy == "VOL_DUMP":
+        entry = round(price * 0.999, 2)
+        stop = round(max(intraday_high or price * 1.008, price * 1.008), 2)
+        risk = stop - entry
+        if risk <= 0:
+            return (
+                "Fast distribution — avoid new longs; exit weak holds · educational short only",
+                None,
+                None,
+                None,
+            )
+        target = round(entry - 1.5 * risk, 2)
+        return (
+            "Fast distribution — exit longs / avoid buys · short only if skilled · stop above session high",
+            entry,
+            stop,
+            target,
+        )
+
     return ("", None, None, None)
 
 
@@ -781,9 +829,20 @@ def _build_context(
         return None
     # Multi-day intraday history stabilises RSI early in the session (thin 1d feeds).
     bars_extended_history = bar_period not in ("", "1d")
-    daily = _fetch_daily(raw_ticker, "1y", data_source=data_source)
+    daily = _fetch_daily(raw_ticker, "3y", data_source=data_source)
     if daily is None or daily.empty:
         return None
+    daily_close = hist_series(daily, "Close").astype(float).dropna()
+    if len(daily_close) < 500 and data_source != "yahoo":
+        try:
+            daily_long = _fetch_daily(raw_ticker, "3y", data_source="yahoo")
+            if daily_long is not None and not daily_long.empty:
+                long_close = hist_series(daily_long, "Close").astype(float).dropna()
+                if len(long_close) > len(daily_close):
+                    daily = daily_long
+                    daily_close = long_close
+        except Exception:
+            pass
 
     closes_5m = hist_series(bars, "Close").astype(float).dropna()
     vols_5m = hist_series(bars, "Volume").astype(float).dropna()
@@ -791,7 +850,6 @@ def _build_context(
         return None
 
     # Today vs prev close
-    daily_close = hist_series(daily, "Close").astype(float).dropna()
     if daily_close.empty:
         return None
     prev_close = float(daily_close.iloc[-2]) if len(daily_close) >= 2 else float(daily_close.iloc[-1])
@@ -849,13 +907,24 @@ def _build_context(
         pct_ema9 = _safe_pct(price, ema9) if ema9 > 0 else None
 
     # Daily MA context
-    pct_ma50 = pct_ma200 = None
+    pct_ma50 = pct_ma200 = pct_ma500 = None
+    ma500_trend = ""
     if len(daily_close) >= 50:
         ma50 = float(daily_close.rolling(50).mean().iloc[-1])
         pct_ma50 = _safe_pct(price, ma50) if ma50 > 0 else None
     if len(daily_close) >= 200:
         ma200 = float(daily_close.rolling(200).mean().iloc[-1])
         pct_ma200 = _safe_pct(price, ma200) if ma200 > 0 else None
+    if len(daily_close) >= 500:
+        ma500_series = daily_close.rolling(500).mean()
+        ma500 = float(ma500_series.iloc[-1])
+        pct_ma500 = _safe_pct(price, ma500) if ma500 > 0 else None
+        ma500_1m = (
+            float(ma500_series.iloc[-22])
+            if len(ma500_series) >= 22 and pd.notna(ma500_series.iloc[-22])
+            else ma500
+        )
+        ma500_trend = "Rising" if ma500 >= ma500_1m else "Falling"
 
     # 52-week high context
     wk_high = float(daily_close.tail(252).max()) if len(daily_close) >= 5 else None
@@ -929,6 +998,8 @@ def _build_context(
         "pct_vs_ema9": pct_ema9,
         "pct_vs_ma50d": pct_ma50,
         "pct_vs_ma200d": pct_ma200,
+        "pct_vs_ma500d": pct_ma500,
+        "ma500_trend": ma500_trend,
         "pct_vs_52w_high": pct_vs_52w,
         "avg_dvol": avg_dvol,
         "orb_high": orb_h,
@@ -1182,6 +1253,13 @@ def _score_intraday_rules(ctx: dict, *, strategy_hits: int, hard_rejects: list[s
         p_vol = max(p_vol, 10)
     elif d_surge >= 1.8 or s_part >= 0.25:
         p_vol = max(p_vol, 8)
+    vol_accel = float(ctx.get("vol_accel") or 0.0)
+    if vol_accel >= 2.5:
+        p_vol = max(p_vol, 24)
+    elif vol_accel >= 1.8:
+        p_vol = max(p_vol, 16)
+    elif vol_accel >= 1.5:
+        p_vol = max(p_vol, 10)
     if ctx.get("sector_theme") and float(ctx.get("session_above_vwap") or 0) >= 0.68:
         p_vol = max(p_vol, 10)
 
@@ -1335,6 +1413,12 @@ def _make_result(
     timing_note = f" · Timing {timing_w:+d}" if timing_w else " · Timing 0"
     rank_why = base_reason + timing_note
 
+    vol_flow = ""
+    if strategy == "VOL_BUY":
+        vol_flow = "Fast buying"
+    elif strategy == "VOL_DUMP":
+        vol_flow = "Fast selling"
+
     return IntradayResult(
         ticker=raw.replace(".NS", "").replace(".BO", ""),
         raw_ticker=raw,
@@ -1351,6 +1435,8 @@ def _make_result(
         pct_vs_vwap=ctx["pct_vs_vwap"],
         pct_vs_ma50d=ctx["pct_vs_ma50d"],
         pct_vs_ma200d=ctx["pct_vs_ma200d"],
+        pct_vs_ma500d=ctx.get("pct_vs_ma500d"),
+        ma500_trend=ctx.get("ma500_trend") or "",
         pct_vs_52w_high=ctx["pct_vs_52w_high"],
         orb_high=ctx["orb_high"],
         orb_low=ctx["orb_low"],
@@ -1367,6 +1453,9 @@ def _make_result(
         rank_tier=tier,
         rank_why=rank_why,
         position_size=pos_size,
+        vol_accel=ctx.get("vol_accel"),
+        session_volume=ctx.get("session_volume"),
+        vol_flow=vol_flow,
     )
 
 
@@ -1585,6 +1674,20 @@ def _evaluate(strategy: str, ctx: dict, flt: IntradayFilters) -> Optional[str]:
         ref_txt = f" {ref:.2f}" if ref else ""
         return f"ATH{ref_txt} · {state} · RSI {rsi:.1f} · vol {vr:.1f}× · price>50DMA"
 
+    if strategy == "VOL_BUY":
+        try:
+            from intraday_vol_surge import evaluate_vol_buy
+        except ImportError:
+            from .intraday_vol_surge import evaluate_vol_buy  # type: ignore[no-redef]
+        return evaluate_vol_buy(ctx)
+
+    if strategy == "VOL_DUMP":
+        try:
+            from intraday_vol_surge import evaluate_vol_dump
+        except ImportError:
+            from .intraday_vol_surge import evaluate_vol_dump  # type: ignore[no-redef]
+        return evaluate_vol_dump(ctx)
+
     return None
 
 
@@ -1689,42 +1792,39 @@ def scan_intraday(
             )
             continue
 
+        vol_surge_on = "VOL_BUY" in strategies or "VOL_DUMP" in strategies
+        if vol_surge_on:
+            try:
+                from intraday_vol_surge import enrich_ctx_for_vol_surge
+            except ImportError:
+                from .intraday_vol_surge import enrich_ctx_for_vol_surge  # type: ignore[no-redef]
+            enrich_ctx_for_vol_surge(ctx)
+
         sig_fail = _signal_fail_reason(ctx, flt)
-        if sig_fail == "no_rsi":
-            stats.failed_no_rsi += 1
-            _notify_progress(
-                progress_cb, i + 1, total, raw, stage="done",
-                last_outcome="filter:no_rsi", last_bar_source=bar_src, matched=stats.tickers_matched,
-            )
-            continue
-        if sig_fail == "no_volume_ratio":
-            stats.failed_no_volume_ratio += 1
-            _notify_progress(
-                progress_cb, i + 1, total, raw, stage="done",
-                last_outcome="filter:no_vol_ratio", last_bar_source=bar_src, matched=stats.tickers_matched,
-            )
-            continue
-        if sig_fail == "volume_ratio":
-            stats.failed_volume_ratio += 1
-            _notify_progress(
-                progress_cb, i + 1, total, raw, stage="done",
-                last_outcome="filter:vol_ratio", last_bar_source=bar_src, matched=stats.tickers_matched,
-            )
-            continue
-        if sig_fail == "rsi":
-            stats.failed_rsi += 1
-            _notify_progress(
-                progress_cb, i + 1, total, raw, stage="done",
-                last_outcome="filter:rsi", last_bar_source=bar_src, matched=stats.tickers_matched,
-            )
-            continue
-        if sig_fail == "min_change":
-            stats.failed_min_change += 1
-            _notify_progress(
-                progress_cb, i + 1, total, raw, stage="done",
-                last_outcome="filter:min_change", last_bar_source=bar_src, matched=stats.tickers_matched,
-            )
-            continue
+        dump_probe = "VOL_DUMP" in strategies
+        dump_hit = _evaluate("VOL_DUMP", ctx, flt) if dump_probe else None
+        buy_probe = "VOL_BUY" in strategies
+        buy_hit = _evaluate("VOL_BUY", ctx, flt) if buy_probe else None
+        if sig_fail:
+            dump_bypass = dump_hit and sig_fail in ("rsi", "min_change", "no_rsi")
+            buy_bypass = buy_hit and sig_fail in ("rsi", "min_change", "volume_ratio", "no_rsi")
+            if not (dump_bypass or buy_bypass):
+                if sig_fail == "no_rsi":
+                    stats.failed_no_rsi += 1
+                elif sig_fail == "no_volume_ratio":
+                    stats.failed_no_volume_ratio += 1
+                elif sig_fail == "volume_ratio":
+                    stats.failed_volume_ratio += 1
+                elif sig_fail == "rsi":
+                    stats.failed_rsi += 1
+                elif sig_fail == "min_change":
+                    stats.failed_min_change += 1
+                _notify_progress(
+                    progress_cb, i + 1, total, raw, stage="done",
+                    last_outcome=f"filter:{sig_fail}", last_bar_source=bar_src,
+                    matched=stats.tickers_matched,
+                )
+                continue
 
         sector = "—"
         industry = ""
@@ -1748,7 +1848,19 @@ def scan_intraday(
         reject_reasons = _hard_reject_reasons(ctx)
         early_probe = "EARLY" in strategies
         early_hit = _evaluate("EARLY", ctx, flt) if early_probe else None
-        if reject_reasons and not (early_hit and _early_soft_hard_rejects(reject_reasons, ctx)):
+        try:
+            from intraday_vol_surge import vol_buy_soft_hard_rejects, vol_dump_soft_hard_rejects
+        except ImportError:
+            from .intraday_vol_surge import (  # type: ignore[no-redef]
+                vol_buy_soft_hard_rejects,
+                vol_dump_soft_hard_rejects,
+            )
+        reject_ok = (
+            (early_hit and _early_soft_hard_rejects(reject_reasons, ctx))
+            or (buy_hit and vol_buy_soft_hard_rejects(reject_reasons, ctx))
+            or (dump_hit and vol_dump_soft_hard_rejects(reject_reasons, ctx))
+        )
+        if reject_reasons and not reject_ok:
             stats.failed_hard_reject += 1
             _notify_progress(
                 progress_cb, i + 1, total, raw, stage="done",
@@ -1760,7 +1872,11 @@ def scan_intraday(
         if early_hit:
             matched_notes["EARLY"] = early_hit
         for strategy in strategies:
-            if strategy == "EARLY":
+            if strategy in ("EARLY", "VOL_BUY", "VOL_DUMP"):
+                if strategy == "VOL_BUY" and buy_hit:
+                    matched_notes["VOL_BUY"] = buy_hit
+                elif strategy == "VOL_DUMP" and dump_hit:
+                    matched_notes["VOL_DUMP"] = dump_hit
                 continue
             note = _evaluate(strategy, ctx, flt)
             if note:

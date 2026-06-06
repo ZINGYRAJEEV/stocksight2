@@ -1,7 +1,7 @@
 """Streamlit page renderers for the Intraday module.
 
 Pages:
-    render_intraday_screener_page()  → 4-strategy intraday scanner with tabs
+    render_intraday_screener_page()  → multi-strategy intraday scanner with tabs
     render_gap_scanner_page()        → pre-market gap-up / gap-down scanner + mood
     render_intraday_guide_page()     → educational playbook (rules, routine, checklist)
 """
@@ -544,6 +544,16 @@ def _filters_panel(key_prefix: str, market: str = "NSE") -> IntradayFilters:
     )
 
 
+def _fmt_session_volume(vol: Optional[float]) -> str:
+    if vol is None or vol <= 0:
+        return "—"
+    if vol >= 1_000_000:
+        return f"{vol / 1_000_000:.2f}M"
+    if vol >= 1_000:
+        return f"{vol / 1_000:.1f}K"
+    return f"{int(vol)}"
+
+
 def _format_confluence(strategy_codes: list[str]) -> str:
     ordered = [s for s in STRATEGY_TIME_ORDER if s in strategy_codes]
     ordered += [s for s in strategy_codes if s not in ordered]
@@ -553,6 +563,40 @@ def _format_confluence(strategy_codes: list[str]) -> str:
         return STRATEGY_LABEL.get(ordered[0], ordered[0])
     short = " + ".join(STRATEGY_LABEL.get(s, s).split(" ", 1)[-1][:10] for s in ordered[:4])
     return f"{len(ordered)}× {short}"
+
+
+MA500_PCT_COL = "vs 500DMA %"
+MA500_SLOPE_COL = "500DMA slope"
+
+
+def _ma500_cell_style(series: "pd.Series") -> list[str]:
+    """Green when above / rising; red when below / falling."""
+    styles: list[str] = []
+    for v in series:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            styles.append("")
+            continue
+        if series.name == MA500_PCT_COL:
+            try:
+                pct = float(v)
+            except (TypeError, ValueError):
+                styles.append("")
+                continue
+            if pct >= 0:
+                styles.append("background-color: #dcfce7; color: #166534; font-weight: 600;")
+            else:
+                styles.append("background-color: #fee2e2; color: #991b1b; font-weight: 600;")
+        elif series.name == MA500_SLOPE_COL:
+            txt = str(v).strip()
+            if txt == "Rising":
+                styles.append("background-color: #dcfce7; color: #166534; font-weight: 600;")
+            elif txt == "Falling":
+                styles.append("background-color: #fee2e2; color: #991b1b; font-weight: 600;")
+            else:
+                styles.append("")
+        else:
+            styles.append("")
+    return styles
 
 
 def _render_intraday_results_table(
@@ -572,6 +616,9 @@ def _render_intraday_results_table(
         return [css] * len(row)
 
     styler = df.style.apply(_row_style, axis=1)  # type: ignore[union-attr]
+    ma500_cols = [c for c in (MA500_PCT_COL, MA500_SLOPE_COL) if c in df.columns]
+    if ma500_cols:
+        styler = styler.apply(_ma500_cell_style, subset=ma500_cols)  # type: ignore[union-attr]
     kwargs.setdefault("show_gate_legend", False)
     return render_clickable_scan_table(df, styler=styler, **kwargs)
 
@@ -627,9 +674,14 @@ def _results_to_df(
             "Gap %": r.gap_pct,
             "RSI(5m)": r.rsi,
             "Vol×": r.vol_ratio,
+            "Vol accel": r.vol_accel,
+            "Sess volume": _fmt_session_volume(r.session_volume),
+            "Vol flow": r.vol_flow or "—",
             "vs VWAP %": r.pct_vs_vwap,
             "vs 50DMA %": r.pct_vs_ma50d,
             "vs 200DMA %": r.pct_vs_ma200d,
+            MA500_PCT_COL: r.pct_vs_ma500d,
+            MA500_SLOPE_COL: r.ma500_trend or "—",
             "↓ from 52w": r.pct_vs_52w_high,
             "ORB High": r.orb_high,
             "ORB Low": r.orb_low,
@@ -766,9 +818,34 @@ def _intraday_col_cfg(df: pd.DataFrame) -> dict:
             "Gap %": st.column_config.NumberColumn(format="%+.2f"),
             "RSI(5m)": st.column_config.NumberColumn(format="%.1f"),
             "Vol×": st.column_config.NumberColumn(format="%.2f"),
+            "Vol accel": st.column_config.NumberColumn(
+                "Vol accel",
+                format="%.2f",
+                help="Recent 3-bar volume ÷ prior 3-bar volume. ≥1.5× = accelerating.",
+            ),
+            "Sess volume": st.column_config.TextColumn(
+                "Sess volume",
+                width="small",
+                help="Total shares traded in today's session so far.",
+            ),
+            "Vol flow": st.column_config.TextColumn(
+                "Vol flow",
+                width="small",
+                help="Fast buying = accumulation surge. Fast selling = distribution surge.",
+            ),
             "vs VWAP %": st.column_config.NumberColumn(format="%+.2f"),
             "vs 50DMA %": st.column_config.NumberColumn(format="%+.2f"),
             "vs 200DMA %": st.column_config.NumberColumn(format="%+.2f"),
+            MA500_PCT_COL: st.column_config.NumberColumn(
+                MA500_PCT_COL,
+                format="%+.2f",
+                help="Price vs 500-day MA. Green = above (uptrend zone); red = below.",
+            ),
+            MA500_SLOPE_COL: st.column_config.TextColumn(
+                MA500_SLOPE_COL,
+                width="small",
+                help="Is the 500-day MA line itself rising or falling (vs ~1 month ago)?",
+            ),
             "↓ from 52w": st.column_config.NumberColumn(format="%+.2f"),
             "ORB High": st.column_config.NumberColumn(format="%.2f"),
             "ORB Low": st.column_config.NumberColumn(format="%.2f"),
@@ -921,7 +998,7 @@ def _csv_download(
 
 
 # ─────────────────────────────────────────────────────────────
-# Page 1: Intraday Screener (4-strategy)
+# Page 1: Intraday Screener
 # ─────────────────────────────────────────────────────────────
 # What each strategy does, when to use it, and what a match tells the trader.
 STRATEGY_PLAYBOOK: dict[str, dict[str, str]] = {
@@ -980,12 +1057,29 @@ STRATEGY_PLAYBOOK: dict[str, dict[str, str]] = {
         "means": "Highest-conviction breakout (zero overhead resistance). See the **ATH Strategy "
                  "Playbook** page for the full rulebook.",
     },
+    "VOL_BUY": {
+        "does": "**Volume acceleration on green bars** — recent 3-bar volume ≥1.55× the prior 3 bars, "
+                "bar vol ≥1.35×, ≥50% green candles, price rising vs VWAP. Flags **fast accumulation**.",
+        "use":  "Morning through mid-session when you want names where buyers are stepping in aggressively "
+                "(best window to catch the move early).",
+        "means": "Potential **buy window** — volume is speeding up while price holds up. Confirm on 5m chart; "
+                 "use **Vol accel** and **Sess volume** columns.",
+    },
+    "VOL_DUMP": {
+        "does": "**Volume acceleration on red bars** — same accel math but ≥50% red candles, day down, "
+                "price below VWAP. Flags **fast distribution** / selling pressure.",
+        "use":  "Any session — to spot names bleeding on rising volume (exit longs, avoid new buys).",
+        "means": "**Sell / avoid** signal — not tick-level order flow; inferred from price + volume. "
+                 "Educational short levels in Entry/Stop/Target if you trade both sides.",
+    },
 }
 
 
 # Strategies ordered by where they fire in the trading session (earliest → latest).
 # BROAD is time-agnostic so it sits last.
-STRATEGY_TIME_ORDER = ("GAP", "EARLY", "GRIND", "MOMENTUM", "ORB", "ATH", "VWAP", "BROAD")
+STRATEGY_TIME_ORDER = (
+    "GAP", "EARLY", "VOL_BUY", "GRIND", "MOMENTUM", "ORB", "ATH", "VWAP", "VOL_DUMP", "BROAD",
+)
 
 # One-line exit hint shown on each scan row (matches scanner Target / Stop / R:R logic).
 EXIT_HINT_BY_STRATEGY: dict[str, str] = {
@@ -997,6 +1091,8 @@ EXIT_HINT_BY_STRATEGY: dict[str, str] = {
     "ATH": "Book 50% at Target (1:2) · trail stop on new highs",
     "VWAP": "Book 50% at Target (1:2) · exit if 5m close < VWAP",
     "BROAD": "Book 50% at 1× risk or Target · strict flat by close",
+    "VOL_BUY": "Book 50% at 1× risk · trail under VWAP · exit if vol accel fades",
+    "VOL_DUMP": "Exit longs immediately · do not average down · short only if skilled",
 }
 
 EXIT_PLAYBOOK: dict[str, dict[str, str]] = {
@@ -1692,7 +1788,7 @@ def render_intraday_screener_page(
             "Active **NSE (India)** intraday traders who want candidates with Entry / Stop / Target "
             "attached, using **ICICI Breeze** or **Yahoo Finance** data (your choice per scan).",
             "Pick the data API above before each scan. **Auto** uses Breeze when your session token "
-            "is valid, otherwise Yahoo. Same 8-strategy engine + 7-rule ranking as the Intraday Screener. "
+            "is valid, otherwise Yahoo. Same intraday engine + 7-rule ranking as the Intraday Screener. "
             "**Educational only — confirm risk before trading.**",
         )
     data_source = "auto"
@@ -1750,7 +1846,10 @@ Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Qu
             uni_label, raw_tickers = _universe_picker(key, market)
         with c2:
             _default_strats = [
-                s for s in ("BROAD", "EARLY", "GRIND", "MOMENTUM", "VWAP", "ORB", "GAP") if s in STRATEGIES
+                s for s in (
+                    "BROAD", "EARLY", "VOL_BUY", "VOL_DUMP", "GRIND",
+                    "MOMENTUM", "VWAP", "ORB", "GAP",
+                ) if s in STRATEGIES
             ]
             strategies_picked: list[str] = st.multiselect(
                 "Strategies to scan",
@@ -1758,8 +1857,8 @@ Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Qu
                 default=_default_strats,
                 format_func=lambda s: STRATEGY_LABEL.get(s, s),
                 key=f"{key}_strats",
-                help="Enable **⚡ Early Burst** to catch pre-bust movers (TEJASNET-style volume surge). "
-                "**Broad Movers** for the widest net.",
+                help="**📈 Fast Volume Buy** / **📉 Fast Volume Sell** trace accelerating volume with price direction. "
+                "**⚡ Early Burst** for pre-bust movers. **Broad Movers** for the widest net.",
             )
             _render_strategy_playbook(market)
 

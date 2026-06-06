@@ -32,6 +32,7 @@ def exec_stocksight_page(filename: str) -> None:
         "popular_screens_page",
         "intraday",
         "intraday_ranking",
+        "intraday_vol_surge",
         "intraday_page",
         "breeze_data",
         "scan_progress",
