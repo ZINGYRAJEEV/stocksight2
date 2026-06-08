@@ -15,6 +15,7 @@ try:
     from intraday import (
         STRATEGY_LABEL,
         IntradayResult,
+        _ma500_rank_points,
         _timing_weight_from_prediction,
         compute_intraday_quality_gate,
     )
@@ -22,6 +23,7 @@ except ImportError:
     from .intraday import (  # type: ignore[no-redef]
         STRATEGY_LABEL,
         IntradayResult,
+        _ma500_rank_points,
         _timing_weight_from_prediction,
         compute_intraday_quality_gate,
     )
@@ -86,6 +88,8 @@ def unified_intraday_score(
         "Prediction": r.prediction or "",
         "Strategy": STRATEGY_LABEL.get(r.strategy, r.strategy),
         "R:R": r.rr_ratio,
+        "vs 500DMA %": r.pct_vs_ma500d,
+        "500DMA slope": r.ma500_trend,
     }
     pack = compute_intraday_quality_gate(
         row,
@@ -102,6 +106,15 @@ def unified_intraday_score(
     except (TypeError, ValueError):
         pass
 
+    ma_pts, ma_why = _ma500_rank_points(
+        r.pct_vs_ma500d,
+        r.ma500_trend or "",
+        strategy=r.strategy,
+        scale=0.5,
+    )
+    if ma_pts:
+        score += float(ma_pts)
+
     if "avoid" in (r.rank_tier or "").lower():
         score = min(score, 35.0)
 
@@ -112,6 +125,8 @@ def unified_intraday_score(
         why = f"{why} · regime +{int(reg_adj)}"
     elif reg_adj < 0:
         why = f"{why} · regime {int(reg_adj)}"
+    if ma_why:
+        why = f"{why} · {ma_why}"
     if confluence_n >= 2:
         why = f"{why} · {confluence_n} strategies"
     if r.strategy == "EARLY":
@@ -142,10 +157,14 @@ def unified_sort_key(
 ) -> tuple:
     n_conf = len(confluence_map.get(r.raw_ticker, [r.strategy]))
     u, _, _ = unified_intraday_score(r, n_conf, regime)
+    ma_tb = float(r.pct_vs_ma500d) if r.pct_vs_ma500d is not None else -999.0
+    if r.strategy == "VOL_DUMP" and r.pct_vs_ma500d is not None:
+        ma_tb = -float(r.pct_vs_ma500d)
     return (
         -u,
         -r.score_120,
         -_timing_weight_from_prediction(r.prediction or "") * 5,
+        -ma_tb,
         -(r.vol_ratio or 0.0),
         -(r.rr_ratio or 0.0),
     )

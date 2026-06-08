@@ -27,6 +27,12 @@ def page_portfolio() -> None:
     exec_stocksight_page("Portfolio.py")
 
 
+def page_finance_hub() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Finance Hub.py")
+
+
 def page_breakout_momentum() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
@@ -219,11 +225,48 @@ def page_volume_gravity() -> None:
     exec_stocksight_page("Volume Gravity.py")
 
 
+def page_markov_regime() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Markov Regime.py")
+
+
+def page_central_brain() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Central Brain.py")
+
+
+def page_buyback_screener() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Buyback Screener.py")
+
+
+def page_pre_investigation() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Pre-Investigation Links.py")
+
+
+def page_peter_lynch() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Peter Lynch.py")
+
+
+def page_fast_movers() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Fast Movers.py")
+
+
 __all__ = [
     "page_stocksight",
     "page_watchlist_cross_scan",
     "page_scan_history",
     "page_portfolio",
+    "page_finance_hub",
     "page_breakout_momentum",
     "page_oversold_bounce",
     "page_extreme_oversold",
@@ -256,4 +299,10 @@ __all__ = [
     "page_ath_playbook",
     "page_stage2_momentum",
     "page_volume_gravity",
+    "page_markov_regime",
+    "page_central_brain",
+    "page_buyback_screener",
+    "page_pre_investigation",
+    "page_peter_lynch",
+    "page_fast_movers",
 ]

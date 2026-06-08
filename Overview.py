@@ -50,12 +50,19 @@ def _import_navigation_pages():
         "page_ath_playbook",
         "page_stage2_momentum",
         "page_volume_gravity",
+        "page_markov_regime",
+        "page_central_brain",
         "page_multibagger",
         "page_popular_screens",
         "page_proven_multibaggers",
         "page_overbought_exit",
         "page_oversold_bounce",
         "page_portfolio",
+        "page_finance_hub",
+        "page_buyback_screener",
+        "page_pre_investigation",
+        "page_peter_lynch",
+        "page_fast_movers",
         "page_scan_history",
         "page_stocksight",
         "page_value_technical",
@@ -117,12 +124,19 @@ try:
     page_ath_playbook = _nav["page_ath_playbook"]
     page_stage2_momentum = _nav["page_stage2_momentum"]
     page_volume_gravity = _nav["page_volume_gravity"]
+    page_markov_regime = _nav["page_markov_regime"]
+    page_central_brain = _nav["page_central_brain"]
     page_multibagger = _nav["page_multibagger"]
     page_popular_screens = _nav["page_popular_screens"]
     page_proven_multibaggers = _nav["page_proven_multibaggers"]
     page_overbought_exit = _nav["page_overbought_exit"]
     page_oversold_bounce = _nav["page_oversold_bounce"]
     page_portfolio = _nav["page_portfolio"]
+    page_finance_hub = _nav["page_finance_hub"]
+    page_buyback_screener = _nav["page_buyback_screener"]
+    page_pre_investigation = _nav["page_pre_investigation"]
+    page_peter_lynch = _nav["page_peter_lynch"]
+    page_fast_movers = _nav["page_fast_movers"]
     page_scan_history = _nav["page_scan_history"]
     page_stocksight = _nav["page_stocksight"]
     page_value_technical = _nav["page_value_technical"]
@@ -166,6 +180,9 @@ NAV_PAGES = {
         st.Page(page_watchlist_cross_scan, title="Watchlist Cross-Scan", icon="📌"),
         st.Page(page_scan_history, title="Scan History", icon="🗂️"),
         st.Page(page_portfolio, title="Portfolio", icon="💼"),
+        st.Page(page_finance_hub, title="Finance Hub", icon="📊"),
+        st.Page(page_buyback_screener, title="Buyback Screener", icon="💰"),
+        st.Page(page_pre_investigation, title="Pre-Investigation Links", icon="🔎"),
     ],
     "📈 Strategy Modules": [
         st.Page(page_breakout_momentum, title="Breakout Momentum", icon="🚀"),
@@ -195,14 +212,18 @@ NAV_PAGES = {
     "🌱 Theme Screens": [
         st.Page(page_multibagger, title="Multibagger Theme", icon="🌱"),
         st.Page(page_proven_multibaggers, title="Proven Multibaggers (500%+)", icon="🏆"),
+        st.Page(page_peter_lynch, title="Peter Lynch (PEG / GARP)", icon="🦉"),
     ],
     "🤖 Algo Strategy": [
         st.Page(page_algo_strategy_hub, title="Algo Strategy Hub", icon="🤖"),
+        st.Page(page_central_brain, title="Central Brain (TV → AI → Exchange)", icon="🧠"),
+        st.Page(page_markov_regime, title="Markov Regime Screener", icon="🎲"),
         st.Page(page_intrabot, title="IntraBot Automation", icon="⚡"),
         st.Page(page_intraday_autopilot, title="Intraday Autopilot", icon="🛰️"),
         st.Page(page_paper_trading, title="Paper Trading", icon="📝"),
     ],
     "⚡ Intraday": [
+        st.Page(page_fast_movers, title="Fast Movers (live speed)", icon="⚡"),
         st.Page(page_gap_scanner, title="Gap Scanner (pre-market)", icon="🌅"),
         st.Page(page_intraday_screener, title="Intraday Screener (6 strategies)", icon="📡"),
         st.Page(page_icici_breeze_screener, title="ICICI Breeze Screener (live NSE)", icon="🟠"),

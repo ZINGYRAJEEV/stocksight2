@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "strategy_name": "VWAP EMA RSI Confluence",
+  "description": "Single source of truth for TradingView alerts and Central Brain validation.",
+  "exchange_default": "bitget",
+  "indicators": {
+    "vwap_proximity_pct": 1.5,
+    "ema_period": 8,
+    "rsi_period": 14
+  },
+  "buy": {
+    "vwap_proximity_pct_max": 1.5,
+    "price_above_vwap": true,
+    "price_above_ema": true,
+    "rsi_max": 30,
+    "rsi_operator": "lt"
+  },
+  "sell": {
+    "vwap_proximity_pct_max": 1.5,
+    "price_below_vwap": true,
+    "price_below_ema": true,
+    "rsi_min": 70,
+    "rsi_operator": "gt"
+  },
+  "risk": {
+    "portfolio_value_env": "PORTFOLIO_VALUE",
+    "max_trade_size_env": "MAX_TRADE_SIZE",
+    "max_trades_per_day_env": "MAX_TRADES_PER_DAY",
+    "default_stop_loss_pct": 1.5,
+    "default_target_rr": 2.0
+  },
+  "tradingview": {
+    "webhook_secret_env": "TRADINGVIEW_WEBHOOK_SECRET",
+    "expected_fields": ["action", "symbol", "price"]
+  },
+  "pine_script_ref": "// TradingView: alert JSON with action, symbol, price, rsi, vwap, ema8",
+  "notes": [
+    "Buy blocked if RSI >= 30 even when price is above VWAP and 8 EMA.",
+    "Sell blocked if RSI <= 70 when below VWAP/EMA.",
+    "Override thresholds here without changing execution engine code."
+  ]
+}

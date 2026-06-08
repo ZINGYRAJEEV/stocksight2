@@ -1078,6 +1078,62 @@ except ImportError:
 _PATTERN_STRATEGIES = frozenset({"GAP", "EARLY", "GRIND", "MOMENTUM", "ORB", "ATH", "VWAP"})
 
 
+def _ma500_rank_points(
+    pct_vs_ma500: Optional[float],
+    ma500_trend: str,
+    *,
+    strategy: str = "",
+    strategies: Optional[list[str]] = None,
+    scale: float = 1.0,
+) -> tuple[int, str]:
+    """
+    Score bonus/penalty from 500-day MA structure.
+
+    Long setups: reward price above a *rising* 500DMA.
+    VOL_DUMP: reward price below a *falling* 500DMA (distribution + bearish structure).
+    """
+    codes = strategies or []
+    strat = (strategy or "").upper()
+    is_dump = strat == "VOL_DUMP" or "VOL_DUMP" in codes
+    rising = str(ma500_trend or "").strip().lower() == "rising"
+    falling = str(ma500_trend or "").strip().lower() == "falling"
+    if pct_vs_ma500 is None:
+        return 0, ""
+
+    pct = float(pct_vs_ma500)
+    above = pct >= 0.0
+    near_rising = rising and pct >= -2.0
+
+    pts = 0
+    note = ""
+    if is_dump:
+        if below := pct < 0.0:
+            if falling:
+                pts, note = 8, "500DMA below+f falling"
+            else:
+                pts, note = 4, "500DMA below"
+        elif falling:
+            pts, note = 2, "500DMA falling"
+        elif above and rising:
+            pts, note = -4, "500DMA above+r rising (weak dump)"
+    else:
+        if above and rising:
+            pts, note = 10, "500DMA above+r rising"
+        elif above:
+            pts, note = 5, "500DMA above"
+        elif near_rising:
+            pts, note = 3, "500DMA rising (near MA)"
+        elif pct < 0.0 and falling:
+            pts, note = -8, "500DMA below+f falling"
+        elif pct < 0.0:
+            pts, note = -5, "500DMA below"
+
+    pts = int(round(pts * scale))
+    if pts == 0:
+        return 0, ""
+    return pts, note
+
+
 def compute_intraday_quality_gate(
     row: dict,
     *,
@@ -1150,6 +1206,28 @@ def compute_intraday_quality_gate(
     except (TypeError, ValueError):
         pass
 
+    pct_ma500_raw = row.get("vs 500DMA %")
+    if pct_ma500_raw is None:
+        pct_ma500_raw = row.get("pct_vs_ma500d")
+    pct_ma500_val: Optional[float] = None
+    if pct_ma500_raw is not None:
+        try:
+            v = float(pct_ma500_raw)
+            if not np.isnan(v):
+                pct_ma500_val = v
+        except (TypeError, ValueError):
+            pass
+    ma500_slope = str(row.get("500DMA slope") or row.get("ma500_trend") or "")
+    primary = codes[0] if len(codes) == 1 else ""
+    ma_pts, ma_note = _ma500_rank_points(
+        pct_ma500_val,
+        ma500_slope,
+        strategy=primary,
+        strategies=codes,
+        scale=0.85,
+    )
+    pts += ma_pts
+
     if "avoid" in tier or "skip" in tier:
         pts = min(pts, 30)
     if _timing_weight_from_prediction(pred) <= -3:
@@ -1186,6 +1264,8 @@ def compute_intraday_quality_gate(
         why_bits.append(f"News {top_tier}")
     if only_broad:
         why_bits.append("Broad mover — weaker pattern")
+    if ma_note:
+        why_bits.append(ma_note)
 
     meta = QUALITY_GATE_BANDS[band]
     return {
@@ -1234,6 +1314,8 @@ def _score_intraday_rules(ctx: dict, *, strategy_hits: int, hard_rejects: list[s
     pct_vwap = ctx.get("pct_vs_vwap")
     pct_ma50 = ctx.get("pct_vs_ma50d")
     pct_ma200 = ctx.get("pct_vs_ma200d")
+    pct_ma500 = ctx.get("pct_vs_ma500d")
+    ma500_trend = str(ctx.get("ma500_trend") or "")
 
     d_surge = _daily_volume_surge(ctx)
     s_part = _session_volume_participation(ctx)
@@ -1330,12 +1412,15 @@ def _score_intraday_rules(ctx: dict, *, strategy_hits: int, hard_rejects: list[s
         elif av >= 2.0:
             p_vwap = -5
 
-    # 7) Trend alignment (max +10)
+    # 7) Trend alignment (max +10) — 50/200 DMA stack
     above50 = pct_ma50 is not None and float(pct_ma50) > 0
     above200 = pct_ma200 is not None and float(pct_ma200) > 0
     p_trend = 10 if (above50 and above200) else (5 if (above50 or above200) else 0)
 
-    score = int(p_vol + p_gap + p_day + p_rsi + p_52w + p_vwap + p_trend)
+    # 8) 500 DMA structure (max +10 / min -8) — long-term trend confirmation
+    p_ma500, ma500_note = _ma500_rank_points(pct_ma500, ma500_trend, scale=1.0)
+
+    score = int(p_vol + p_gap + p_day + p_rsi + p_52w + p_vwap + p_trend + p_ma500)
     if score >= 80:
         tier = "🏆 Best"
         pos_size = "100%"
@@ -1356,10 +1441,11 @@ def _score_intraday_rules(ctx: dict, *, strategy_hits: int, hard_rejects: list[s
         tier = "⚠️ Avoid"
         pos_size = "Skip"
 
+    ma500_bit = f" · 500DMA {p_ma500:+d}/10" if p_ma500 or ma500_note else ""
     reason = (
         f"Vol {p_vol}/30 · Gap {p_gap:+d}/20 · Day {p_day:+d}/20 · RSI {p_rsi:+d}/15 · "
-        f"52W {p_52w:+d}/15 · VWAP {p_vwap:+d}/10 · Trend {p_trend}/10 · "
-        f"Signals {strategy_hits}"
+        f"52W {p_52w:+d}/15 · VWAP {p_vwap:+d}/10 · Trend {p_trend}/10"
+        f"{ma500_bit} · Signals {strategy_hits}"
     )
     if hard_rejects:
         reason += " · Reject: " + ", ".join(hard_rejects)
