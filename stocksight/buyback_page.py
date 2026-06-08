@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pandas as pd
 import streamlit as st
 
@@ -16,6 +18,12 @@ from buyback import (
     expected_return_pct,
     max_shares_small_category,
     sensitivity_table,
+)
+from buyback_announcements import (
+    SCREENER_BUYBACK_URL,
+    announcements_to_rows,
+    fetch_buyback_announcements,
+    get_screener_feed_status,
 )
 from buyback_store import load_analyses, load_opportunities, save_opportunities
 from screener import get_stock_links
@@ -41,7 +49,7 @@ def _return_style(series: pd.Series) -> list[str]:
     return styles
 
 
-SCREENER_IN_BUYBACK_URL = "https://www.screener.in/full-text-search/?q=buyback&type=announcements"
+SCREENER_IN_BUYBACK_URL = SCREENER_BUYBACK_URL
 
 
 def _render_how_to_use() -> None:
@@ -151,6 +159,158 @@ def _render_education() -> None:
 | >8% small return | **Worth playing** filter |
 """
         )
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_buyback_announcements(max_age_days: int, enrich_prices: bool) -> list[dict]:
+    anns = fetch_buyback_announcements(
+        max_age_days=max_age_days,
+        enrich_prices=enrich_prices,
+        mark_as_seen=True,
+    )
+    return announcements_to_rows(anns)
+
+
+def _load_announcement_into_calculator(row: dict) -> None:
+    st.session_state["bb_stock"] = row.get("Company") or "—"
+    ticker = row.get("Ticker") or ""
+    st.session_state["bb_raw"] = f"{ticker}.NS" if ticker and ticker != "—" else ""
+    if row.get("Size %"):
+        st.session_state["bb_pct"] = float(row["Size %"])
+    if row.get("Offer ₹"):
+        st.session_state["bb_offer"] = float(row["Offer ₹"])
+    if row.get("CMP ₹"):
+        px = float(row["CMP ₹"])
+        st.session_state["bb_ann"] = px
+        st.session_state["bb_post"] = px
+    if row.get("Record date") and row["Record date"] != "—":
+        st.session_state["bb_rec"] = str(row["Record date"])
+    st.session_state["bb_calc_tab"] = True
+
+
+def _render_screener_setup_hint() -> None:
+    status = get_screener_feed_status()
+    if status.get("login_configured"):
+        st.success(
+            "Screener.in session configured — pulling "
+            f"[full-text buyback search]({SCREENER_IN_BUYBACK_URL}) automatically."
+        )
+        return
+    with st.expander("🔐 Enable Screener.in full-text feed (recommended)", expanded=False):
+        st.markdown(
+            f"""
+[Screener.in buyback announcements]({SCREENER_IN_BUYBACK_URL}) is a **premium-quality filing feed**
+but requires a **free** Screener login when fetched programmatically.
+
+**One-time setup** (local only, in `.streamlit/secrets.toml`):
+
+```toml
+[screener]
+sessionid = "paste-from-browser"
+csrftoken = "paste-from-browser"
+```
+
+1. Log in at [screener.in](https://www.screener.in/login/).
+2. Open DevTools → Application → Cookies → `www.screener.in`.
+3. Copy `sessionid` and `csrftoken` into the block above.
+4. Restart Streamlit.
+
+Without login we still scan **recent Screener filings** across Nifty 500 (rotating batch) plus Google News.
+"""
+        )
+
+
+def _render_live_announcements() -> None:
+    st.markdown("#### 📢 Live buyback announcements")
+    st.caption(
+        "Screener.in filings + Google News RSS — refreshed automatically so you see new offers early. "
+        "Cross-check PDFs on NSE / BSE before trading."
+    )
+    _render_screener_setup_hint()
+
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    with c1:
+        st.link_button(
+            "🔗 Screener.in buyback filings",
+            SCREENER_IN_BUYBACK_URL,
+            use_container_width=True,
+        )
+    with c2:
+        new_only = st.checkbox("New only", value=False, key="bb_ann_new_only")
+    with c3:
+        enrich = st.checkbox("Load CMP", value=True, key="bb_ann_enrich")
+    with c4:
+        max_days = st.selectbox("Window", [7, 14, 30, 45], index=2, key="bb_ann_days")
+
+    refresh_sec = st.slider("Auto-refresh (seconds)", 60, 600, 180, 60, key="bb_ann_refresh")
+
+    @st.fragment(run_every=timedelta(seconds=int(refresh_sec)))
+    def _live_feed() -> None:
+        if st.button("🔄 Refresh now", key="bb_ann_manual_refresh"):
+            _cached_buyback_announcements.clear()
+        with st.spinner("Fetching buyback headlines…"):
+            rows = _cached_buyback_announcements(int(max_days), bool(enrich))
+        if new_only:
+            rows = [r for r in rows if r.get("")]
+        new_count = sum(1 for r in rows if r.get(""))
+        if new_count:
+            st.success(f"**{new_count}** new announcement(s) since your last visit.")
+        elif rows:
+            st.info(f"**{len(rows)}** headline(s) in the last {max_days} days — none new since last check.")
+        else:
+            st.warning("No buyback headlines found. Try widening the window or check Screener.in directly.")
+            return
+
+        df = pd.DataFrame(rows)
+        screener_n = sum(1 for r in rows if str(r.get("Source", "")).startswith("Screener"))
+        news_n = len(rows) - screener_n
+        st.caption(f"Sources: **{screener_n}** Screener.in · **{news_n}** Google News")
+
+        show_cols = [
+            "", "Age", "Company", "Headline", "Source", "Type", "Offer ₹", "Size %",
+            "Record date", "CMP ₹", "Premium %", "Est. small ret %", "Worth watch",
+            "Announcement", "Screener", "NSE",
+        ]
+        show_cols = [c for c in show_cols if c in df.columns]
+        st.dataframe(
+            df[show_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Announcement": st.column_config.LinkColumn(display_text="News ↗"),
+                "Screener": st.column_config.LinkColumn(display_text="Screener ↗"),
+                "NSE": st.column_config.LinkColumn(display_text="NSE ↗"),
+                "Offer ₹": st.column_config.NumberColumn(format="₹%.0f"),
+                "CMP ₹": st.column_config.NumberColumn(format="₹%.2f"),
+                "Premium %": st.column_config.NumberColumn(format="%+.1f"),
+                "Est. small ret %": st.column_config.NumberColumn(format="%+.2f"),
+                "Size %": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+
+        st.markdown("**Quick actions**")
+        for i, row in enumerate(rows[:12]):
+            label = f"{'🆕 ' if row.get('') else ''}{row.get('Company', '—')} — {str(row.get('Headline', ''))[:70]}…"
+            with st.expander(label, expanded=bool(row.get("")) and i < 3):
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Offer price", f"₹{row['Offer ₹']:,.0f}" if row.get("Offer ₹") else "—")
+                m2.metric("Premium", f"{row['Premium %']:+.1f}%" if row.get("Premium %") is not None else "—")
+                m3.metric("Est. small return", f"{row['Est. small ret %']:+.2f}%" if row.get("Est. small ret %") is not None else "—")
+                m4.metric("Age", row.get("Age", "—"))
+                if row.get("Parse notes"):
+                    st.caption(row["Parse notes"])
+                b1, b2, b3 = st.columns(3)
+                with b1:
+                    if st.button("🧮 Load into calculator", key=f"bb_load_calc_{row.get('id', i)}"):
+                        _load_announcement_into_calculator(row)
+                        st.toast(f"Loaded {row.get('Company')} — open Calculator tab")
+                        st.rerun()
+                with b2:
+                    st.link_button("Open news", row.get("Announcement") or SCREENER_IN_BUYBACK_URL)
+                with b3:
+                    st.link_button("Screener company", row.get("Screener") or SCREENER_IN_BUYBACK_URL)
+
+    _live_feed()
 
 
 def _render_screener_table(analyses: list) -> None:
@@ -323,7 +483,7 @@ def render_buyback_page() -> None:
                 border-radius:8px; padding:18px 22px; margin-bottom:14px;'>
         <div style='font-size:1.35rem; font-weight:700; color:#fafaf9;'>{META['emoji']} {META['title']}</div>
         <div style='font-size:0.85rem; color:#d6d3d1; margin-top:6px;'>
-            Acceptance ratio · Small vs General return · Break-even · Sensitivity
+            Live announcements · Acceptance ratio · Small vs General return · Break-even
         </div>
     </div>
     """)
@@ -332,11 +492,14 @@ def render_buyback_page() -> None:
     _render_how_to_use()
     _render_education()
 
-    tab_screen, tab_calc, tab_manage = st.tabs(
-        ["📋 Screener", "🧮 Calculator", "📁 Manage list"],
+    tab_live, tab_screen, tab_calc, tab_manage = st.tabs(
+        ["📢 Live announcements", "📋 Screener", "🧮 Calculator", "📁 Manage list"],
     )
 
     analyses = load_analyses()
+
+    with tab_live:
+        _render_live_announcements()
 
     with tab_screen:
         worth = [a for a in analyses if a.worth_playing and a.status == "active"]

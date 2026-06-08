@@ -27,8 +27,8 @@ META = {
         "**acceptance ratio** and **expected return** — especially under the **small shareholder quota**."
     ),
     "purpose": (
-        "Spreadsheet-style calculator: compare General vs Small category returns, "
-        "sensitivity to post-buyback price, and break-even. Target: small-holder return **> 8%**."
+        "Live buyback announcement feed plus spreadsheet-style calculator: compare General vs Small "
+        "category returns, sensitivity to post-buyback price, and break-even. Target: small-holder return **> 8%**."
     ),
 }
 
