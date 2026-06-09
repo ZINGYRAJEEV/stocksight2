@@ -62,6 +62,7 @@ def _import_navigation_pages():
         "page_buyback_screener",
         "page_pre_investigation",
         "page_peter_lynch",
+        "page_crisis_value",
         "page_fast_movers",
         "page_scan_history",
         "page_stocksight",
@@ -136,6 +137,7 @@ try:
     page_buyback_screener = _nav["page_buyback_screener"]
     page_pre_investigation = _nav["page_pre_investigation"]
     page_peter_lynch = _nav["page_peter_lynch"]
+    page_crisis_value = _nav["page_crisis_value"]
     page_fast_movers = _nav["page_fast_movers"]
     page_scan_history = _nav["page_scan_history"]
     page_stocksight = _nav["page_stocksight"]
@@ -213,6 +215,7 @@ NAV_PAGES = {
         st.Page(page_multibagger, title="Multibagger Theme", icon="🌱"),
         st.Page(page_proven_multibaggers, title="Proven Multibaggers (500%+)", icon="🏆"),
         st.Page(page_peter_lynch, title="Peter Lynch (PEG / GARP)", icon="🦉"),
+        st.Page(page_crisis_value, title="Crisis Value (Steady Earnings)", icon="🏦"),
     ],
     "🤖 Algo Strategy": [
         st.Page(page_algo_strategy_hub, title="Algo Strategy Hub", icon="🤖"),

@@ -623,6 +623,36 @@ def _render_intraday_results_table(
     return render_clickable_scan_table(df, styler=styler, **kwargs)
 
 
+def _refine_gate3_after_news(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply Gate 3 news bonus (+10 T1/T2) after news columns are attached."""
+    if df is None or df.empty or "Top tier" not in df.columns:
+        return df
+    news_bonus = 10
+    for idx in df.index:
+        top = str(df.at[idx, "Top tier"] or "").upper()
+        if top not in ("T1", "T2"):
+            continue
+        tier = str(df.at[idx, "Tier"] or "")
+        if "Skip" in tier or "⛔" in tier:
+            continue
+        try:
+            g3 = int(df.at[idx, "Gate 3 score"])
+        except (TypeError, ValueError):
+            g3 = 0
+        g3 += news_bonus
+        df.at[idx, "Gate 3 score"] = g3
+        why = str(df.at[idx, "Rank Why"] or "")
+        if f"News {top}" not in why:
+            df.at[idx, "Rank Why"] = f"{why} · News {top} +{news_bonus}".strip(" · ")
+        if g3 >= 0 and "Watch" in tier:
+            df.at[idx, "Tier"] = "✅ Buy"
+            df.at[idx, "Size"] = "75%" if g3 < 10 else "100%"
+        elif g3 < 0 and "Buy" in tier:
+            df.at[idx, "Tier"] = "👀 Watch"
+            df.at[idx, "Size"] = "50%"
+    return df
+
+
 def _build_confluence_map(results: list[IntradayResult]) -> dict[str, list[str]]:
     confluence_map: dict[str, list[str]] = {}
     for r in results:
@@ -662,7 +692,7 @@ def _results_to_df(
             "Unified score": u_score,
             "Unified band": u_band,
             "Rank why (unified)": u_why,
-            "Score /120": r.score_120,
+            "Gate 3 score": r.score_120,
             "Tier": r.rank_tier or "—",
             "Size": r.position_size or "—",
             "Rank Why": r.rank_why or "—",
@@ -700,6 +730,7 @@ def _results_to_df(
     if not df.empty:
         df = add_market_sentiment_columns(df, market=market, insert_after="Ticker")
         df = _add_intraday_news_scanner_columns(df, market=market)
+        df = _refine_gate3_after_news(df)
         df = apply_quality_gate_columns(df, profile="intraday", confluence_map=conf)
         if sort_by_gate and "Unified score" in df.columns:
             df = df.sort_values("Unified score", ascending=False, kind="stable").reset_index(drop=True)
@@ -781,21 +812,25 @@ def _intraday_col_cfg(df: pd.DataFrame) -> dict:
                 "Gate score", min_value=0, max_value=100, format="%d",
             ),
             "Gate why": st.column_config.TextColumn("Gate why", width="large"),
-            "Score /120": st.column_config.NumberColumn(
-                "Score /120",
-                format="%d",
-                help="7-rule intraday quality score. Higher = cleaner setup.",
+            "Gate 3 score": st.column_config.NumberColumn(
+                "Gate 3 score",
+                format="%+d",
+                help="Context score: 52W +10, News T1–2 +10, RSI>72 −20. Buy if ≥ 0 after gates 1–2 pass.",
             ),
-            "Tier": st.column_config.TextColumn("Tier", width="small"),
+            "Tier": st.column_config.TextColumn(
+                "Tier",
+                width="small",
+                help="✅ Buy · 👀 Watch · ⛔ Skip — from 3-gate rating.",
+            ),
             "Size": st.column_config.TextColumn(
                 "Size",
                 width="small",
-                help="Position size suggestion from score tier (100%, 75%, 50%, Skip).",
+                help="100% / 75% Buy · 50% Watch · Skip.",
             ),
             "Rank Why": st.column_config.TextColumn(
                 "Rank Why",
                 width="large",
-                help="Rule contribution breakdown + timing quality adjustment used for ranking.",
+                help="Gate 1 / Gate 2 / Gate 3 breakdown + session timing.",
             ),
             "Prediction": st.column_config.TextColumn(
                 "Prediction",
@@ -1808,25 +1843,24 @@ def render_intraday_screener_page(
     with st.expander("🏅 Ranking scorebook (7 rules · max 120)", expanded=False):
         st.markdown(
             """
-| Rule | Max points | Best condition |
-|------|------------|----------------|
-| Volume ratio | +30 | Vol ≥ 5× |
-| Gap quality | +20 | Gap ≥ 3% |
-| Day change | +20 | Change ≥ 5% |
-| RSI sweet spot | +15 | RSI 50–65 |
-| Near 52-week high | +15 | Within -2% of 52w high |
-| VWAP proximity | +10 | Within ±0.5% of VWAP |
-| Trend alignment | +10 | Above both 50-DMA and 200-DMA |
+**Gate 1 — hard filter (both required)**  
+Volume ≥ **5×** AND Gap ≥ **2%**. Fail either → **Skip** (not shown).
 
-Negative scoring is applied for weak/contra signals (e.g. gap-down, negative day, RSI>72, far below 52w high, too far from VWAP).
+**Gate 2 — momentum quality (2 of 3)**  
+RSI **45–70** · price **above VWAP** · vol accel **≥ 1.5×**.  
+RSI is **not** a hard blocker — fail RSI but pass VWAP + accel → still eligible.
 
-Tier + action:
-- **≥ 80** → 🏆 Best (100% planned size)
-- **50–79** → ✅ Good (75%)
-- **25–49** → 🟡 OK (50%)
-- **< 25** → ⚠️ Avoid (Skip)
+**Gate 3 — context score**  
+Near 52W high **+10** · News T1–2 **+10** · RSI **> 72 → −20** (penalty, not a block).
 
-Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Quality Gate + Score/120 + timing + confluence + regime fit + vol/R:R.
+**Rating (Tier column)**  
+- **✅ Buy** — Gates 1+2 pass and Gate 3 score **≥ 0**  
+- **👀 Watch** — Gates pass but score **< 0** (e.g. RSI exhaustion — wait for RSI < 70)  
+- **⛔ Skip** — Gate 1 or Gate 2 failed  
+
+*BELRISE-style example:* Gate 1 ✓ (Vol 20×, Gap +3.7%) · Gate 2 ✓ (RSI ✗, VWAP ✓, Accel ✓) · Gate 3 −20 → **Watch**.
+
+Rows are ranked by **Unified score** (Quality Gate + Gate 3 + timing + confluence + regime).
 """
         )
 
@@ -1878,7 +1912,7 @@ Rows are ranked by **Unified score** (same formula as **Algo Strategy Hub**): Qu
     with r1:
         run = st.button("▶  RUN INTRADAY SCAN", use_container_width=True, key=f"{key}_run")
     with r2:
-        st.session_state.setdefault(f"{key}_auto_scan", True)
+        st.session_state.setdefault(f"{key}_auto_scan", False)
         auto_scan = st.checkbox(
             "Auto-refresh scan (live)",
             key=f"{key}_auto_scan",

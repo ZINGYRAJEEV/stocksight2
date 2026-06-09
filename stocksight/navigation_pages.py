@@ -261,6 +261,12 @@ def page_fast_movers() -> None:
     exec_stocksight_page("Fast Movers.py")
 
 
+def page_crisis_value() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Crisis Value.py")
+
+
 __all__ = [
     "page_stocksight",
     "page_watchlist_cross_scan",
@@ -305,4 +311,5 @@ __all__ = [
     "page_pre_investigation",
     "page_peter_lynch",
     "page_fast_movers",
+    "page_crisis_value",
 ]

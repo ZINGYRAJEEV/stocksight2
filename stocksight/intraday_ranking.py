@@ -83,6 +83,7 @@ def unified_intraday_score(
     nudge and light vol/R:R tie boosts.
     """
     row = {
+        "Gate 3 score": r.score_120,
         "Score /120": r.score_120,
         "Tier": r.rank_tier,
         "Prediction": r.prediction or "",
@@ -115,7 +116,12 @@ def unified_intraday_score(
     if ma_pts:
         score += float(ma_pts)
 
-    if "avoid" in (r.rank_tier or "").lower():
+    tier_low = (r.rank_tier or "").lower()
+    if "skip" in tier_low or "⛔" in (r.rank_tier or ""):
+        score = min(score, 25.0)
+    elif "watch" in tier_low or "👀" in (r.rank_tier or ""):
+        score = min(score, 55.0)
+    elif "avoid" in tier_low:
         score = min(score, 35.0)
 
     score = max(0.0, min(100.0, round(score, 1)))

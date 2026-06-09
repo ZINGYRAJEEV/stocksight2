@@ -30,7 +30,7 @@ def detect_quality_gate_profile(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return "daily"
     cols = set(df.columns)
-    if "Score /120" in cols:
+    if "Score /120" in cols or "Gate 3 score" in cols:
         return "intraday"
     if "Gap %" in cols and ("Advice" in cols or "Holding?" in cols):
         return "gap"

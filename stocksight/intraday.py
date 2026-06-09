@@ -1031,8 +1031,7 @@ def _signal_fail_reason(ctx: dict, flt: IntradayFilters) -> Optional[str]:
         return "no_volume_ratio"
     if vr < flt.min_volume_ratio:
         return "volume_ratio"
-    if not (flt.min_rsi <= rsi <= flt.max_rsi):
-        return "rsi"
+    # RSI range handled in Gate 2 (2-of-3) — not a hard pre-filter.
     if flt.min_pct_change > 0 and abs(ctx.get("pct_change") or 0.0) < flt.min_pct_change:
         return "min_change"
     return None
@@ -1143,8 +1142,11 @@ def compute_intraday_quality_gate(
     Composite quality gate from score, strategy confluence, sentiment, session timing,
     news tier, and row strategy type. Returns label, 0–100 score, why text, band key (A–D).
     """
-    score120 = float(row.get("Score /120") or row.get("score_120") or 0)
-    tier = str(row.get("Tier") or row.get("rank_tier") or "").lower()
+    score120 = float(
+        row.get("Gate 3 score") or row.get("Score /120") or row.get("score_120") or 0
+    )
+    tier_raw = str(row.get("Tier") or row.get("rank_tier") or "")
+    tier = tier_raw.lower()
     sentiment = str(row.get("Market sentiment") or "")
     pred = str(row.get("Prediction") or "")
     strat_label = str(row.get("Strategy") or "")
@@ -1160,8 +1162,15 @@ def compute_intraday_quality_gate(
     )
     pattern_row = not (strat_label.find("Broad Movers") >= 0 and n_conf <= 1)
 
-    pts = int(min(40, score120 * 40 / 120))
+    # Gate 3 contextual score (−20 to +20) from 3-gate rating engine.
+    pts = int(min(35, max(-10, score120) * 2 + 20))
     pts += min(20, n_conf * 7)
+    if "buy" in tier or "✅" in tier_raw:
+        pts += 12
+    elif "watch" in tier or "👀" in tier_raw:
+        pts += 4
+    elif "skip" in tier or "⛔" in tier_raw:
+        pts = min(pts, 28)
     if "strong bullish" in sentiment.lower():
         pts += 15
     elif "bullish" in sentiment.lower() and "bearish" not in sentiment.lower():
@@ -1228,7 +1237,7 @@ def compute_intraday_quality_gate(
     )
     pts += ma_pts
 
-    if "avoid" in tier or "skip" in tier:
+    if "avoid" in tier or "skip" in tier or "⛔" in tier_raw:
         pts = min(pts, 30)
     if _timing_weight_from_prediction(pred) <= -3:
         pts = min(pts, 35)
@@ -1248,7 +1257,9 @@ def compute_intraday_quality_gate(
         band = "B"
 
     why_bits: list[str] = []
-    why_bits.append(f"Score {int(score120)}/120")
+    why_bits.append(f"Gate 3 {int(score120):+d}")
+    if tier_raw and tier_raw != "—":
+        why_bits.append(tier_raw[:24])
     if n_conf >= 2:
         why_bits.append(f"{n_conf} strategies align")
     elif n_conf == 1:
@@ -1278,183 +1289,172 @@ def compute_intraday_quality_gate(
     }
 
 
-def _hard_reject_reasons(ctx: dict) -> list[str]:
-    """Immediate long-side disqualifiers from the rulebook."""
-    out: list[str] = []
-    rsi = ctx.get("rsi")
-    pct_vwap = ctx.get("pct_vs_vwap")
-    day_chg = float(ctx.get("pct_change") or 0.0)
-    gap = float(ctx.get("gap_pct") or 0.0)
-    pct_52w = ctx.get("pct_vs_52w_high")
+# ── 3-gate intraday rating (Gate 1 hard · Gate 2 quality · Gate 3 context score) ──
+GATE1_MIN_VOL = 5.0
+GATE1_MIN_GAP_PCT = 2.0
+GATE2_RSI_LO = 45.0
+GATE2_RSI_HI = 70.0
+GATE2_MIN_ACCEL = 1.5
+GATE3_RSI_PENALTY = -20
+GATE3_RSI_PENALTY_ABOVE = 72.0
+GATE3_NEAR_52W_BONUS = 10
+GATE3_NEWS_TIER_BONUS = 10
+RATING_BUY_MIN_SCORE = 0
+
+
+def _effective_volume_multiple(ctx: dict) -> float:
+    """Best available volume surge: bar ratio or daily surge."""
     vr = float(ctx.get("vol_ratio") or 0.0)
-
-    if rsi is not None and float(rsi) > 72.0:
-        out.append("RSI>72")
-    if pct_vwap is not None and float(pct_vwap) > 2.0:
-        out.append("vsVWAP>+2%")
-    if day_chg < 0:
-        out.append("day<0")
-    if gap < -3.0:
-        out.append("gap<-3%")
-    if pct_52w is not None and float(pct_52w) < -40.0:
-        out.append("52W<-40%")
-    if vr < 1.0:
-        out.append("vol<1.0x")
-    return out
-
-
-def _score_intraday_rules(ctx: dict, *, strategy_hits: int, hard_rejects: list[str]) -> dict:
-    """7-rule scoring engine (max 120 points) with penalties and tier mapping."""
-    vr = float(ctx.get("vol_ratio") or 0.0)
-    gap = float(ctx.get("gap_pct") or 0.0)
-    gap_abs = abs(gap)
-    day_chg = float(ctx.get("pct_change") or 0.0)
-    rsi = ctx.get("rsi")
-    pct_52w = ctx.get("pct_vs_52w_high")
-    pct_vwap = ctx.get("pct_vs_vwap")
-    pct_ma50 = ctx.get("pct_vs_ma50d")
-    pct_ma200 = ctx.get("pct_vs_ma200d")
-    pct_ma500 = ctx.get("pct_vs_ma500d")
-    ma500_trend = str(ctx.get("ma500_trend") or "")
-
     d_surge = _daily_volume_surge(ctx)
-    s_part = _session_volume_participation(ctx)
-    p_vol = 0
-    if d_surge >= 3.0:
-        p_vol = 22
-    elif d_surge >= 2.0:
-        p_vol = 18
-    elif s_part >= 0.35:
-        p_vol = 16
-    # 1) Volume ratio (max +30) — can raise score further
-    if vr >= 5.0:
-        p_vol = max(p_vol, 30)
-    elif vr >= 3.0:
-        p_vol = max(p_vol, 20)
-    elif vr >= 1.0:
-        p_vol = max(p_vol, 10)
-    elif d_surge >= 1.8 or s_part >= 0.25:
-        p_vol = max(p_vol, 8)
+    return max(vr, d_surge)
+
+
+def _gate1_pass(ctx: dict) -> tuple[bool, str]:
+    vol_eff = _effective_volume_multiple(ctx)
+    gap = float(ctx.get("gap_pct") or 0.0)
+    detail = f"Vol {vol_eff:.1f}×, Gap {gap:+.1f}%"
+    ok = vol_eff >= GATE1_MIN_VOL and gap >= GATE1_MIN_GAP_PCT
+    return ok, detail
+
+
+def _gate2_checks(ctx: dict) -> dict[str, bool]:
+    rsi = ctx.get("rsi")
+    pct_vwap = ctx.get("pct_vs_vwap")
+    price = float(ctx.get("price") or 0.0)
+    vwap = ctx.get("vwap")
     vol_accel = float(ctx.get("vol_accel") or 0.0)
-    if vol_accel >= 2.5:
-        p_vol = max(p_vol, 24)
-    elif vol_accel >= 1.8:
-        p_vol = max(p_vol, 16)
-    elif vol_accel >= 1.5:
-        p_vol = max(p_vol, 10)
-    if ctx.get("sector_theme") and float(ctx.get("session_above_vwap") or 0) >= 0.68:
-        p_vol = max(p_vol, 10)
 
-    # 2) Gap quality (-25 to +20)
-    if gap >= 3.0:
-        p_gap = 20
-    elif gap >= 1.0:
-        p_gap = 12
-    elif gap >= 0.0:
-        p_gap = 5
-    elif gap <= -3.0:
-        p_gap = -25
-    elif gap <= -1.0:
-        p_gap = -15
+    rsi_ok = rsi is not None and GATE2_RSI_LO <= float(rsi) <= GATE2_RSI_HI
+    if vwap is not None and float(vwap) > 0:
+        vwap_ok = price >= float(vwap)
+    elif pct_vwap is not None:
+        vwap_ok = float(pct_vwap) > 0.0
     else:
-        p_gap = 0
+        vwap_ok = False
+    accel_ok = vol_accel >= GATE2_MIN_ACCEL
+    return {"rsi_ok": rsi_ok, "vwap_ok": vwap_ok, "accel_ok": accel_ok}
 
-    # 3) Day change quality (-20 to +20)
-    if day_chg >= 5.0:
-        p_day = 20
-    elif day_chg >= 2.0:
-        p_day = 12
-    elif day_chg >= 1.0:
-        p_day = 5
-    elif day_chg < 0:
-        p_day = -20
-    else:
-        p_day = 0
 
-    # 4) RSI sweet spot (-10 to +15)
-    p_rsi = 0
-    if rsi is not None:
-        r = float(rsi)
-        if 50.0 <= r <= 65.0:
-            p_rsi = 15
-        elif 40.0 <= r <= 49.0:
-            p_rsi = 8
-        elif 66.0 <= r <= 72.0:
-            p_rsi = 5
-        elif r > 72.0:
-            p_rsi = -10
-        elif r < 40.0:
-            p_rsi = -5
+def _gate2_pass(ctx: dict) -> tuple[bool, dict[str, bool]]:
+    checks = _gate2_checks(ctx)
+    passed = sum(1 for v in checks.values() if v) >= 2
+    return passed, checks
 
-    # 5) Near 52-week high (-10 to +15)
-    p_52w = 0
-    if pct_52w is not None:
-        d = float(pct_52w)
-        if d >= -2.0:
-            p_52w = 15
-        elif d >= -10.0:
-            p_52w = 5
-        elif d >= -30.0:
-            p_52w = 0
-        else:
-            p_52w = -10
 
-    # 6) VWAP proximity (-5 to +10)
-    p_vwap = 0
-    if pct_vwap is not None:
-        av = abs(float(pct_vwap))
-        if av <= 0.5:
-            p_vwap = 10
-        elif av <= 1.0:
-            p_vwap = 5
-        elif av <= 1.5:
-            p_vwap = 5
-        elif av >= 2.0:
-            p_vwap = -5
-
-    # 7) Trend alignment (max +10) — 50/200 DMA stack
-    above50 = pct_ma50 is not None and float(pct_ma50) > 0
-    above200 = pct_ma200 is not None and float(pct_ma200) > 0
-    p_trend = 10 if (above50 and above200) else (5 if (above50 or above200) else 0)
-
-    # 8) 500 DMA structure (max +10 / min -8) — long-term trend confirmation
-    p_ma500, ma500_note = _ma500_rank_points(pct_ma500, ma500_trend, scale=1.0)
-
-    score = int(p_vol + p_gap + p_day + p_rsi + p_52w + p_vwap + p_trend + p_ma500)
-    if score >= 80:
-        tier = "🏆 Best"
-        pos_size = "100%"
-    elif score >= 50:
-        tier = "✅ Good"
-        pos_size = "75%"
-    elif score >= 25:
-        tier = "🟡 OK"
-        pos_size = "50%"
-    else:
-        tier = "⚠️ Avoid"
-        pos_size = "Skip"
-
-    # Penalize/flag weak signal overlap or hard reject logic.
-    if strategy_hits <= 1:
-        pos_size = "50%" if pos_size not in ("Skip",) else pos_size
-    if hard_rejects:
-        tier = "⚠️ Avoid"
-        pos_size = "Skip"
-
-    ma500_bit = f" · 500DMA {p_ma500:+d}/10" if p_ma500 or ma500_note else ""
-    reason = (
-        f"Vol {p_vol}/30 · Gap {p_gap:+d}/20 · Day {p_day:+d}/20 · RSI {p_rsi:+d}/15 · "
-        f"52W {p_52w:+d}/15 · VWAP {p_vwap:+d}/10 · Trend {p_trend}/10"
-        f"{ma500_bit} · Signals {strategy_hits}"
+def _format_gate2_summary(checks: dict[str, bool]) -> str:
+    return (
+        f"RSI {'✓' if checks.get('rsi_ok') else '✗'}, "
+        f"VWAP {'✓' if checks.get('vwap_ok') else '✗'}, "
+        f"Accel {'✓' if checks.get('accel_ok') else '✗'}"
     )
-    if hard_rejects:
-        reason += " · Reject: " + ", ".join(hard_rejects)
+
+
+def _gate3_context_score(ctx: dict, *, news_tier: str = "") -> tuple[int, list[str]]:
+    """Context bonuses/penalties — not hard blocks."""
+    score = 0
+    notes: list[str] = []
+    pct_52w = ctx.get("pct_vs_52w_high")
+    rsi = ctx.get("rsi")
+
+    if pct_52w is not None and float(pct_52w) >= -2.0:
+        score += GATE3_NEAR_52W_BONUS
+        notes.append(f"52W +{GATE3_NEAR_52W_BONUS}")
+    tier = str(news_tier or "").upper()
+    if tier in ("T1", "T2"):
+        score += GATE3_NEWS_TIER_BONUS
+        notes.append(f"News {tier} +{GATE3_NEWS_TIER_BONUS}")
+    if rsi is not None and float(rsi) > GATE3_RSI_PENALTY_ABOVE:
+        score += GATE3_RSI_PENALTY
+        notes.append(f"RSI>{GATE3_RSI_PENALTY_ABOVE:.0f} {GATE3_RSI_PENALTY:+d}")
+    return score, notes
+
+
+def _rating_from_gates(
+    ctx: dict,
+    *,
+    strategy_hits: int,
+    news_tier: str = "",
+    gate1_forced_fail: bool = False,
+    gate2_forced_fail: bool = False,
+) -> dict:
+    """
+    Simplified Buy / Watch / Skip rating.
+
+    Gate 1 — vol ≥ 5× AND gap ≥ 2% (hard skip if fail).
+    Gate 2 — 2 of 3: RSI 45–70, above VWAP, vol accel ≥ 1.5× (hard skip if fail).
+    Gate 3 — context score: 52W +10, News T1–2 +10, RSI>72 −20 (penalty only).
+    """
+    g1_ok, g1_detail = _gate1_pass(ctx)
+    g2_ok, g2_checks = _gate2_pass(ctx)
+    g2_summary = _format_gate2_summary(g2_checks)
+
+    if gate1_forced_fail:
+        g1_ok = False
+    if gate2_forced_fail:
+        g2_ok = False
+
+    if not g1_ok:
+        return {
+            "score_120": 0,
+            "tier": "⛔ Skip",
+            "position_size": "Skip",
+            "reason": f"Gate 1 ✗ ({g1_detail}) · need Vol≥{GATE1_MIN_VOL:.0f}× & Gap≥{GATE1_MIN_GAP_PCT:.0f}%",
+            "gate1_ok": False,
+            "gate2_ok": False,
+            "gate3_score": 0,
+        }
+
+    if not g2_ok:
+        return {
+            "score_120": 0,
+            "tier": "⛔ Skip",
+            "position_size": "Skip",
+            "reason": (
+                f"Gate 1 ✓ ({g1_detail}) · Gate 2 ✗ ({g2_summary}) · "
+                f"need 2 of 3 (RSI {GATE2_RSI_LO:.0f}–{GATE2_RSI_HI:.0f}, above VWAP, accel≥{GATE2_MIN_ACCEL:.1f}×)"
+            ),
+            "gate1_ok": True,
+            "gate2_ok": False,
+            "gate3_score": 0,
+        }
+
+    g3_score, g3_notes = _gate3_context_score(ctx, news_tier=news_tier)
+    g3_bit = f"Gate 3: {g3_score:+d}"
+    if g3_notes:
+        g3_bit += f" ({', '.join(g3_notes)})"
+
+    if g3_score >= RATING_BUY_MIN_SCORE:
+        tier = "✅ Buy"
+        pos_size = "100%" if g3_score >= 10 else "75%"
+    else:
+        tier = "👀 Watch"
+        pos_size = "50%"
+        rsi_val = ctx.get("rsi")
+        if rsi_val is not None and float(rsi_val) > GATE3_RSI_PENALTY_ABOVE:
+            g3_bit += " — wait for RSI < 70"
+
+    reason = f"Gate 1 ✓ ({g1_detail}) · Gate 2: {g2_summary} · {g3_bit} · Signals {strategy_hits}"
     return {
-        "score_120": score,
+        "score_120": g3_score,
         "tier": tier,
         "position_size": pos_size,
         "reason": reason,
+        "gate1_ok": True,
+        "gate2_ok": True,
+        "gate3_score": g3_score,
     }
+
+
+def _score_intraday_rules(
+    ctx: dict,
+    *,
+    strategy_hits: int,
+    hard_rejects: Optional[list[str]] = None,
+    news_tier: str = "",
+) -> dict:
+    """3-gate rating engine — replaces legacy 120-point rulebook."""
+    del hard_rejects  # RSI / VWAP extension no longer hard-reject
+    return _rating_from_gates(ctx, strategy_hits=strategy_hits, news_tier=news_tier)
 
 
 def _make_result(
@@ -1878,13 +1878,11 @@ def scan_intraday(
             )
             continue
 
-        vol_surge_on = "VOL_BUY" in strategies or "VOL_DUMP" in strategies
-        if vol_surge_on:
-            try:
-                from intraday_vol_surge import enrich_ctx_for_vol_surge
-            except ImportError:
-                from .intraday_vol_surge import enrich_ctx_for_vol_surge  # type: ignore[no-redef]
-            enrich_ctx_for_vol_surge(ctx)
+        try:
+            from intraday_vol_surge import enrich_ctx_for_vol_surge
+        except ImportError:
+            from .intraday_vol_surge import enrich_ctx_for_vol_surge  # type: ignore[no-redef]
+        enrich_ctx_for_vol_surge(ctx)
 
         sig_fail = _signal_fail_reason(ctx, flt)
         dump_probe = "VOL_DUMP" in strategies
@@ -1931,28 +1929,19 @@ def scan_intraday(
             ctx["sector_name"] = sector
             ctx["industry"] = industry
 
-        reject_reasons = _hard_reject_reasons(ctx)
         early_probe = "EARLY" in strategies
         early_hit = _evaluate("EARLY", ctx, flt) if early_probe else None
-        try:
-            from intraday_vol_surge import vol_buy_soft_hard_rejects, vol_dump_soft_hard_rejects
-        except ImportError:
-            from .intraday_vol_surge import (  # type: ignore[no-redef]
-                vol_buy_soft_hard_rejects,
-                vol_dump_soft_hard_rejects,
-            )
-        reject_ok = (
-            (early_hit and _early_soft_hard_rejects(reject_reasons, ctx))
-            or (buy_hit and vol_buy_soft_hard_rejects(reject_reasons, ctx))
-            or (dump_hit and vol_dump_soft_hard_rejects(reject_reasons, ctx))
-        )
-        if reject_reasons and not reject_ok:
-            stats.failed_hard_reject += 1
-            _notify_progress(
-                progress_cb, i + 1, total, raw, stage="done",
-                last_outcome="reject", last_bar_source=bar_src, matched=stats.tickers_matched,
-            )
-            continue
+        # VOL_DUMP-only distribution rows skip long-side buy gates.
+        if not dump_hit:
+            g1_ok, _ = _gate1_pass(ctx)
+            g2_ok, _ = _gate2_pass(ctx)
+            if not g1_ok or not g2_ok:
+                stats.failed_hard_reject += 1
+                _notify_progress(
+                    progress_cb, i + 1, total, raw, stage="done",
+                    last_outcome="gate_skip", last_bar_source=bar_src, matched=stats.tickers_matched,
+                )
+                continue
 
         matched_notes: dict[str, str] = {}
         if early_hit:
@@ -1972,7 +1961,6 @@ def scan_intraday(
         score_pack = _score_intraday_rules(
             ctx,
             strategy_hits=len(matched_notes),
-            hard_rejects=reject_reasons,
         )
         for strategy, note in matched_notes.items():
             results.append(
