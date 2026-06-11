@@ -153,15 +153,45 @@ _REVERSE_ISEC_CACHE: dict[tuple[str, str], str] = {}
 
 def lookup_nse_symbol(exchange_code: str, isec_or_symbol: str) -> Optional[str]:
     """Resolve a Breeze ``stock_code`` (ISEC or NSE symbol) to the NSE trading symbol."""
+    return resolve_nse_trading_symbol(isec_or_symbol, exchange_code=exchange_code)
+
+
+def resolve_nse_trading_symbol(
+    isec_or_symbol: str,
+    *,
+    exchange_code: str = "NSE",
+) -> Optional[str]:
+    """ISEC code (e.g. HINCOP) or NSE symbol → NSE trading symbol (e.g. HINDCOPPER)."""
     code = (isec_or_symbol or "").strip().upper()
     if not code:
         return None
     hit = _REVERSE_ISEC_CACHE.get((exchange_code, code))
     if hit:
         return hit
-    # Already an NSE-style symbol in cache from a prior forward lookup.
     if (exchange_code, code) in _CODE_CACHE:
         return code
+
+    client = _get_client()
+    if client is not None:
+        try:
+            info = client.get_names(exchange_code=exchange_code, stock_code=code)
+            if isinstance(info, dict):
+                nse_sym = (
+                    info.get("exchange_stock_code")
+                    or info.get("nse_symbol")
+                    or info.get("stock_code")
+                )
+                isec = (info.get("isec_stock_code") or "").strip().upper()
+                if nse_sym:
+                    nse_sym = str(nse_sym).strip().upper()
+                    if isec:
+                        _REVERSE_ISEC_CACHE[(exchange_code, isec)] = nse_sym
+                    if nse_sym != code:
+                        _REVERSE_ISEC_CACHE[(exchange_code, code)] = nse_sym
+                    _CODE_CACHE[(exchange_code, nse_sym)] = isec or code
+                    return nse_sym
+        except Exception:
+            pass
     return None
 
 
@@ -499,19 +529,92 @@ def get_positions() -> tuple[list, Optional[str]]:
         return [], str(ex)
 
 
+def _coerce_breeze_price(val: Any) -> Optional[float]:
+    if val in (None, "", "0", 0, "0.0"):
+        return None
+    try:
+        f = float(str(val).replace(",", ""))
+        return f if f == f and f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_nse_equity_holding(row: dict) -> bool:
+    if str(row.get("exchange_code", "NSE")).upper() != "NSE":
+        return False
+    prod = str(row.get("product_type", "") or "").lower()
+    if prod in ("options", "option", "futures", "future", "fno"):
+        return False
+    if row.get("expiry_date") or row.get("strike_price"):
+        return False
+    return True
+
+
+def _merge_demat_with_portfolio_prices(demat_rows: list, portfolio_rows: list) -> list[dict]:
+    """Demat API has qty only; NSE portfolio holdings carry average_price / CMP."""
+    price_by_code: dict[str, dict] = {}
+    for row in portfolio_rows or []:
+        if not isinstance(row, dict) or not _is_nse_equity_holding(row):
+            continue
+        code = str(row.get("stock_code", "")).strip().upper()
+        if code:
+            price_by_code[code] = row
+
+    merged: list[dict] = []
+    for row in demat_rows or []:
+        if not isinstance(row, dict):
+            continue
+        out = dict(row)
+        pr = price_by_code.get(str(row.get("stock_code", "")).strip().upper(), {})
+        avg = _coerce_breeze_price(pr.get("average_price"))
+        cmp_ = _coerce_breeze_price(pr.get("current_market_price"))
+        if avg is not None:
+            out["average_price"] = avg
+        if cmp_ is not None:
+            out["current_market_price"] = cmp_
+            out.setdefault("ltp", cmp_)
+        for extra in ("unrealized_profit", "realized_profit", "change_percentage"):
+            if pr.get(extra) not in (None, ""):
+                out[extra] = pr.get(extra)
+        merged.append(out)
+    return merged
+
+
 def get_holdings() -> tuple[list, Optional[str]]:
-    """Demat / delivery holdings."""
+    """Demat / delivery holdings with cost and LTP merged from NSE portfolio holdings."""
     client = _get_client()
     if client is None:
         return [], _LAST_ERROR or "Breeze not connected."
     try:
-        return _unwrap(
-            client.get_demat_holdings()
-            if hasattr(client, "get_demat_holdings")
-            else client.get_portfolio_holdings(
-                exchange_code="NSE", from_date="", to_date="", stock_code="", portfolio_type=""
+        if not hasattr(client, "get_demat_holdings"):
+            return _unwrap(
+                client.get_portfolio_holdings(
+                    exchange_code="NSE", from_date="", to_date="", stock_code="", portfolio_type=""
+                )
             )
-        )
+
+        demat_rows, demat_err = _unwrap(client.get_demat_holdings())
+        if demat_err:
+            return [], demat_err
+        if not demat_rows:
+            return [], None
+
+        portfolio_rows: list = []
+        if hasattr(client, "get_portfolio_holdings"):
+            now = datetime.now(tz=_IST)
+            fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+            start = (now - timedelta(days=365)).replace(hour=0, minute=0, second=0, microsecond=0)
+            portfolio_rows, _ = _unwrap(
+                client.get_portfolio_holdings(
+                    exchange_code="NSE",
+                    from_date=start.strftime(fmt),
+                    to_date=now.strftime(fmt),
+                    stock_code="",
+                    portfolio_type="",
+                )
+            )
+
+        return _merge_demat_with_portfolio_prices(demat_rows, portfolio_rows), None
     except Exception as ex:
         return [], str(ex)
 

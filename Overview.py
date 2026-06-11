@@ -52,6 +52,7 @@ def _import_navigation_pages():
         "page_volume_gravity",
         "page_markov_regime",
         "page_central_brain",
+        "page_niftyrisk",
         "page_multibagger",
         "page_popular_screens",
         "page_proven_multibaggers",
@@ -60,6 +61,8 @@ def _import_navigation_pages():
         "page_portfolio",
         "page_finance_hub",
         "page_buyback_screener",
+        "page_bulk_order",
+        "page_nse_intraday_intel",
         "page_pre_investigation",
         "page_peter_lynch",
         "page_crisis_value",
@@ -127,6 +130,7 @@ try:
     page_volume_gravity = _nav["page_volume_gravity"]
     page_markov_regime = _nav["page_markov_regime"]
     page_central_brain = _nav["page_central_brain"]
+    page_niftyrisk = _nav["page_niftyrisk"]
     page_multibagger = _nav["page_multibagger"]
     page_popular_screens = _nav["page_popular_screens"]
     page_proven_multibaggers = _nav["page_proven_multibaggers"]
@@ -135,6 +139,8 @@ try:
     page_portfolio = _nav["page_portfolio"]
     page_finance_hub = _nav["page_finance_hub"]
     page_buyback_screener = _nav["page_buyback_screener"]
+    page_bulk_order = _nav["page_bulk_order"]
+    page_nse_intraday_intel = _nav["page_nse_intraday_intel"]
     page_pre_investigation = _nav["page_pre_investigation"]
     page_peter_lynch = _nav["page_peter_lynch"]
     page_crisis_value = _nav["page_crisis_value"]
@@ -184,6 +190,7 @@ NAV_PAGES = {
         st.Page(page_portfolio, title="Portfolio", icon="💼"),
         st.Page(page_finance_hub, title="Finance Hub", icon="📊"),
         st.Page(page_buyback_screener, title="Buyback Screener", icon="💰"),
+        st.Page(page_bulk_order, title="Bulk Order", icon="📦"),
         st.Page(page_pre_investigation, title="Pre-Investigation Links", icon="🔎"),
     ],
     "📈 Strategy Modules": [
@@ -203,6 +210,9 @@ NAV_PAGES = {
             title="9. Buy / Hold / Avoid",
             icon="🎯",
         ),
+    ],
+    "🛡️ Portfolio Risk": [
+        st.Page(page_niftyrisk, title="NiftyRisk (VaR · Monte Carlo)", icon="🛡️"),
     ],
     "⚖️ Risk-Based Scenarios": [
         st.Page(page_high_profit_regulatory_moat, title="Low Risk · Regulatory Moat", icon="🏛️"),
@@ -226,6 +236,7 @@ NAV_PAGES = {
         st.Page(page_paper_trading, title="Paper Trading", icon="📝"),
     ],
     "⚡ Intraday": [
+        st.Page(page_nse_intraday_intel, title="NSE Intraday Intel", icon="🧠"),
         st.Page(page_fast_movers, title="Fast Movers (live speed)", icon="⚡"),
         st.Page(page_gap_scanner, title="Gap Scanner (pre-market)", icon="🌅"),
         st.Page(page_intraday_screener, title="Intraday Screener (6 strategies)", icon="📡"),

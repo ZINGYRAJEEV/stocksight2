@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NiftyRisk — Product Blueprint</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2236;
+    --border: #1f2d45;
+    --accent: #00d4aa;
+    --accent2: #4f8fff;
+    --accent3: #ff6b35;
+    --accent4: #c084fc;
+    --warn: #fbbf24;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --green: #22c55e;
+    --red: #ef4444;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Animated grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,212,170,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,170,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 24px 80px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    padding: 60px 0 40px;
+    text-align: center;
+    position: relative;
+  }
+
+  .header-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0,212,170,0.1);
+    border: 1px solid rgba(0,212,170,0.3);
+    border-radius: 100px;
+    padding: 6px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+
+  .header-badge::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+  }
+
+  h1 {
+    font-size: clamp(48px, 8vw, 80px);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -2px;
+    background: linear-gradient(135deg, #fff 0%, var(--accent) 50%, var(--accent2) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 16px;
+  }
+
+  .tagline {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: var(--muted);
+    letter-spacing: 0.5px;
+  }
+
+  .tagline span { color: var(--accent); }
+
+  /* ── SECTION HEADERS ── */
+  .section {
+    margin-top: 60px;
+  }
+
+  .section-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .section-title {
+    font-size: 26px;
+    font-weight: 700;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .section-title .icon {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+
+  /* ── VISION STRIP ── */
+  .vision-strip {
+    background: linear-gradient(135deg, rgba(0,212,170,0.08), rgba(79,143,255,0.08));
+    border: 1px solid rgba(0,212,170,0.2);
+    border-radius: 16px;
+    padding: 28px 32px;
+    margin-top: 40px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+
+  .vision-item {
+    text-align: center;
+  }
+
+  .vision-num {
+    font-size: 36px;
+    font-weight: 800;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .vision-label {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ── ARCHITECTURE DIAGRAM ── */
+  .arch-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 32px;
+    overflow: hidden;
+  }
+
+  .arch-layers {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .arch-layer {
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: grid;
+    align-items: center;
+    gap: 12px;
+    position: relative;
+  }
+
+  .arch-layer.frontend {
+    background: rgba(79,143,255,0.08);
+    border: 1px solid rgba(79,143,255,0.25);
+    grid-template-columns: 90px 1fr;
+  }
+  .arch-layer.api {
+    background: rgba(0,212,170,0.08);
+    border: 1px solid rgba(0,212,170,0.25);
+    grid-template-columns: 90px 1fr;
+  }
+  .arch-layer.engine {
+    background: rgba(192,132,252,0.08);
+    border: 1px solid rgba(192,132,252,0.25);
+    grid-template-columns: 90px 1fr;
+  }
+  .arch-layer.data {
+    background: rgba(251,191,36,0.08);
+    border: 1px solid rgba(251,191,36,0.25);
+    grid-template-columns: 90px 1fr;
+  }
+
+  .layer-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 6px;
+    text-align: center;
+    font-weight: 500;
+  }
+
+  .frontend .layer-tag { background: rgba(79,143,255,0.2); color: var(--accent2); }
+  .api .layer-tag { background: rgba(0,212,170,0.2); color: var(--accent); }
+  .engine .layer-tag { background: rgba(192,132,252,0.2); color: var(--accent4); }
+  .data .layer-tag { background: rgba(251,191,36,0.2); color: var(--warn); }
+
+  .layer-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .chip {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .chip.highlight {
+    background: rgba(0,212,170,0.12);
+    border-color: rgba(0,212,170,0.3);
+    color: var(--accent);
+  }
+
+  .arch-arrow {
+    text-align: center;
+    color: var(--muted);
+    font-size: 18px;
+    line-height: 1;
+    margin: 2px 0;
+  }
+
+  /* ── FEATURE TIERS ── */
+  .tiers-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+  }
+
+  .tier-card {
+    background: var(--surface);
+    border-radius: 16px;
+    padding: 24px;
+    border: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .tier-card.pro {
+    border-color: rgba(0,212,170,0.4);
+    background: linear-gradient(160deg, rgba(0,212,170,0.06) 0%, var(--surface) 60%);
+  }
+
+  .tier-card.pro::before {
+    content: 'MOST POPULAR';
+    position: absolute;
+    top: 12px; right: -20px;
+    background: var(--accent);
+    color: #000;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 3px 28px;
+    transform: rotate(45deg);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .tier-name {
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  .tier-price {
+    font-size: 28px;
+    font-weight: 800;
+    margin-bottom: 16px;
+    line-height: 1;
+  }
+
+  .tier-price .currency { font-size: 16px; vertical-align: top; margin-top: 4px; display: inline-block; }
+  .tier-price .period { font-size: 13px; font-weight: 400; color: var(--muted); }
+
+  .feature-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .feature-list li {
+    font-size: 13px;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    line-height: 1.4;
+  }
+
+  .feature-list li .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    margin-top: 5px;
+    flex-shrink: 0;
+  }
+
+  .free .dot { background: var(--muted); }
+  .pro .dot { background: var(--accent); }
+  .elite .dot { background: var(--accent4); }
+
+  /* ── ROADMAP ── */
+  .roadmap {
+    position: relative;
+    padding-left: 24px;
+  }
+
+  .roadmap::before {
+    content: '';
+    position: absolute;
+    left: 7px;
+    top: 12px;
+    bottom: 12px;
+    width: 2px;
+    background: linear-gradient(to bottom, var(--accent), var(--accent2), var(--accent4));
+    border-radius: 2px;
+  }
+
+  .phase {
+    position: relative;
+    margin-bottom: 28px;
+  }
+
+  .phase::before {
+    content: '';
+    position: absolute;
+    left: -20px;
+    top: 12px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    background: var(--bg);
+  }
+
+  .phase:nth-child(2)::before { border-color: var(--accent2); }
+  .phase:nth-child(3)::before { border-color: var(--accent4); }
+  .phase:nth-child(4)::before { border-color: var(--warn); }
+
+  .phase-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  .phase-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 20px;
+    border: 1px solid;
+  }
+
+  .phase:nth-child(1) .phase-tag { color: var(--accent); border-color: var(--accent); background: rgba(0,212,170,0.08); }
+  .phase:nth-child(2) .phase-tag { color: var(--accent2); border-color: var(--accent2); background: rgba(79,143,255,0.08); }
+  .phase:nth-child(3) .phase-tag { color: var(--accent4); border-color: var(--accent4); background: rgba(192,132,252,0.08); }
+  .phase:nth-child(4) .phase-tag { color: var(--warn); border-color: var(--warn); background: rgba(251,191,36,0.08); }
+
+  .phase-title {
+    font-size: 17px;
+    font-weight: 700;
+  }
+
+  .phase-timeline {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .phase-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-left: 4px;
+  }
+
+  .phase-item {
+    font-size: 12px;
+    padding: 5px 12px;
+    border-radius: 8px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+
+  /* ── MOAT SECTION ── */
+  .moat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .moat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+
+  .moat-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+  }
+
+  .moat-title {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .moat-desc {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  /* ── TECH STACK ── */
+  .stack-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .stack-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .stack-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .stack-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  /* ── FOOTER NOTE ── */
+  .footer-note {
+    margin-top: 60px;
+    padding: 24px 28px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .footer-note .icon { font-size: 24px; flex-shrink: 0; }
+  .footer-note p { font-size: 13px; line-height: 1.7; color: var(--muted); }
+  .footer-note p strong { color: var(--text); }
+
+  @media (max-width: 700px) {
+    .tiers-grid { grid-template-columns: 1fr; }
+    .moat-grid { grid-template-columns: 1fr; }
+    .stack-grid { grid-template-columns: 1fr; }
+    .vision-strip { grid-template-columns: 1fr; text-align: left; }
+    .arch-layer { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-badge">Product Blueprint v1.0</div>
+    <h1>NiftyRisk</h1>
+    <p class="tagline">Institutional-grade risk intelligence for <span>Indian retail investors</span></p>
+  </div>
+
+  <!-- VISION NUMBERS -->
+  <div class="vision-strip">
+    <div class="vision-item">
+      <div class="vision-num">10Cr+</div>
+      <div class="vision-label">Target retail investors (NSE active)</div>
+    </div>
+    <div class="vision-item">
+      <div class="vision-num">₹0</div>
+      <div class="vision-label">Equivalent tools available today</div>
+    </div>
+    <div class="vision-item">
+      <div class="vision-num">70%</div>
+      <div class="vision-label">Tech already built (your screener)</div>
+    </div>
+  </div>
+
+  <!-- ARCHITECTURE -->
+  <div class="section">
+    <div class="section-label">// System Design</div>
+    <div class="section-title">
+      <div class="icon" style="background:rgba(79,143,255,0.15)">🏗️</div>
+      Technical Architecture
+    </div>
+
+    <div class="arch-diagram">
+      <div class="arch-layers">
+
+        <div class="arch-layer frontend">
+          <div class="layer-tag">Frontend</div>
+          <div class="layer-items">
+            <span class="chip highlight">React (Vite)</span>
+            <span class="chip">Recharts / D3.js</span>
+            <span class="chip">TailwindCSS</span>
+            <span class="chip">PWA-ready</span>
+            <span class="chip">Mobile-first</span>
+          </div>
+        </div>
+
+        <div class="arch-arrow">↕</div>
+
+        <div class="arch-layer api">
+          <div class="layer-tag">Backend API</div>
+          <div class="layer-items">
+            <span class="chip highlight">FastAPI (Python)</span>
+            <span class="chip">JWT Auth</span>
+            <span class="chip">Redis Cache</span>
+            <span class="chip">Celery Workers</span>
+            <span class="chip">REST + WebSocket</span>
+          </div>
+        </div>
+
+        <div class="arch-arrow">↕</div>
+
+        <div class="arch-layer engine">
+          <div class="layer-tag">Risk Engine</div>
+          <div class="layer-items">
+            <span class="chip highlight">Monte Carlo (NumPy)</span>
+            <span class="chip highlight">VaR / CVaR</span>
+            <span class="chip">Sharpe / Sortino</span>
+            <span class="chip">Correlation Matrix</span>
+            <span class="chip">Beta Calculator</span>
+            <span class="chip">SIP Projector</span>
+            <span class="chip">Drawdown Analysis</span>
+          </div>
+        </div>
+
+        <div class="arch-arrow">↕</div>
+
+        <div class="arch-layer data">
+          <div class="layer-tag">Data Layer</div>
+          <div class="layer-items">
+            <span class="chip highlight">yfinance (NSE/BSE)</span>
+            <span class="chip highlight">NSE API</span>
+            <span class="chip">PostgreSQL</span>
+            <span class="chip">TimescaleDB</span>
+            <span class="chip">PDF Parser (broker stmts)</span>
+            <span class="chip">Zerodha CSV Import</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- FEATURE TIERS -->
+  <div class="section">
+    <div class="section-label">// Monetization Model</div>
+    <div class="section-title">
+      <div class="icon" style="background:rgba(0,212,170,0.15)">💰</div>
+      Freemium Feature Tiers
+    </div>
+
+    <div class="tiers-grid">
+      <!-- FREE -->
+      <div class="tier-card free">
+        <div class="tier-name">Free</div>
+        <div class="tier-price"><span class="currency">₹</span>0 <span class="period">forever</span></div>
+        <ul class="feature-list">
+          <li><span class="dot"></span>Portfolio upload (CSV/manual, up to 10 stocks)</li>
+          <li><span class="dot"></span>Basic VaR calculation (historical)</li>
+          <li><span class="dot"></span>Nifty 50 benchmark comparison</li>
+          <li><span class="dot"></span>Sector concentration chart</li>
+          <li><span class="dot"></span>Risk score (simple A–F grade)</li>
+          <li><span class="dot"></span>1-year lookback period</li>
+        </ul>
+      </div>
+
+      <!-- PRO -->
+      <div class="tier-card pro">
+        <div class="tier-name">Pro</div>
+        <div class="tier-price"><span class="currency">₹</span>499 <span class="period">/ year</span></div>
+        <ul class="feature-list">
+          <li><span class="dot"></span>Everything in Free</li>
+          <li><span class="dot"></span>Monte Carlo simulations (10,000 runs)</li>
+          <li><span class="dot"></span>SIP outcome projector with inflation adjustment</li>
+          <li><span class="dot"></span>Zerodha / Groww PDF auto-import</li>
+          <li><span class="dot"></span>STCG / LTCG tax estimator</li>
+          <li><span class="dot"></span>Correlation matrix (inter-stock)</li>
+          <li><span class="dot"></span>Drawdown & recovery analysis</li>
+          <li><span class="dot"></span>Nifty 500 + Midcap 150 universe</li>
+          <li><span class="dot"></span>PDF risk report export</li>
+        </ul>
+      </div>
+
+      <!-- ELITE -->
+      <div class="tier-card elite">
+        <div class="tier-name">Elite</div>
+        <div class="tier-price"><span class="currency">₹</span>1,499 <span class="period">/ year</span></div>
+        <ul class="feature-list">
+          <li><span class="dot"></span>Everything in Pro</li>
+          <li><span class="dot"></span>Multi-portfolio (family accounts)</li>
+          <li><span class="dot"></span>Stress testing (2008, COVID, 2018 IL&FS)</li>
+          <li><span class="dot"></span>Options risk overlay (basic P&L charts)</li>
+          <li><span class="dot"></span>Goal-based planning module</li>
+          <li><span class="dot"></span>WhatsApp / email alerts on risk spikes</li>
+          <li><span class="dot"></span>API access (for power users)</li>
+          <li><span class="dot"></span>Priority support</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- MOAT -->
+  <div class="section">
+    <div class="section-label">// Competitive Advantage</div>
+    <div class="section-title">
+      <div class="icon" style="background:rgba(255,107,53,0.15)">🛡️</div>
+      Your Defensible Moat
+    </div>
+    <div class="moat-grid">
+      <div class="moat-card">
+        <div class="moat-icon">🇮🇳</div>
+        <div>
+          <div class="moat-title">India-Specific Data Quirks</div>
+          <div class="moat-desc">Circuit breakers, T+1 settlement, SEBI regulations, FII/DII flow data, Nifty-specific volatility patterns — invisible to Western tools.</div>
+        </div>
+      </div>
+      <div class="moat-card">
+        <div class="moat-icon">📄</div>
+        <div>
+          <div class="moat-title">Broker Statement Parser</div>
+          <div class="moat-desc">Auto-import from Zerodha, Groww, Upstox PDFs. A painful integration that creates high switching cost once users have their data in.</div>
+        </div>
+      </div>
+      <div class="moat-card">
+        <div class="moat-icon">🧾</div>
+        <div>
+          <div class="moat-title">STCG/LTCG Tax Engine</div>
+          <div class="moat-desc">Absolutely no free tool calculates Indian capital gains tax correctly. This single feature justifies ₹499/year on its own.</div>
+        </div>
+      </div>
+      <div class="moat-card">
+        <div class="moat-icon">📈</div>
+        <div>
+          <div class="moat-title">Indian Stress Scenarios</div>
+          <div class="moat-desc">Pre-built crash scenarios using actual NSE data: 2008 crisis, COVID March 2020, 2018 IL&FS, NBFC crisis — not US market events.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROADMAP -->
+  <div class="section">
+    <div class="section-label">// Execution Plan</div>
+    <div class="section-title">
+      <div class="icon" style="background:rgba(192,132,252,0.15)">🗺️</div>
+      Build Roadmap
+    </div>
+    <div class="roadmap">
+
+      <div class="phase">
+        <div class="phase-header">
+          <span class="phase-tag">Phase 1</span>
+          <span class="phase-title">MVP — Validate the Core Loop</span>
+          <span class="phase-timeline">Weeks 1–6</span>
+        </div>
+        <div class="phase-items">
+          <span class="phase-item">CSV portfolio upload</span>
+          <span class="phase-item">Historical VaR</span>
+          <span class="phase-item">Monte Carlo (basic)</span>
+          <span class="phase-item">Risk score A–F</span>
+          <span class="phase-item">Nifty 50 benchmark</span>
+          <span class="phase-item">Streamlit → React migration</span>
+          <span class="phase-item">Landing page + waitlist</span>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-header">
+          <span class="phase-tag">Phase 2</span>
+          <span class="phase-title">Monetization Unlock</span>
+          <span class="phase-timeline">Weeks 7–14</span>
+        </div>
+        <div class="phase-items">
+          <span class="phase-item">Zerodha PDF parser</span>
+          <span class="phase-item">STCG/LTCG calculator</span>
+          <span class="phase-item">SIP projector</span>
+          <span class="phase-item">Razorpay subscription</span>
+          <span class="phase-item">PDF report export</span>
+          <span class="phase-item">User accounts + Auth</span>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-header">
+          <span class="phase-tag">Phase 3</span>
+          <span class="phase-title">Retention & Stickiness</span>
+          <span class="phase-timeline">Months 4–6</span>
+        </div>
+        <div class="phase-items">
+          <span class="phase-item">Stress test scenarios</span>
+          <span class="phase-item">Correlation matrix</span>
+          <span class="phase-item">WhatsApp alerts</span>
+          <span class="phase-item">Multi-portfolio (family)</span>
+          <span class="phase-item">Goal-based planner</span>
+          <span class="phase-item">Android PWA packaging</span>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="phase-header">
+          <span class="phase-tag">Phase 4</span>
+          <span class="phase-title">Scale & Ecosystem</span>
+          <span class="phase-timeline">Month 6+</span>
+        </div>
+        <div class="phase-items">
+          <span class="phase-item">RIA / advisor B2B tier</span>
+          <span class="phase-item">Options risk overlay</span>
+          <span class="phase-item">API product</span>
+          <span class="phase-item">Groww / Kuvera integrations</span>
+          <span class="phase-item">SEBI RIA partnership?</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- TECH STACK SUMMARY -->
+  <div class="section">
+    <div class="section-label">// Implementation</div>
+    <div class="section-title">
+      <div class="icon" style="background:rgba(251,191,36,0.15)">⚙️</div>
+      Recommended Tech Stack
+    </div>
+    <div class="stack-grid">
+      <div class="stack-row">
+        <span class="stack-label">Frontend</span>
+        <span class="stack-value">React + Vite + Tailwind</span>
+      </div>
+      <div class="stack-row">
+        <span class="stack-label">Backend</span>
+        <span class="stack-value">FastAPI + Celery</span>
+      </div>
+      <div class="stack-row">
+        <span class="stack-label">Risk Engine</span>
+        <span class="stack-value">NumPy + SciPy + Pandas</span>
+      </div>
+      <div class="stack-row">
+        <span class="stack-label">Data Source</span>
+        <span class="stack-value">yfinance + NSE API</span>
+      </div>
+      <div class="stack-row">
+        <span class="stack-label">Database</span>
+        <span class="stack-value">PostgreSQL + TimescaleDB</span>
+      </div>
+      <div class="stack-row">
+        <span class="stack-label">Cache</span>
+        <span class="stack-value">Redis (price data TTL)</span>
+      </div>
+      <div class="stack-row">
+        <span class="stack-label">Auth</span>
+        <span class="stack-value">Supabase Auth</span>
+      </div>
+      <div class="stack-row">
+        <span class="stack-label">Payments</span>
+        <span class="stack-value">Razorpay Subscriptions</span>
+      </div>
+      <div class="stack-row">
+        <span class="stack-label">Hosting</span>
+        <span class="stack-value">Railway / Render (backend)</span>
+      </div>
+      <div class="stack-row">
+        <span class="stack-label">Deploy</span>
+        <span class="stack-value">Vercel (frontend)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER NOTE -->
+  <div class="footer-note">
+    <div class="icon">💡</div>
+    <p><strong>First move:</strong> Don't build — validate first. Set up a 1-page landing page with a waitlist ("NiftyRisk — Free beta coming soon"). Share in r/IndiaInvestments, Zerodha Tradingqna, and Twitter/X. <strong>500 signups = green light to build Phase 1.</strong> Your existing screener codebase is your unfair advantage — the risk engine is ~3 weekends of focused work on top of what you already have.</p>
+  </div>
+
+</div>
+</body>
+</html>

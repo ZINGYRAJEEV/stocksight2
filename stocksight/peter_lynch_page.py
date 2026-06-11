@@ -23,6 +23,7 @@ from ui_components import (
     render_clickable_scan_table,
     render_watchlist_panel,
     safe_set_page_config,
+    stock_sight_overlay_column_config,
 )
 
 
@@ -300,7 +301,9 @@ def render_peter_lynch_page() -> None:
         df[show_cols],
         styler=styler,
         key_prefix=key,
+        apply_stock_sight=False,
         column_config={
+            **stock_sight_overlay_column_config(),
             "Lynch score": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.0f"),
             "PEG": st.column_config.NumberColumn(format="%.2f"),
             "PEGY": st.column_config.NumberColumn(format="%.2f"),

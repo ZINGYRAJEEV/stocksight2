@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from stage2_momentum import META, Stage2MomentumResult, TREND_TEMPLATE_RULES
-from ui_components import render_clickable_scan_table
+from ui_components import render_clickable_scan_table, stock_sight_overlay_column_config
 
 
 def stage2_header() -> None:
@@ -189,6 +189,7 @@ def stage2_results_table(
         st.caption(f"Scan completed · {scan_at}")
 
     col_cfg: dict = {
+        **stock_sight_overlay_column_config(),
         "Rank score": st.column_config.NumberColumn("Rank score", format="%.1f"),
         "Rank why": st.column_config.TextColumn("Rank why", width="large"),
         "Composite": st.column_config.ProgressColumn("Composite", min_value=0, max_value=100, format="%d"),
@@ -217,6 +218,7 @@ def stage2_results_table(
         hide_index=True,
         height=min(580, 52 + len(df) * 40),
         caption="💡 Sorted by **Rank score**. Click a row for chart + research; see **Rank why** for the breakdown.",
+        apply_stock_sight=False,
     )
 
 

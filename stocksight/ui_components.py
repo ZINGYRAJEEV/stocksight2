@@ -146,20 +146,80 @@ def page_audience_note(who_for: str, what_it_does: str) -> None:
     )
 
 
+def stock_sight_column_config() -> dict:
+    """Shared column config for StockSight composite / gate columns."""
+    if st is None:
+        return {}
+    return {
+        "Composite": st.column_config.NumberColumn("Composite", format="%.1f"),
+        "StockSight score": st.column_config.NumberColumn("StockSight score", format="%.1f"),
+        "Screen score": st.column_config.NumberColumn("Screen score", format="%.1f"),
+        "HP Score": st.column_config.NumberColumn("HP Score", format="%.1f"),
+        "Fit score": st.column_config.NumberColumn("Fit score", format="%.1f"),
+        "Decision": st.column_config.TextColumn("Decision", width="medium"),
+        "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
+        "Conflict": st.column_config.TextColumn("Conflict", width="large"),
+        "Returns": st.column_config.TextColumn("Returns", width="medium"),
+        "Flags": st.column_config.TextColumn("Flags", width="medium"),
+        "StockSight sentiment": st.column_config.TextColumn("StockSight sentiment", width="small"),
+        "G1 Momentum": st.column_config.NumberColumn("G1 Momentum", format="%d"),
+        "G2 Fundamentals": st.column_config.NumberColumn("G2 Fundamentals", format="%d"),
+        "G3 Volume": st.column_config.NumberColumn("G3 Volume", format="%d"),
+        "G4 RS": st.column_config.NumberColumn("G4 RS", format="%d"),
+        "G5 Trend": st.column_config.NumberColumn("G5 Trend", format="%d"),
+        "G6 News": st.column_config.NumberColumn("G6 News", format="%d"),
+        GATE_COL: st.column_config.TextColumn(GATE_COL, width="small"),
+        GATE_SCORE_COL: st.column_config.ProgressColumn(GATE_SCORE_COL, min_value=0, max_value=100, format="%d"),
+        GATE_WHY_COL: st.column_config.TextColumn(GATE_WHY_COL, width="large"),
+    }
+
+
+def stock_sight_overlay_column_config() -> dict:
+    """Column config for secondary SS_* StockSight overlay on specialized screeners."""
+    if st is None:
+        return {}
+    return {
+        "SS Composite": st.column_config.NumberColumn("SS Composite", format="%.1f"),
+        "SS Decision": st.column_config.TextColumn("SS Decision", width="small"),
+        "SS Gate": st.column_config.TextColumn("SS Gate", width="small"),
+        "SS Gate why": st.column_config.TextColumn("SS Gate why", width="medium"),
+        "SS Flags": st.column_config.TextColumn("SS Flags", width="medium"),
+        "SS Conflict": st.column_config.TextColumn("SS Conflict", width="medium"),
+        "SS Returns": st.column_config.TextColumn("SS Returns", width="medium"),
+        "SS Sentiment": st.column_config.TextColumn("SS Sentiment", width="small"),
+        "SS G1": st.column_config.NumberColumn("SS G1", format="%d"),
+        "SS G2": st.column_config.NumberColumn("SS G2", format="%d"),
+        "SS G3": st.column_config.NumberColumn("SS G3", format="%d"),
+        "SS G4": st.column_config.NumberColumn("SS G4", format="%d"),
+        "SS G5": st.column_config.NumberColumn("SS G5", format="%d"),
+        "SS G6": st.column_config.NumberColumn("SS G6", format="%d"),
+    }
+
+
 def render_decision_matrix_legend() -> None:
     """Reference key for Decision / Matrix note columns shown after scans."""
-    with st.expander("📊 Buy / Sell decision matrix (reference)", expanded=False):
+    with st.expander("📊 StockSight scoring rules (reference)", expanded=False):
         st.caption(
-            "After each scan, **Decision** blends the scenario signal (when applicable) with the "
-            "**Composite** score (PE + volume + RSI, 0–100). Same zones as **Buy / Hold / Avoid**."
+            "**Composite** (0–100) = Momentum (25) + Fundamentals (20) + Volume (15) + "
+            "RS vs index (15) + Trend (15) + News (10). **Quality Gate** A–D can override trust. "
+            "**Decision** = Buy / Watch · Neutral · Skip."
+        )
+        st.markdown(
+            "| Gate | Meaning |\n|------|--------|\n"
+            "| 🟢 A | Trade ready — no flags, score ≥ 60 |\n"
+            "| 🟡 B | Watch — one soft flag |\n"
+            "| 🟠 C | Caution — 2+ soft flags |\n"
+            "| 🔴 D | Skip — hard flag (RSI>72, earnings ≤5d, MACD falling) |"
+        )
+        st.markdown(
+            "**Decision matrix:** Gate D → always Skip. Gate C downgrades one step. "
+            "Score ≥ 65 + gate A/B → Buy / Watch. Conflict banner when score ≥ 60, gate D, RSI exhaustion."
+        )
+        st.markdown(
+            "**Score bands:** 65–100 green (strong) · 45–64 blue (moderate) · 0–44 red (weak)."
         )
         for threshold, label, note in DECISION_ZONES:
             st.markdown(f"- **{label}** (composite ≥ {threshold:.0f}): {note}")
-        st.markdown(
-            "- **Sell / Trim** — Overbought / exit scenario or SELL signal.\n"
-            "- **Cautious Buy** — Extreme oversold / cautious entry only.\n"
-            "- **Neutral / Wait** — Volume spike without RSI confirmation or WAIT signal."
-        )
 
 
 def _decision_for_signal_result(r: SignalResult) -> tuple[str, float, str]:
@@ -596,15 +656,51 @@ def prepare_scan_results_df(
     max_news_rows: int = 50,
     raw_ticker_col: Optional[str] = None,
     apply_quality_gate: bool = True,
+    apply_stock_sight: Optional[bool] = None,
+    stock_sight_overlay: bool = True,
     confluence_map: Optional[dict[str, list[str]]] = None,
     sort_by_gate: bool = False,
 ) -> pd.DataFrame:
-    """Add market sentiment, recent news, and optional Quality Gate columns for scan tables."""
+    """Add market sentiment, recent news, StockSight scoring, and optional Quality Gate columns."""
     if df is None or df.empty:
         return df
 
     def _finish(out_df: pd.DataFrame) -> pd.DataFrame:
-        if apply_quality_gate and GATE_COL not in out_df.columns:
+        try:
+            from stock_sight_scoring import (
+                apply_stock_sight_columns,
+                apply_stock_sight_overlay_columns,
+                should_apply_stock_sight_overlay,
+                should_apply_stock_sight_scoring,
+            )
+        except ImportError:
+            from .stock_sight_scoring import (  # type: ignore[no-redef]
+                apply_stock_sight_columns,
+                apply_stock_sight_overlay_columns,
+                should_apply_stock_sight_overlay,
+                should_apply_stock_sight_scoring,
+            )
+
+        def _macro_tone() -> str:
+            try:
+                from market_sentiment import get_macro_context
+            except ImportError:
+                from .market_sentiment import get_macro_context  # type: ignore[no-redef]
+            try:
+                return get_macro_context(mkt).macro_tone
+            except Exception:
+                return "Neutral"
+
+        use_stock_sight = (
+            should_apply_stock_sight_scoring(out_df)
+            if apply_stock_sight is None
+            else bool(apply_stock_sight)
+        )
+        if use_stock_sight:
+            out_df = apply_stock_sight_columns(out_df, macro_tone=_macro_tone())
+        elif stock_sight_overlay and should_apply_stock_sight_overlay(out_df):
+            out_df = apply_stock_sight_overlay_columns(out_df, macro_tone=_macro_tone())
+        elif apply_quality_gate and GATE_COL not in out_df.columns:
             prof = detect_quality_gate_profile(out_df)
             out_df = apply_quality_gate_columns(
                 out_df,
@@ -612,6 +708,24 @@ def prepare_scan_results_df(
                 confluence_map=confluence_map,
                 sort_by_gate=sort_by_gate,
             )
+        if sort_by_gate and GATE_COL in out_df.columns:
+            band_order = {"🟢": 0, "🟡": 1, "🟠": 2, "🔴": 3}
+            out_df = out_df.copy()
+            out_df["_gate_sort"] = out_df[GATE_COL].astype(str).map(
+                lambda s: band_order.get(s[:2] if len(s) >= 2 else s, 9)
+            )
+            sort_cols = ["_gate_sort"]
+            if "Composite" in out_df.columns:
+                sort_cols.append("Composite")
+            elif "Score" in out_df.columns:
+                sort_cols.append("Score")
+            out_df = out_df.sort_values(sort_cols, ascending=[True, False]).drop(
+                columns=["_gate_sort"], errors="ignore"
+            )
+            out_df = out_df.reset_index(drop=True)
+            if out_df.index.name != "Rank":
+                out_df.index += 1
+                out_df.index.name = "Rank"
         return out_df
 
     mkt = market or market_from_universe(universe_name)
@@ -636,7 +750,7 @@ def prepare_scan_results_df(
     if len(df) <= max_news_rows:
         if news_cache_key not in st.session_state:
             max_age = int(st.session_state.get("news_scan_max_age", 7))
-            with st.spinner("Loading headlines (Yahoo + Google News)…"):
+            with st.spinner("Loading Screener company announcements…"):
                 enriched = enrich_dataframe_recent_news(
                     df,
                     universe_name=universe_name,
@@ -1019,6 +1133,8 @@ def render_clickable_scan_table(
     on_row_select: Optional[Callable[[pd.Series], None]] = None,
     show_gate_legend: bool = True,
     sort_by_gate: bool = False,
+    apply_stock_sight: Optional[bool] = None,
+    stock_sight_overlay: bool = True,
 ) -> Optional[str]:
     """Render a results dataframe with row selection wired to the chart/research panel.
 
@@ -1042,11 +1158,23 @@ def render_clickable_scan_table(
         cache_key_prefix=key_prefix,
         raw_ticker_col=raw_col,
         sort_by_gate=sort_by_gate,
+        apply_stock_sight=apply_stock_sight,
+        stock_sight_overlay=stock_sight_overlay,
     )
     if column_config is not None:
         column_config = dict(column_config)
         for k, v in _scan_table_news_column_config().items():
             column_config.setdefault(k, v)
+        for k, v in stock_sight_column_config().items():
+            column_config.setdefault(k, v)
+        for k, v in stock_sight_overlay_column_config().items():
+            column_config.setdefault(k, v)
+
+    if "SS Composite" in df.columns:
+        st.caption(
+            "**SS columns** = long-term StockSight context (6-group composite + gate). "
+            "Primary score on this page stays the screen-specific model."
+        )
 
     if show_gate_legend and GATE_COL in df.columns:
         render_quality_gate_legend(profile=detect_quality_gate_profile(df))
@@ -2024,13 +2152,9 @@ def results_table(
 
     rows = []
     for r in results:
-        decision, composite, matrix_note = _decision_for_signal_result(r)
         row = {
             "Ticker":       r.ticker,
             "First seen":   first_seen_label(r.raw_ticker),
-            "Decision":     decision,
-            "Composite":    composite if composite == composite else None,
-            "Matrix note":  matrix_note,
             "Signal":       r.signal_label,
             "Bars":         r.data_interval,
             "Sector":       r.sector or "—",
@@ -2126,9 +2250,7 @@ def results_table(
 
     col_cfg = {
         **_scan_table_news_column_config(),
-        "Decision":     st.column_config.TextColumn("Decision", width="medium"),
-        "Matrix note":  st.column_config.TextColumn("Matrix note", width="large"),
-        "Composite":    st.column_config.NumberColumn("Composite", format="%.1f"),
+        **stock_sight_column_config(),
         "Price":        st.column_config.NumberColumn("Price", format="%.2f"),
         "PE":           st.column_config.NumberColumn("PE", format="%.1f"),
         "Vol×":         st.column_config.NumberColumn("Vol×", format="%.2f"),

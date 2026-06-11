@@ -87,10 +87,39 @@ def resolve_company_name(raw_ticker: str) -> str:
     return sym.replace("-", " ").strip()
 
 
+def _nse_search_symbol(raw_ticker: str) -> str:
+    sym = _display_symbol(raw_ticker)
+    if raw_ticker.upper().endswith(".BO"):
+        return f"BSE:{sym}"
+    return f"NSE:{sym}"
+
+
+def _headline_matches_nse_ticker(title: str, sym: str) -> bool:
+    """
+    Drop headlines tied to the wrong exchange (e.g. ASX:ACE for NSE:ACE).
+    """
+    if not title or not sym:
+        return True
+    t = title.strip()
+    other_exchanges = ("ASX", "LSE", "TSE", "HKEX", "TSX", "FWB", "XETRA")
+    for ex in other_exchanges:
+        if re.search(rf"\b{ex}\s*:\s*{re.escape(sym)}\b", t, re.I):
+            return False
+        if re.search(rf"\b{ex}\b", t, re.I) and re.search(
+            rf"\b{re.escape(sym)}\b", t, re.I
+        ) and not re.search(r"\b(NSE|BSE|India|Indian)\b", t, re.I):
+            return False
+    return True
+
+
 def _google_news_queries(raw_ticker: str, company: str) -> list[str]:
     sym = _display_symbol(raw_ticker)
     is_india = raw_ticker.upper().endswith((".NS", ".BO"))
     queries: list[str] = []
+    if is_india:
+        nse_tag = _nse_search_symbol(raw_ticker)
+        queries.append(f"{nse_tag} stock news")
+        queries.append(f"{sym}.NS NSE stock news")
     if company and company.upper() != sym:
         if is_india:
             queries.append(f"{company} stock India NSE")
@@ -234,8 +263,12 @@ def fetch_aggregated_structured_news(
         seen: set[str] = set()
         merged: list[NewsHeadline] = []
 
+        sym = _display_symbol(raw)
+
         def _add(batch: list[NewsHeadline]) -> None:
             for h in batch:
+                if is_india and not _headline_matches_nse_ticker(h.title, sym):
+                    continue
                 key = _normalize_title_key(h.title)
                 if not key or key in seen:
                     continue

@@ -179,6 +179,7 @@ Use **ICICI Breeze Screener → Live Trade** only after you review picks manuall
                     universe_name=report.universe,
                     cache_key_prefix=f"algo_{h}",
                     apply_quality_gate=False,
+                    apply_stock_sight=(h != "intraday"),
                 )
                 render_quality_gate_legend(profile="intraday" if h == "intraday" else "daily")
                 render_clickable_scan_table(

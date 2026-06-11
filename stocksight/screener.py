@@ -357,6 +357,26 @@ def compute_macd(closes: pd.Series, fast: int = 12, slow: int = 26, signal: int 
     )
 
 
+def macd_histogram_tail(closes: pd.Series, n: int = 4) -> list[float]:
+    """Last ``n`` MACD histogram values (oldest → newest) for trend / gate flags."""
+    if closes is None or len(closes) < 40:
+        return []
+    ema_fast = closes.ewm(span=12, adjust=False).mean()
+    ema_slow = closes.ewm(span=26, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    sig_line = macd_line.ewm(span=9, adjust=False).mean()
+    hist = macd_line - sig_line
+    tail = hist.iloc[-n:].tolist()
+    out: list[float] = []
+    for v in tail:
+        try:
+            fv = float(v)
+            out.append(round(fv, 4) if pd.notna(fv) else float("nan"))
+        except (TypeError, ValueError):
+            out.append(float("nan"))
+    return out
+
+
 def compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14):
     if len(close) < period + 2:
         return np.nan
@@ -691,7 +711,7 @@ def next_earnings_label(ticker_obj: yf.Ticker) -> str:
 
 
 RECENT_NEWS_MAX_AGE_DAYS = 7
-RECENT_NEWS_COL_LABEL = "Recent news (7d)"
+RECENT_NEWS_COL_LABEL = "Screener news (7d)"
 
 
 def _news_item_content(item: dict) -> dict:
@@ -745,13 +765,77 @@ def _format_news_date_label(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%d %b %Y")
 
 
+def _is_indian_equity_ticker(raw_ticker: str, universe_name: str = "") -> bool:
+    raw = str(raw_ticker or "").strip().upper()
+    if raw.endswith((".NS", ".BO")):
+        return True
+    sym = raw.replace(".NS", "").replace(".BO", "")
+    if sym.isdigit():
+        return True
+    if "NSE" in str(universe_name).upper() or "BSE" in str(universe_name).upper():
+        return True
+    return False
+
+
+def screener_symbol_from_raw(raw_ticker: str) -> str:
+    """Normalize to Screener lookup key (NSE symbol or BSE numeric code like ``512014``)."""
+    sym = str(raw_ticker or "").replace(".NS", "").replace(".BO", "").strip()
+    if sym.isdigit():
+        return sym
+    return sym.upper()
+
+
+def fetch_screener_company_headlines(
+    raw_ticker: str,
+    *,
+    limit: int = 2,
+    max_age_days: int = RECENT_NEWS_MAX_AGE_DAYS,
+    universe_name: str = "",
+) -> list[str]:
+    """Latest filings from Screener company page Documents → Announcements."""
+    if not _is_indian_equity_ticker(raw_ticker, universe_name):
+        return []
+    try:
+        from screener_buyback import (
+            fetch_company_recent_announcements,
+            screener_items_to_headlines,
+            screener_login_configured,
+        )
+    except ImportError:
+        from .screener_buyback import (  # type: ignore[no-redef]
+            fetch_company_recent_announcements,
+            screener_items_to_headlines,
+            screener_login_configured,
+        )
+    if not screener_login_configured():
+        return []
+    sym = screener_symbol_from_raw(raw_ticker)
+    if not sym:
+        return []
+    items = fetch_company_recent_announcements(
+        sym,
+        limit=max(limit, 3),
+        max_age_days=max_age_days,
+    )
+    return screener_items_to_headlines(items, limit=limit)
+
+
 def fetch_recent_quote_news(
     raw_ticker: str,
     *,
     limit: int = 3,
     max_age_days: int = RECENT_NEWS_MAX_AGE_DAYS,
+    universe_name: str = "",
 ) -> list[str]:
-    """Dated headline strings (multi-source) within ``max_age_days``."""
+    """Dated headline strings (Screener filings + Yahoo/Google) within ``max_age_days``."""
+    screener_hl = fetch_screener_company_headlines(
+        raw_ticker,
+        limit=limit,
+        max_age_days=max_age_days,
+        universe_name=universe_name,
+    )
+    if screener_hl:
+        return screener_hl
     structured = fetch_structured_news(
         raw_ticker, limit=limit, max_age_days=max_age_days
     )
@@ -883,17 +967,26 @@ def enrich_dataframe_recent_news(
         if not raw:
             headlines.append("—")
             continue
-        items = fetch_structured_news(
+        screener_hl = fetch_screener_company_headlines(
             raw,
-            limit=max(limit_per_ticker, 3),
+            limit=limit_per_ticker,
             max_age_days=max_age_days,
-            skip_company_lookup=skip_company_lookup,
+            universe_name=universe_name,
         )
-        headlines.append(
-            format_structured_news_cell(items, max_items=limit_per_ticker)
-            if items
-            else f"No headlines ({max_age_days}d window)"
-        )
+        if screener_hl:
+            headlines.append(format_recent_news_cell(screener_hl, max_items=limit_per_ticker))
+        else:
+            items = fetch_structured_news(
+                raw,
+                limit=max(limit_per_ticker, 3),
+                max_age_days=max_age_days,
+                skip_company_lookup=skip_company_lookup,
+            )
+            headlines.append(
+                format_structured_news_cell(items, max_items=limit_per_ticker)
+                if items
+                else f"No headlines ({max_age_days}d window)"
+            )
         if delay_sec > 0:
             time.sleep(delay_sec)
 
@@ -1038,6 +1131,13 @@ def fetch_analyst_recommendation(raw_ticker: str, *, current_price: Optional[flo
     summary = " · ".join(p for p in summary_parts if p and p != "—") or "—"
     if breakdown:
         summary = f"{summary} ({breakdown})" if summary != "—" else breakdown
+
+    if analyst_count is not None and analyst_count < 3:
+        return {
+            **empty,
+            "analyst_count": analyst_count,
+            "summary": f"— ({analyst_count} analysts — need ≥3 for targets)",
+        }
 
     return {
         "consensus": consensus if consensus != "—" else None,
@@ -1583,18 +1683,18 @@ def us_market_status_label(now_utc: Optional[datetime] = None) -> str:
 
 
 def compute_score(pe, vol_ratio, rsi):
+    """Legacy PE+Vol+RSI score — prefer ``evaluate_stock_sight`` for the main screener."""
     pe_score  = max(0.0, min(40.0, (50 - pe)  / 45 * 40)) if pe  and pe  > 0  else 0.0
     vol_score = max(0.0, min(30.0, (vol_ratio - 1) / 4 * 30)) if vol_ratio     else 0.0
     rsi_score = max(0.0, min(30.0, (rsi - 50) / 30 * 30)) if rsi and rsi > 50 else 0.0
     return round(pe_score + vol_score + rsi_score, 1)
 
 
-# Buy / Hold / Avoid decision matrix (composite 0–100 + scenario signal overrides)
+# StockSight final-decision reference zones (6-group composite + quality gate)
 DECISION_ZONES: tuple[tuple[float, str, str], ...] = (
-    (80.0, "Strong Buy", "PE + volume + RSI composite ≥ 80 — aligned momentum and valuation."),
-    (60.0, "Buy / Watch", "Composite 60–79 — constructive; confirm with chart/news before entry."),
-    (40.0, "Neutral / Wait", "Composite 40–59 — mixed; avoid aggressive new positions."),
-    (0.0, "Avoid", "Composite < 40 — weak vs standard PE / vol / RSI weights."),
+    (65.0, "Buy / Watch", "Composite ≥ 65 with gate A/B — strong setup; confirm entry on chart."),
+    (45.0, "Neutral", "Composite 45–64 or gate C — mixed; wait for confirmation."),
+    (0.0, "Skip", "Gate D, composite < 45, or gate C with weak score — pass or wait."),
 )
 
 
@@ -1611,7 +1711,7 @@ def composite_action_zone(score: Optional[float]) -> str:
     for threshold, label, _note in DECISION_ZONES:
         if s >= threshold:
             return label
-    return "Avoid"
+    return "Skip"
 
 
 def matrix_decision_note(decision: str) -> str:
@@ -1665,8 +1765,41 @@ def decision_from_metrics(
     score: Optional[float] = None,
     signal_label: Optional[str] = None,
     scenario_id: Optional[str] = None,
+    row: Optional[dict] = None,
 ) -> tuple[str, float, str]:
-    """Returns (decision_label, composite_score, matrix_note)."""
+    """Returns (decision_label, composite_score, matrix_note). Prefers StockSight 6-group scoring."""
+    sig = (signal_label or "").upper().replace("HOLD-WAIT", "WAIT").strip()
+    sid = (scenario_id or "").lower()
+
+    metrics = dict(row or {})
+    if pe is not None:
+        metrics.setdefault("PE Ratio", pe)
+    if vol_ratio is not None:
+        metrics.setdefault("Volume Ratio", vol_ratio)
+    if rsi is not None:
+        metrics.setdefault("RSI", rsi)
+
+    has_stock_metrics = any(
+        metrics.get(k) is not None
+        for k in ("RSI", "PE Ratio", "PE", "P/E", "Volume Ratio", "Vol×")
+    )
+    if has_stock_metrics and sid not in ("intraday",):
+        try:
+            from stock_sight_scoring import evaluate_stock_sight, normalize_row_metrics
+        except ImportError:
+            from .stock_sight_scoring import evaluate_stock_sight, normalize_row_metrics  # type: ignore[no-redef]
+        res = evaluate_stock_sight(normalize_row_metrics(metrics))
+        comp_out = res.composite
+        if sid == "overbought_exit" or sig == "SELL":
+            return "Sell / Trim", comp_out, "Scenario exit — consider reducing or tightening stops."
+        if sig == "CAUTIOUS BUY" or sid == "extreme_oversold":
+            if res.final_decision == "Skip":
+                return "Neutral", comp_out, res.matrix_note
+            return "Cautious Buy", comp_out, res.matrix_note
+        if sid == "volume_no_confirm" or sig == "WAIT":
+            return "Neutral", comp_out, res.matrix_note
+        return res.final_decision, comp_out, res.matrix_note
+
     comp = score
     if comp is None and pe is not None and vol_ratio is not None and rsi is not None:
         try:
@@ -1918,14 +2051,49 @@ def screen_stocks(
                 if np.isnan(macd_h) or macd_h <= 0:
                     continue
 
+            macd_tail = macd_histogram_tail(closes, n=4)
+            macd_prev = macd_tail[-2] if len(macd_tail) >= 2 else None
+            if macd_prev is not None and np.isnan(macd_prev):
+                macd_prev = None
+
             bb_pct_b, _bb_m, _bb_u, bb_l = compute_bollinger_pct_b(closes)
             atr_v = compute_atr(highs, lows, closes)
             gc = ma_cross_recent(ma20_s, ma50_s, lookback=5)
 
-            score    = compute_score(pe, vol_ratio, rsi)
-            decision, _, matrix_note = decision_from_metrics(
-                pe, vol_ratio, rsi, score=score, signal_label="BUY"
-            )
+            r1m = _return_pct_over_bars(closes, 21)
+            r3m = _return_pct_over_bars(closes, 63)
+            r6m = _return_pct_over_bars(closes, 126)
+            r1y = _return_pct_over_bars(closes, min(252, len(closes) - 1))
+
+            try:
+                from stock_sight_scoring import evaluate_stock_sight, format_return_chips
+            except ImportError:
+                from .stock_sight_scoring import evaluate_stock_sight, format_return_chips  # type: ignore[no-redef]
+
+            metrics = {
+                "RSI": rsi,
+                "PE Ratio": pe,
+                "Volume Ratio": vol_ratio,
+                "RS vs Idx": rs_excess,
+                "MACD Hist": macd_h if not np.isnan(macd_h) else None,
+                "MACD Hist prev": macd_prev,
+                "MACD hist tail": macd_tail,
+                "% vs MA20": pct_vs_ma(current_price, ma20) if not np.isnan(ma20) else None,
+                "MA20": ma20 if not np.isnan(ma20) else None,
+                "MA50": ma50 if not np.isnan(ma50) else None,
+                "MA20×Golden50": "Yes" if gc else "—",
+                "%B Bollinger": bb_pct_b if bb_pct_b is not None and not np.isnan(bb_pct_b) else None,
+                "ΔEarn(d)": d_earn,
+                "ROE %": fund["roe_pct"],
+                "D/E": fund["debt_equity"],
+                "Rev growth %": fund["revenue_growth_pct"],
+                "Price": current_price,
+            }
+            scored = evaluate_stock_sight(metrics)
+            score = scored.composite
+            decision = scored.final_decision
+            matrix_note = scored.matrix_note
+
             is_nse   = ticker.endswith(".NS") or ticker.endswith(".BO")
             currency = "₹" if is_nse else "$"
             links    = get_stock_links(ticker)
@@ -1950,8 +2118,25 @@ def screen_stocks(
                 "ROE %":         fund["roe_pct"],
                 "D/E":           fund["debt_equity"],
                 "Rev growth %":  fund["revenue_growth_pct"],
+                "return_1m_pct": r1m,
+                "return_3m_pct": r3m,
+                "return_6m_pct": r6m,
+                "return_1y_pct": r1y,
+                "Returns":       format_return_chips(r1m, r3m, r6m, r1y),
                 "Score":         score,
                 "Composite":     score,
+                "G1 Momentum":   scored.g1_momentum,
+                "G2 Fundamentals": scored.g2_fundamentals,
+                "G3 Volume":     scored.g3_volume,
+                "G4 RS":         scored.g4_rs,
+                "G5 Trend":      scored.g5_trend,
+                "G6 News":       scored.g6_news,
+                "Flags":         ", ".join(scored.flags) if scored.flags else "—",
+                "Quality Gate":  scored.gate_label,
+                "Gate score":    scored.gate_score,
+                "Gate why":      scored.gate_why,
+                "Conflict":      scored.conflict_banner or "—",
+                "Score band":    scored.score_band,
                 "Decision":      decision,
                 "Matrix note":   matrix_note,
                 **{name: url for name, url in links.items()},

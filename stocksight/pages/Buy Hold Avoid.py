@@ -6,7 +6,7 @@ from urllib.parse import quote_plus
 import streamlit as st
 import pandas as pd
 from scan_history_store import append_scan_record
-from screener import UNIVERSES, composite_action_zone, matrix_decision_note, screen_stocks
+from screener import UNIVERSES, screen_stocks
 from ui_components import (
     filter_column_config,
     inject_css,
@@ -158,7 +158,7 @@ section.main [data-testid="stTextInput"] input {
 st.markdown("## 📊 Buy / Hold / Avoid Decision Guide", unsafe_allow_html=True)
 page_audience_note(
     "Investors who already have a shortlist and need a single composite view before acting—use **after** StockSight or scenario scans.",
-    "Loads a full universe, scores each name (PE, volume, RSI), maps to **Strong Buy → Avoid** zones, "
+    "Loads a full universe with **6-group composite**, **Quality Gate A–D**, and **Buy / Watch · Neutral · Skip** decisions. "
     "and supports filters, cards, and news links. This is the final decision layer, not a discovery screener.",
 )
 st.markdown("---")
@@ -182,8 +182,8 @@ Use the filters column to narrow the table after the list loads.
     with c3:
         st.markdown("#### Filters")
         action_zone = st.selectbox(
-            "Composite Action Zone",
-            ["All", "Strong Buy", "Buy / Watch", "Neutral / Wait", "Avoid"],
+            "Final decision",
+            ["All", "Buy / Watch", "Neutral", "Skip"],
             index=0,
             key="bha_action",
         )
@@ -250,11 +250,8 @@ if df is None or df.empty:
     """)
 else:
     df = df.copy()
-    df["Decision"] = df["Score"].apply(composite_action_zone)
-    df["Matrix note"] = df["Decision"].map(matrix_decision_note)
-    df["Action"] = df["Decision"]
-    if "Composite" not in df.columns:
-        df["Composite"] = df["Score"]
+    if "Action" not in df.columns and "Decision" in df.columns:
+        df["Action"] = df["Decision"]
     df["BusinessLine"] = df["Ticker"].apply(
         lambda ticker: f"https://www.thehindubusinessline.com/search/?q={quote_plus(ticker.replace('.NS', '').replace('.BO', ''))}"
     )

@@ -16,7 +16,7 @@ except ImportError:
 
 QUALITY_GATE_BANDS: dict[str, dict[str, str]] = {
     "A": {"label": "🟢 A · Trade ready", "bg": "#d1fae5", "fg": "#064e3b"},
-    "B": {"label": "🟡 B · Good", "bg": "#ecfccb", "fg": "#365314"},
+    "B": {"label": "🟡 B · Watch", "bg": "#ecfccb", "fg": "#365314"},
     "C": {"label": "🟠 C · Caution", "bg": "#fef3c7", "fg": "#78350f"},
     "D": {"label": "🔴 D · Skip", "bg": "#fee2e2", "fg": "#991b1b"},
 }
@@ -97,12 +97,28 @@ def _news_pts(row: dict) -> int:
     return pts
 
 
+def compute_stock_sight_daily_gate(row: dict) -> dict[str, Any]:
+    """Flag-based A–D gate from StockSight 6-group screener (when scoring columns present)."""
+    try:
+        from stock_sight_scoring import evaluate_stock_sight, pack_quality_gate
+    except ImportError:
+        from .stock_sight_scoring import evaluate_stock_sight, pack_quality_gate  # type: ignore[no-redef]
+    res = evaluate_stock_sight(
+        row,
+        news_score=row.get("News score"),
+    )
+    return pack_quality_gate(res)
+
+
 def compute_daily_quality_gate(
     row: dict,
     *,
     scenarios_on_ticker: Optional[list[str]] = None,
 ) -> dict[str, Any]:
-    """Swing/daily screener gate from decision matrix, composite, signal, confidence, sentiment, news."""
+    """Swing/daily screener gate — StockSight flag model when G1/G flags exist, else legacy rubric."""
+    if row.get("G1 Momentum") is not None or row.get("Flags"):
+        return compute_stock_sight_daily_gate(row)
+
     decision = str(row.get("Decision") or row.get("Action") or "").upper()
     composite = row.get("Composite")
     score = row.get("Score")
@@ -426,6 +442,21 @@ def quality_gate_column_config() -> dict:
     }
 
 
+def composite_score_bar_css(score: Any) -> str:
+    """Score band colours: 65+ green, 45–64 blue, <45 red."""
+    try:
+        s = float(score)
+        if s != s:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    if s >= 65:
+        return "background-color: #d1fae5; color: #064e3b;"
+    if s >= 45:
+        return "background-color: #dbeafe; color: #1e3a8a;"
+    return "background-color: #fee2e2; color: #991b1b;"
+
+
 def render_quality_gate_legend(*, profile: Optional[str] = None, expanded: bool = False) -> None:
     if st is None:
         return
@@ -433,7 +464,7 @@ def render_quality_gate_legend(*, profile: Optional[str] = None, expanded: bool 
     titles = {
         "intraday": "strategy confluence + 7-rule score + session timing",
         "gap": "gap size, hold/fill, direction, sentiment, news",
-        "daily": "decision matrix, composite/score, signal, sentiment, news",
+        "daily": "flag-based gate: RSI exhaustion, earnings, MACD, volume, news, MA cross",
     }
     with st.expander(f"🚦 Quality Gate — colour code ({titles.get(prof, titles['daily'])})", expanded=expanded):
         for band in ("A", "B", "C", "D"):

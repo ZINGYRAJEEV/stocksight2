@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from volume_gravity import META, VolumeGravityResult
-from ui_components import render_clickable_scan_table
+from ui_components import render_clickable_scan_table, stock_sight_overlay_column_config
 
 
 def volume_gravity_header() -> None:
@@ -155,6 +155,7 @@ def volume_gravity_table(
         st.caption(scan_at)
 
     col_cfg: dict = {
+        **stock_sight_overlay_column_config(),
         "Gravity": st.column_config.ProgressColumn("Gravity", min_value=0, max_value=100, format="%d"),
         "RVOL": st.column_config.NumberColumn("RVOL", format="%.2f"),
         "Gap %": st.column_config.NumberColumn("Gap %", format="%+.2f"),
@@ -175,6 +176,7 @@ def volume_gravity_table(
     render_clickable_scan_table(
         df,
         key_prefix=key_prefix,
+        apply_stock_sight=False,
         universe_name=market,
         market=market,
         column_config=col_cfg,

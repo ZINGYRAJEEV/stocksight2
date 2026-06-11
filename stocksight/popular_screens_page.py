@@ -7,7 +7,6 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from screener import decision_from_metrics
 from popular_screens import (
     SCAN_SOURCES,
     SCREEN_REGISTRY,
@@ -118,17 +117,14 @@ def _render_run_panel(key: str, reg: dict) -> None:
         st.caption(f"**{len(results)}** result(s)" + (f" · {scan_at}" if scan_at else ""))
         rows = []
         for i, r in enumerate(results, start=1):
-            decision, composite, matrix_note = decision_from_metrics(
-                r.pe, r.vol_ratio, r.rsi, scenario_id=picked
-            )
             rows.append(
                 {
                     "S.No.": i,
                     "Name": r.ticker,
-                    "Decision": decision,
-                    "Composite": composite if composite == composite else None,
-                    "Matrix note": matrix_note,
+                    "Screen score": r.score,
+                    "Price": r.price,
                     "CMP Rs.": r.price,
+                    "PE Ratio": r.pe,
                     "P/E": r.pe,
                     "Mar Cap Rs.Cr.": r.market_cap_cr,
                     "RSI": r.rsi,
@@ -145,12 +141,13 @@ def _render_run_panel(key: str, reg: dict) -> None:
                 }
             )
         df = pd.DataFrame(rows)
+        from ui_components import stock_sight_column_config
+
         col_cfg = filter_column_config(
             df,
             {
-                "Decision": st.column_config.TextColumn("Decision", width="medium"),
-                "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
-                "Composite": st.column_config.NumberColumn(format="%.1f"),
+                **stock_sight_column_config(),
+                "Screen score": st.column_config.NumberColumn("Screen score", format="%.1f"),
                 "CMP Rs.": st.column_config.NumberColumn(format="%.2f"),
                 "P/E": st.column_config.NumberColumn(format="%.1f"),
                 "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.1f"),

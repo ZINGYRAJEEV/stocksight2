@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import html
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Optional
 
 import pandas as pd
@@ -1021,6 +1022,7 @@ def _csv_download(
         universe_name=universe_name,
         cache_key_prefix=f"csv_{key}",
         raw_ticker_col="Raw" if "Raw" in df.columns else None,
+        apply_stock_sight=False,
     )
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button(
@@ -1804,6 +1806,41 @@ def _run_intraday_scan_core(
     return results, scan_stats
 
 
+_INTRADAY_RATING_RULES_IMG = (
+    Path(__file__).resolve().parent / "assets" / "intraday_rating_rules.png"
+)
+
+
+def _render_intraday_rating_gate_rules(*, expanded: bool = True) -> None:
+    """3-gate Buy / Watch / Skip flowchart — quick reference above the scan controls."""
+    with st.expander("📊 Intraday rating rules (3 gates)", expanded=expanded):
+        if _INTRADAY_RATING_RULES_IMG.is_file():
+            st.image(
+                str(_INTRADAY_RATING_RULES_IMG),
+                caption="Gate 1 → Gate 2 → Gate 3 → Buy · Watch · Skip",
+                use_container_width=True,
+            )
+        else:
+            st.caption("Rating rules diagram not found — see text summary below.")
+        st.markdown(
+            """
+**Gate 1 — Volume & gap (hard)** · Vol **≥ 5×** AND Gap **≥ 2%** → else **Skip**
+
+**Gate 2 — Momentum (2 of 3)** · RSI **45–70** · Price **> VWAP** · Vol accel **≥ 1.5×**
+
+**Gate 3 — Context score** · Near 52W **+10** · News T1–2 **+10** · RSI **> 72 → −20**
+
+| Tier | When |
+|------|------|
+| **✅ Buy** | Gates 1+2 pass · Gate 3 score **> 0** |
+| **👀 Watch** | Gates 1+2 pass · Gate 3 score **< 0** (wait for RSI to cool) |
+| **⛔ Skip** | Gate 1 fails or fewer than 2 in Gate 2 |
+
+*Focus on **Buy** first; **Watch** names can flip to Buy when RSI pulls back below 70.*
+"""
+        )
+
+
 def render_intraday_screener_page(
     *,
     key: str = "id",
@@ -1840,29 +1877,7 @@ def render_intraday_screener_page(
         "⚙ **Recommended for results:** Vol ratio **1.0×** · RSI **40–80** · "
         "enable **🔍 Broad Movers** + **⚡ Early Burst** · Min change % = **0** · start with **Nifty 50**."
     )
-    with st.expander("🏅 Ranking scorebook (7 rules · max 120)", expanded=False):
-        st.markdown(
-            """
-**Gate 1 — hard filter (both required)**  
-Volume ≥ **5×** AND Gap ≥ **2%**. Fail either → **Skip** (not shown).
-
-**Gate 2 — momentum quality (2 of 3)**  
-RSI **45–70** · price **above VWAP** · vol accel **≥ 1.5×**.  
-RSI is **not** a hard blocker — fail RSI but pass VWAP + accel → still eligible.
-
-**Gate 3 — context score**  
-Near 52W high **+10** · News T1–2 **+10** · RSI **> 72 → −20** (penalty, not a block).
-
-**Rating (Tier column)**  
-- **✅ Buy** — Gates 1+2 pass and Gate 3 score **≥ 0**  
-- **👀 Watch** — Gates pass but score **< 0** (e.g. RSI exhaustion — wait for RSI < 70)  
-- **⛔ Skip** — Gate 1 or Gate 2 failed  
-
-*BELRISE-style example:* Gate 1 ✓ (Vol 20×, Gap +3.7%) · Gate 2 ✓ (RSI ✗, VWAP ✓, Accel ✓) · Gate 3 −20 → **Watch**.
-
-Rows are ranked by **Unified score** (Quality Gate + Gate 3 + timing + confluence + regime).
-"""
-        )
+    _render_intraday_rating_gate_rules()
 
     if force_market:
         market = force_market
@@ -2378,22 +2393,11 @@ def _scan_plans_lookup() -> dict[str, dict]:
     return plans
 
 
-def _breeze_code_to_ticker(stock_code: str) -> str:
+def _breeze_code_to_ticker(stock_code: str, isin: str = "") -> str:
     """Map Breeze stock_code (ISEC or NSE symbol) to yfinance-style ticker."""
-    code = (stock_code or "").strip().upper()
-    if not code:
-        return ""
-    if code.endswith(".NS") or code.endswith(".BO"):
-        return code
-    try:
-        from breeze_data import lookup_nse_symbol
+    from niftyrisk.symbols import resolve_yahoo_ticker
 
-        sym = lookup_nse_symbol("NSE", code)
-        if sym:
-            return sym if "." in sym else f"{sym}.NS"
-    except Exception:
-        pass
-    return f"{code}.NS"
+    return resolve_yahoo_ticker(stock_code, isin)
 
 
 def _position_sell_candidates(pos_rows: list) -> list[dict]:
@@ -2754,7 +2758,10 @@ def _enrich_breeze_portfolio_df(df: "pd.DataFrame", *, session_pred: str) -> "pd
         r["Why sell?"] = why
         r["Exit note"] = note
         r["Session timing"] = session_pred
-        r["Ticker (.NS)"] = _breeze_code_to_ticker(str(r.get("stock_code", "")))
+        r["Ticker (.NS)"] = _breeze_code_to_ticker(
+            str(r.get("stock_code", "")),
+            str(r.get("stock_ISIN") or r.get("stock_isin") or ""),
+        )
         out_rows.append(r)
     out = pd.DataFrame(out_rows)
     prefer = (
@@ -2812,6 +2819,136 @@ def _profit_health_label(row: "pd.Series") -> str:
 
 
 _BPOS_CACHE_KEYS = ("bpos_positions", "bpos_orders", "bpos_trades", "bpos_holdings", "bpos_fetched_at")
+
+_BPOS_HOLDINGS_COLS = (
+    "stock_code",
+    "quantity",
+    "average_price",
+    "current_market_price",
+    "ltp",
+    "demat_total_bulk_quantity",
+    "demat_avail_quantity",
+    "blocked_quantity",
+    "demat_allocated_quantity",
+)
+
+
+def _backfill_holdings_ltp(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Demat holdings often lack LTP — fetch live quotes like the Trades tab does."""
+    if df.empty or "stock_code" not in df.columns:
+        return df
+    try:
+        from breeze_data import get_ltp
+    except Exception:
+        get_ltp = None  # type: ignore[assignment,misc]
+
+    if not get_ltp:
+        return df
+
+    cache: dict[str, Optional[float]] = st.session_state.setdefault("bpos_hld_ltp_cache", {})
+    out = df.copy()
+    for idx, row in out.iterrows():
+        if _row_float(row, "ltp", "current_market_price") is not None:
+            continue
+        code = str(row.get("stock_code", "")).strip().upper()
+        ticker = _breeze_code_to_ticker(code)
+        if not ticker:
+            continue
+        if ticker not in cache:
+            try:
+                cache[ticker] = get_ltp(ticker)
+            except Exception:
+                cache[ticker] = None
+        px = cache[ticker]
+        if px is not None:
+            out.at[idx, "ltp"] = round(float(px), 2)
+    return out
+
+
+def _bpos_holdings_enriched_df(hld_rows: list, *, session_pred: str) -> "pd.DataFrame":
+    df = _breeze_rows_to_df(hld_rows, _BPOS_HOLDINGS_COLS)
+    if df.empty:
+        return df
+    df = _backfill_holdings_ltp(df)
+    return _enrich_breeze_portfolio_df(df, session_pred=session_pred)
+
+
+def _bpos_run_niftyrisk(hld_rows: list, *, session_pred: str):
+    from niftyrisk.icici_bridge import portfolio_from_dataframe
+    from niftyrisk.risk_engine import analyze_portfolio
+    from niftyrisk_page import get_active_niftyrisk_config
+
+    hld_enriched = _bpos_holdings_enriched_df(hld_rows, session_pred=session_pred)
+    if hld_enriched.empty:
+        raise ValueError("No holdings with quantity > 0")
+    portfolio = portfolio_from_dataframe(hld_enriched, name="ICICI Holdings")
+    return analyze_portfolio(portfolio, config=get_active_niftyrisk_config())
+
+
+def _render_bpos_niftyrisk_panel(hld_rows: list, hld_err: Optional[str], *, session_pred: str) -> None:
+    from niftyrisk_page import get_active_niftyrisk_config, render_risk_dashboard, render_tier_selector
+
+    from niftyrisk.models import upgrade_risk_report
+
+    report = upgrade_risk_report(st.session_state.get("bpos_niftyrisk_report"))
+    if report is not None:
+        st.session_state["bpos_niftyrisk_report"] = report
+    shared = upgrade_risk_report(st.session_state.get("niftyrisk_report"))
+    if shared is not None:
+        st.session_state["niftyrisk_report"] = shared
+    with st.expander("🛡️ NiftyRisk — portfolio risk on your holdings", expanded=bool(report)):
+        render_tier_selector(key_prefix="bpos_nr")
+        cfg = get_active_niftyrisk_config()
+        limits = cfg.limits()
+        st.caption(
+            f"VaR, beta, concentration, risk grade on **delivery holdings**. "
+            f"Tier **{cfg.tier.value.upper()}** · up to **{limits['max_holdings']}** holdings · "
+            f"{'Monte Carlo + tax' if limits.get('tax_engine') else 'upgrade Pro for Monte Carlo'} · "
+            f"{'stress tests' if limits.get('stress_scenarios') else 'Elite for stress'}."
+        )
+        if report and report.tier != cfg.tier.value:
+            st.warning("Tier changed — click **Calculate NiftyRisk** again to refresh Pro/Elite output.")
+
+        btn_calc, btn_clear = st.columns([1, 1])
+        with btn_calc:
+            if st.button(
+                "▶ Calculate NiftyRisk",
+                type="primary",
+                key="bpos_calc_niftyrisk",
+                disabled=bool(hld_err) or not hld_rows,
+                use_container_width=True,
+            ):
+                with st.spinner("Fetching NSE prices and running risk engine…"):
+                    try:
+                        report = _bpos_run_niftyrisk(hld_rows, session_pred=session_pred)
+                        st.session_state["bpos_niftyrisk_report"] = report
+                        st.session_state["niftyrisk_report"] = report
+                        from niftyrisk.icici_bridge import portfolio_from_dataframe
+
+                        hld_enriched = _bpos_holdings_enriched_df(hld_rows, session_pred=session_pred)
+                        st.session_state["niftyrisk_icici_portfolio"] = portfolio_from_dataframe(
+                            hld_enriched, name="ICICI Holdings"
+                        )
+                        st.rerun()
+                    except Exception as exc:
+                        st.session_state.pop("bpos_niftyrisk_report", None)
+                        st.error(f"NiftyRisk failed: {exc}")
+        with btn_clear:
+            if st.button(
+                "Clear report",
+                key="bpos_clear_niftyrisk",
+                disabled=not report,
+                use_container_width=True,
+            ):
+                st.session_state.pop("bpos_niftyrisk_report", None)
+                st.rerun()
+
+        if hld_err:
+            st.warning(f"Holdings unavailable: {hld_err}")
+        elif not hld_rows:
+            st.info("No holdings loaded — click **Refresh now** to fetch from ICICI.")
+        elif report:
+            render_risk_dashboard(report, key_prefix="bpos_nr")
 
 
 def _count_trade_tickers(trd_rows: list) -> int:
@@ -3087,6 +3224,8 @@ def _render_bpos_trades_tab(
 def _bpos_clear_cache() -> None:
     for k in _BPOS_CACHE_KEYS:
         st.session_state.pop(k, None)
+    st.session_state.pop("bpos_niftyrisk_report", None)
+    st.session_state.pop("bpos_hld_ltp_cache", None)
 
 
 def _bpos_fetch_snapshot(*, force: bool = False) -> None:
@@ -3166,6 +3305,8 @@ def _render_breeze_positions_content() -> None:
         )
     )
 
+    _render_bpos_niftyrisk_panel(hld_rows, hld_err, session_pred=session_pred)
+
     trd_summary_n = _count_trade_tickers(trd_rows)
     tab_pos, tab_ord, tab_trd, tab_hld = st.tabs(
         [
@@ -3233,17 +3374,42 @@ def _render_breeze_positions_content() -> None:
         )
 
     with tab_hld:
-        st.caption("Delivery holdings — exit hints apply if the symbol was in today's scan.")
+        st.caption(
+            "Delivery holdings — **average_price** / **ltp** come from Breeze NSE portfolio holdings "
+            "and live quotes (demat API is quantity-only). Exit hints apply if the symbol was in today's scan."
+        )
         if hld_err:
             st.error(f"Could not load holdings: {hld_err}")
-        df = _breeze_rows_to_df(
-            hld_rows,
-            ("stock_code", "quantity", "average_price", "current_market_price", "ltp"),
-        )
-        if df.empty:
+        hld_enriched = _bpos_holdings_enriched_df(hld_rows, session_pred=session_pred)
+        if hld_enriched.empty:
             st.info("No holdings found.")
         else:
-            st.dataframe(_enrich_breeze_portfolio_df(df, session_pred=session_pred), use_container_width=True, hide_index=True)
+            st.dataframe(hld_enriched, use_container_width=True, hide_index=True)
+            d1, d2 = st.columns(2)
+            with d1:
+                st.download_button(
+                    "⬇ Download Holdings CSV (full)",
+                    hld_enriched.to_csv(index=False).encode("utf-8"),
+                    file_name=f"icici_holdings_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv",
+                    key="bpos_hld_full_csv",
+                )
+            with d2:
+                try:
+                    from niftyrisk.icici_bridge import portfolio_from_dataframe, portfolio_to_niftyrisk_csv
+
+                    nr_port = portfolio_from_dataframe(hld_enriched, name="ICICI Holdings")
+                    st.download_button(
+                        "⬇ Export for NiftyRisk (CSV)",
+                        portfolio_to_niftyrisk_csv(nr_port).encode("utf-8"),
+                        file_name=f"niftyrisk_icici_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                        mime="text/csv",
+                        key="bpos_hld_niftyrisk_csv",
+                        help="Slim CSV: ticker, quantity, avg_price",
+                    )
+                except ValueError as exc:
+                    st.caption(str(exc))
+            st.caption("Use **▶ Calculate NiftyRisk** above for VaR, beta, and risk grade on this portfolio.")
 
 
 def render_breeze_positions_page() -> None:

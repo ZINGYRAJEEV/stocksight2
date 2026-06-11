@@ -189,11 +189,13 @@ with st.container(border=True):
 <div style='font-size:0.72rem; color:#2e5070; line-height:1.6;'>
 <b style='color:#a3d8b8;">Data source</b><br>
 Yahoo Finance via yfinance<br><br>
-<b style='color:#a3d8b8;">Scoring</b><br>
-PE (40pts) + Vol (30pts) + RSI (30pts)<br><br>
+<b style='color:#a3d8b8;">Composite (0–100)</b><br>
+Momentum 25 · Fundamentals 20 · Volume 15 · RS 15 · Trend 15 · News 10<br><br>
+<b style='color:#a3d8b8;">Output</b><br>
+Quality Gate A–D → Decision: Buy/Watch · Neutral · Skip<br>
+Returns chips 1M·3M·6M·1Y · Analyst targets when ≥3 analysts<br><br>
 <b style='color:#a3d8b8;">Indicators</b><br>
-RSI-14 · Volume vs 20-bar avg · MACD hist · MA20 vs price · Bollinger %B · ATR14 · Next earnings (best-effort)<br>
-Trailing PE via Yahoo Finance
+RSI · MACD · MA20/50 · Bollinger %B · PE · ROE · Rev growth · Vol ratio · RS vs Nifty
 </div>
 """,
             unsafe_allow_html=True,
@@ -371,6 +373,22 @@ else:
             </div>
             """, unsafe_allow_html=True)
 
+    if "Conflict" in df.columns:
+        conflict_rows = df[df["Conflict"].astype(str).str.contains("wait for RSI", case=False, na=False)]
+    elif "Quality Gate" in df.columns and "Composite" in df.columns:
+        conflict_rows = df[
+            (df["Composite"].astype(float) >= 60)
+            & (df["Quality Gate"].astype(str).str.startswith("🔴"))
+        ]
+    else:
+        conflict_rows = pd.DataFrame()
+    if not conflict_rows.empty:
+        for _, crow in conflict_rows.head(3).iterrows():
+            st.warning(
+                f"**{crow.get('Ticker', '—')}** — Strong setup — wait for RSI to pull back below 70 before entry "
+                f"(composite {float(crow.get('Composite', 0)):.0f}, gate D)."
+            )
+
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### Results")
     display_df = df.copy()
@@ -404,6 +422,7 @@ else:
         display_df,
         {
             "Market sentiment": st.column_config.TextColumn("Market sentiment", width="medium"),
+            "StockSight sentiment": st.column_config.TextColumn("StockSight sentiment", width="small"),
             "Sentiment why": st.column_config.TextColumn("Sentiment why", width="large"),
             SCAN_RESULTS_NEWS_COL: st.column_config.TextColumn(SCAN_RESULTS_NEWS_COL, width="large"),
             SCAN_NEWS_SCORE_COL: st.column_config.ProgressColumn(SCAN_NEWS_SCORE_COL, min_value=0, max_value=100, format="%d"),
@@ -413,7 +432,16 @@ else:
             SCAN_CONFIRM_ACTION_COL: st.column_config.TextColumn(SCAN_CONFIRM_ACTION_COL, width="medium"),
             "Decision": st.column_config.TextColumn("Decision", width="medium"),
             "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
+            "Conflict": st.column_config.TextColumn("Conflict", width="large"),
+            "Returns": st.column_config.TextColumn("Returns", width="medium"),
+            "Flags": st.column_config.TextColumn("Flags", width="medium"),
             "Composite": st.column_config.NumberColumn("Composite", format="%.1f"),
+            "G1 Momentum": st.column_config.NumberColumn("G1 Momentum", format="%d"),
+            "G2 Fundamentals": st.column_config.NumberColumn("G2 Fundamentals", format="%d"),
+            "G3 Volume": st.column_config.NumberColumn("G3 Volume", format="%d"),
+            "G4 RS": st.column_config.NumberColumn("G4 RS", format="%d"),
+            "G5 Trend": st.column_config.NumberColumn("G5 Trend", format="%d"),
+            "G6 News": st.column_config.NumberColumn("G6 News", format="%d"),
             "Price": st.column_config.NumberColumn(format="%.2f"),
             "PE Ratio": st.column_config.NumberColumn(format="%.1f"),
             "Volume Ratio": st.column_config.NumberColumn(format="%.2f"),
@@ -527,7 +555,7 @@ st.markdown(
 <div style='background:#122f25; border:1px solid #1a3b31; border-radius:8px; padding:18px 20px; margin-bottom:8px;'>
     <div style='font-size:1rem; font-weight:600; color:#e8f7ef;'>About this screener</div>
     <div style='margin-top:10px; color:#a3d8b8; font-size:0.9rem; line-height:1.55;'>
-        StockSight ranks stocks that pass PE, relative volume, and RSI gates. Use <b>SCAN NOW</b> after tuning filters.
+        StockSight ranks stocks with a 6-group composite score and quality gate (A–D). Use <b>SCAN NOW</b> after tuning filters.
         Links open in a new tab.
     </div>
     <div style='margin-top:14px; font-size:0.72rem; color:#7abeac; line-height:1.9;'>

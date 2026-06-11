@@ -237,10 +237,28 @@ def page_central_brain() -> None:
     exec_stocksight_page("Central Brain.py")
 
 
+def page_niftyrisk() -> None:
+    from niftyrisk_page import render_niftyrisk_page
+
+    render_niftyrisk_page()
+
+
 def page_buyback_screener() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
     exec_stocksight_page("Buyback Screener.py")
+
+
+def page_bulk_order() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Bulk Order.py")
+
+
+def page_nse_intraday_intel() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("NSE Intraday Intel.py")
 
 
 def page_pre_investigation() -> None:
@@ -307,7 +325,10 @@ __all__ = [
     "page_volume_gravity",
     "page_markov_regime",
     "page_central_brain",
+    "page_niftyrisk",
     "page_buyback_screener",
+    "page_bulk_order",
+    "page_nse_intraday_intel",
     "page_pre_investigation",
     "page_peter_lynch",
     "page_fast_movers",

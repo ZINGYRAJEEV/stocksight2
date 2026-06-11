@@ -17,7 +17,6 @@ from multibagger import (
     scan_multibagger,
     scan_proven_multibaggers,
 )
-from screener import decision_from_metrics
 from scan_history_store import append_scan_record
 from ui_components import (
     ensure_session_choice,
@@ -249,20 +248,19 @@ Table columns from Yahoo Finance where data exists
         for rank, r in enumerate(results, start=1):
             roce_lbl = f"{r.roce_pct:.1f}" + ("*" if r.roce_is_roe_proxy else "")
             fit = min(100.0, float(r.fit_score or 0))
-            decision, composite, matrix_note = decision_from_metrics(
-                r.pe, None, None, score=fit, signal_label="BUY", scenario_id="multibagger"
-            )
             row = {
                 "S.No.": rank,
                 "Name": r.label,
                 "Ticker": r.ticker,
                 "Raw": r.raw_ticker,
                 "Currency": r.currency or "INR",
-                "Decision": decision,
-                "Composite": composite if composite == composite else fit,
-                "Matrix note": matrix_note,
-                "CMP": r.price,
+                "Fit score": fit,
+                "Price": r.price,
+                "PE Ratio": r.pe,
                 "P/E": r.pe,
+                "Rev growth %": r.qtr_sales_var_pct,
+                "ROE %": r.roce_pct,
+                "CMP": r.price,
                 "Mar Cap": r.market_cap_display or "",
                 "Mar Cap Rs.Cr.": r.market_cap_cr,
                 "Mar Cap $B": r.market_cap_usd_bn,
@@ -285,12 +283,13 @@ Table columns from Yahoo Finance where data exists
             if empty_str_col in df.columns and not df[empty_str_col].astype(str).str.strip().any():
                 df = df.drop(columns=[empty_str_col])
 
+        from ui_components import stock_sight_column_config
+
         col_cfg = filter_column_config(
             df,
             {
-                "Decision": st.column_config.TextColumn("Decision", width="medium"),
-                "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
-                "Composite": st.column_config.NumberColumn(format="%.1f"),
+                **stock_sight_column_config(),
+                "Fit score": st.column_config.NumberColumn("Fit score", format="%.1f"),
                 "CMP": st.column_config.NumberColumn(format="%.2f"),
                 "P/E": st.column_config.NumberColumn(format="%.2f"),
                 "Mar Cap": st.column_config.TextColumn("Mar Cap", help="Market cap in native units (₹ Cr / $ B / $ T)."),
@@ -526,14 +525,20 @@ def render_proven_multibaggers_section() -> None:
             "Raw": r.raw_ticker,
             "Currency": r.currency or "INR",
             "Sector": r.sector,
+            "Price": r.price,
             "CMP": r.price,
+            "PE Ratio": r.pe,
             f"~{r.lookback_years}y Return %": r.past_return_pct,
             "↓52w High %": r.drawdown_from_52w_high_pct,
             "vs 200-DMA %": r.pct_vs_ma200,
+            "% vs MA20": r.pct_vs_ma200,
             "RSI": r.rsi,
             "P/E": r.pe,
+            "ROE %": r.roce_pct,
             "ROCE %": r.roce_pct,
+            "Rev growth %": r.qtr_profit_var_pct,
             "Qtr Profit Var %": r.qtr_profit_var_pct,
+            "Fit score": r.fit_score,
             "Mar Cap": r.market_cap_display or "",
             "Mar Cap Rs.Cr.": r.market_cap_cr,
             "Mar Cap $B": r.market_cap_usd_bn,

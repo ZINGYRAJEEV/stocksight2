@@ -9,8 +9,8 @@ import pandas as pd
 import streamlit as st
 
 from high_profit import ARCHETYPES, nav_title
-from screener import composite_action_zone, fetch_recent_quote_news, matrix_decision_note
-from ui_components import render_clickable_scan_table
+from screener import fetch_recent_quote_news
+from ui_components import render_clickable_scan_table, stock_sight_column_config
 
 
 def high_profit_header(archetype_id: str) -> None:
@@ -56,18 +56,16 @@ def high_profit_rank_table(
 
     rows = []
     for rank, r in enumerate(results, start=1):
-        decision = composite_action_zone(r.score)
         row = {
             "Rank": rank,
             "Ticker": r.ticker,
-            "Decision": decision,
-            "Composite": r.score,
-            "Matrix note": matrix_decision_note(decision),
+            "HP Score": r.score,
             "Price": r.price,
+            "PE Ratio": r.pe if r.pe < 9000 else None,
             "PE": r.pe if r.pe < 9000 else None,
+            "Volume Ratio": r.vol_ratio,
             "Vol×": r.vol_ratio,
             "RSI": r.rsi,
-            "Score": r.score,
             "Buy?": r.buy_action,
             "Precautions": r.precautions,
         }
@@ -86,14 +84,12 @@ def high_profit_rank_table(
 
     df = pd.DataFrame(rows)
     col_cfg = {
-        "Decision": st.column_config.TextColumn("Decision", width="medium"),
-        "Matrix note": st.column_config.TextColumn("Matrix note", width="large"),
-        "Composite": st.column_config.NumberColumn("Composite", format="%.1f"),
+        **stock_sight_column_config(),
         "Price": st.column_config.NumberColumn("Price ₹", format="%.0f"),
         "PE": st.column_config.NumberColumn("PE", format="%.1f"),
         "Vol×": st.column_config.NumberColumn("Vol×", format="%.2f"),
         "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),
-        "Score": st.column_config.NumberColumn("Score", format="%.1f"),
+        "HP Score": st.column_config.NumberColumn("HP Score", format="%.1f"),
         "Buy?": st.column_config.TextColumn("Buy?", width="medium"),
         "Precautions": st.column_config.TextColumn("Precautions", width="large"),
     }

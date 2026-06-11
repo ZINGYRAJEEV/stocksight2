@@ -339,7 +339,7 @@ def _score_stock_layer(row: dict[str, Any]) -> tuple[int, list[str], list[str]]:
 
 def _score_sector_layer(row: dict[str, Any], macro: MacroContext) -> tuple[str, str]:
     sector = _str_val(row, "Sector", "sector")
-    rs = _num(row, "RS20", "rel_strength_20d", "RS20_vs_idx")
+    rs = _num(row, "RS vs Idx", "RS20", "rel_strength_20d", "RS20_vs_idx")
     chg = _num(row, "% chg", "pct_change", "Change %")
 
     if rs is not None:
