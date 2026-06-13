@@ -7,7 +7,8 @@ from datetime import timedelta
 import pandas as pd
 import streamlit as st
 
-from bulk_order_page import _news_by_slug, _render_screener_setup
+from bulk_order_page import _news_by_slug
+from screener_session_ui import render_screener_session_panel
 from nse_intraday_intel import (
     IntradayIntelRecord,
     build_intel_batch,
@@ -304,7 +305,13 @@ def render_nse_intraday_intel_page() -> None:
         "Educational only — not SEBI-registered advice. Verify filings and tape before trading.",
     )
 
-    _render_screener_setup()
+    render_screener_session_panel(
+        key_prefix="nii_screener",
+        success_message=(
+            "Screener.in session active — Bulk Order feed + company announcements enabled."
+        ),
+        extra_setup_links=f"- [Order search on Screener]({SCREENER_ORDER_URL})",
+    )
 
     with st.expander("📖 How this screen works", expanded=False):
         st.markdown(

@@ -95,14 +95,63 @@ def _screener_secrets_from_toml() -> dict[str, str]:
     return {}
 
 
-def get_screener_credentials() -> dict[str, str]:
+def set_screener_cookie_override(cookies: dict[str, str]) -> None:
+    """Apply refreshed cookies in this Streamlit session (avoids restart after refresh)."""
+    try:
+        import streamlit as st
+
+        if cookies.get("sessionid"):
+            st.session_state["_screener_cookies_override"] = {
+                k: str(cookies[k])
+                for k in ("sessionid", "csrftoken")
+                if cookies.get(k)
+            }
+    except Exception:
+        pass
+
+
+def get_screener_credentials(*, auto_refresh: bool = True) -> dict[str, str]:
     """sessionid + csrftoken from env or Streamlit secrets (optional)."""
     out: dict[str, str] = {}
-    for key in ("sessionid", "csrftoken"):
-        env_key = f"SCREENER_{key.upper()}"
-        val = os.environ.get(env_key, "").strip()
-        if val:
-            out[key] = val
+    try:
+        import streamlit as st
+
+        ov = st.session_state.get("_screener_cookies_override")
+        if isinstance(ov, dict) and ov.get("sessionid"):
+            out = {k: str(ov[k]) for k in ("sessionid", "csrftoken") if ov.get(k)}
+    except Exception:
+        pass
+    if out:
+        if auto_refresh:
+            try:
+                from screener_auth import ensure_screener_session, is_screener_session_valid
+
+                if not is_screener_session_valid(out):
+                    refreshed = ensure_screener_session(save=True)
+                    if refreshed.ok and refreshed.cookies.get("sessionid"):
+                        out = {
+                            k: refreshed.cookies[k]
+                            for k in ("sessionid", "csrftoken")
+                            if refreshed.cookies.get(k)
+                        }
+                        set_screener_cookie_override(out)
+            except Exception:
+                pass
+        return out
+
+    try:
+        from screener_auth import is_screener_session_valid, load_screener_block
+
+        block = load_screener_block()
+        out = {k: block[k] for k in ("sessionid", "csrftoken") if block.get(k)}
+    except ImportError:
+        out = {}
+    if not out:
+        for key in ("sessionid", "csrftoken"):
+            env_key = f"SCREENER_{key.upper()}"
+            val = os.environ.get(env_key, "").strip()
+            if val:
+                out[key] = val
     try:
         import streamlit as st
 
@@ -122,6 +171,22 @@ def get_screener_credentials() -> dict[str, str]:
         pass
     if not out.get("sessionid"):
         out.update(_screener_secrets_from_toml())
+
+    if auto_refresh and out.get("sessionid"):
+        try:
+            from screener_auth import ensure_screener_session, is_screener_session_valid
+
+            if not is_screener_session_valid(out):
+                refreshed = ensure_screener_session(save=True)
+                if refreshed.ok and refreshed.cookies.get("sessionid"):
+                    out = {
+                        k: refreshed.cookies[k]
+                        for k in ("sessionid", "csrftoken")
+                        if refreshed.cookies.get(k)
+                    }
+                    set_screener_cookie_override(out)
+        except Exception:
+            pass
     return out
 
 

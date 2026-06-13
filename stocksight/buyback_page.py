@@ -26,6 +26,13 @@ from buyback_announcements import (
     get_screener_feed_status,
 )
 from buyback_store import load_analyses, load_opportunities, save_opportunities
+from groww_buyback import (
+    GROWW_BUYBACK_URL,
+    GROWW_ROW_STYLE,
+    fetch_groww_buybacks,
+    groww_buybacks_to_rows,
+    match_groww_buyback,
+)
 from screener import get_stock_links
 from ui_components import inject_css, page_audience_note, safe_set_page_config
 
@@ -161,6 +168,11 @@ def _render_education() -> None:
         )
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_groww_buybacks() -> list:
+    return fetch_groww_buybacks()
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def _cached_buyback_announcements(max_age_days: int, enrich_prices: bool) -> list[dict]:
     anns = fetch_buyback_announcements(
@@ -189,38 +201,62 @@ def _load_announcement_into_calculator(row: dict) -> None:
 
 
 def _render_screener_setup_hint() -> None:
-    status = get_screener_feed_status()
-    if status.get("login_configured"):
-        st.success(
-            "Screener.in session configured — pulling "
+    from screener_session_ui import render_screener_session_panel
+
+    render_screener_session_panel(
+        key_prefix="bb_screener",
+        success_message=(
+            "Screener.in session active — pulling "
             f"[full-text buyback search]({SCREENER_IN_BUYBACK_URL}) automatically."
-        )
-        return
-    with st.expander("🔐 Enable Screener.in full-text feed (recommended)", expanded=False):
-        st.markdown(
-            f"""
-[Screener.in buyback announcements]({SCREENER_IN_BUYBACK_URL}) is a **premium-quality filing feed**
-but requires a **free** Screener login when fetched programmatically.
-
-**One-time setup** (local only, in `.streamlit/secrets.toml`):
-
-```toml
-[screener]
-sessionid = "paste-from-browser"
-csrftoken = "paste-from-browser"
-```
-
-1. Log in at [screener.in](https://www.screener.in/login/).
-2. Open DevTools → Application → Cookies → `www.screener.in`.
-3. Copy `sessionid` and `csrftoken` into the block above.
-4. Restart Streamlit.
-
-Without login we still scan **recent Screener filings** across Nifty 500 (rotating batch) plus Google News.
-"""
-        )
+        ),
+        extra_setup_links=(
+            f"- [Screener buyback full-text search]({SCREENER_IN_BUYBACK_URL})\n"
+            "- Without login we still scan recent Nifty 500 filings (rotating) + Google News."
+        ),
+        expand_setup_when_invalid=True,
+    )
 
 
-def _render_live_announcements() -> None:
+def _render_groww_panel() -> list:
+    """Show Groww active buybacks; return list for row matching."""
+    groww_items = _cached_groww_buybacks()
+    st.markdown("#### 🟢 Groww active buybacks")
+    st.caption(
+        f"Open buybacks from [Groww]({GROWW_BUYBACK_URL}) — "
+        "**green rows** below when record date is still valid (today or later)."
+    )
+    g1, g2 = st.columns([1, 3])
+    with g1:
+        st.link_button("🔗 Groww buybacks", GROWW_BUYBACK_URL, use_container_width=True)
+    with g2:
+        if st.button("🔄 Refresh Groww", key="bb_groww_refresh"):
+            _cached_groww_buybacks.clear()
+
+    if not groww_items:
+        st.warning("Could not load Groww buyback list — check network or try Refresh Groww.")
+        return []
+
+    valid_n = sum(1 for g in groww_items if g.record_still_valid)
+    st.info(f"**{len(groww_items)}** open on Groww · **{valid_n}** with record date still valid.")
+    gw_df = pd.DataFrame(groww_buybacks_to_rows(groww_items))
+    mask = [g.record_still_valid for g in groww_items]
+    styler = gw_df.style.apply(
+        lambda row: [GROWW_ROW_STYLE] * len(row) if mask[row.name] else [""] * len(row),
+        axis=1,
+    )
+    st.dataframe(
+        styler,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Offer ₹": st.column_config.NumberColumn(format="₹%.2f"),
+            "Groww": st.column_config.LinkColumn(display_text="Groww ↗"),
+        },
+    )
+    return groww_items
+
+
+def _render_live_announcements(groww_items: list | None = None) -> None:
     st.markdown("#### 📢 Live buyback announcements")
     st.caption(
         "Screener.in filings + Google News RSS — refreshed automatically so you see new offers early. "
@@ -228,13 +264,15 @@ def _render_live_announcements() -> None:
     )
     _render_screener_setup_hint()
 
-    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
     with c1:
         st.link_button(
             "🔗 Screener.in buyback filings",
             SCREENER_IN_BUYBACK_URL,
             use_container_width=True,
         )
+    with c5:
+        st.link_button("🔗 Groww buybacks", GROWW_BUYBACK_URL, use_container_width=True)
     with c2:
         new_only = st.checkbox("New only", value=False, key="bb_ann_new_only")
     with c3:
@@ -266,20 +304,42 @@ def _render_live_announcements() -> None:
         news_n = len(rows) - screener_n
         st.caption(f"Sources: **{screener_n}** Screener.in · **{news_n}** Google News")
 
+        items = groww_items if groww_items is not None else _cached_groww_buybacks()
+        groww_links = []
+        groww_valid = []
+        for _, row in df.iterrows():
+            hit = match_groww_buyback(
+                str(row.get("Company", "")),
+                ticker=str(row.get("Ticker", "")),
+                items=items,
+            )
+            groww_links.append(hit.detail_url if hit else None)
+            groww_valid.append(bool(hit and hit.record_still_valid))
+        df = df.copy()
+        df["Groww"] = groww_links
+        df["Groww valid"] = ["✅" if v else "—" for v in groww_valid]
+
         show_cols = [
             "", "Age", "Company", "Headline", "Source", "Type", "Offer ₹", "Size %",
-            "Record date", "CMP ₹", "Premium %", "Est. small ret %", "Worth watch",
-            "Announcement", "Screener", "NSE",
+            "Record date", "Groww valid", "CMP ₹", "Premium %", "Est. small ret %", "Worth watch",
+            "Announcement", "Screener", "NSE", "Groww",
         ]
         show_cols = [c for c in show_cols if c in df.columns]
+        view = df[show_cols]
+        mask = groww_valid
+        styler = view.style.apply(
+            lambda row: [GROWW_ROW_STYLE] * len(row) if mask[row.name] else [""] * len(row),
+            axis=1,
+        )
         st.dataframe(
-            df[show_cols],
+            styler,
             use_container_width=True,
             hide_index=True,
             column_config={
                 "Announcement": st.column_config.LinkColumn(display_text="News ↗"),
                 "Screener": st.column_config.LinkColumn(display_text="Screener ↗"),
                 "NSE": st.column_config.LinkColumn(display_text="NSE ↗"),
+                "Groww": st.column_config.LinkColumn(display_text="Groww ↗"),
                 "Offer ₹": st.column_config.NumberColumn(format="₹%.0f"),
                 "CMP ₹": st.column_config.NumberColumn(format="₹%.2f"),
                 "Premium %": st.column_config.NumberColumn(format="%+.1f"),
@@ -313,15 +373,35 @@ def _render_live_announcements() -> None:
     _live_feed()
 
 
-def _render_screener_table(analyses: list) -> None:
+def _render_screener_table(analyses: list, groww_items: list | None = None) -> None:
     active = [a for a in analyses if a.status == "active"]
     past = [a for a in analyses if a.status != "active"]
+    items = groww_items if groww_items is not None else _cached_groww_buybacks()
 
     if active:
         st.markdown("#### 🟢 Active opportunities")
         df = pd.DataFrame([analysis_to_row(a) for a in active])
-        show = [c for c in df.columns if c != "Raw"]
-        styler = df[show].style.apply(_return_style, subset=["Small return %"])
+        groww_links = []
+        groww_valid = []
+        for _, row in df.iterrows():
+            hit = match_groww_buyback(
+                str(row.get("Stock", "")),
+                ticker=str(row.get("Raw", "")),
+                items=items,
+            )
+            groww_links.append(hit.detail_url if hit else None)
+            groww_valid.append(bool(hit and hit.record_still_valid))
+        df["Groww"] = groww_links
+        df["Groww valid"] = ["✅" if v else "—" for v in groww_valid]
+
+        show = [c for c in df.columns if c not in ("Raw",)]
+        view = df[show]
+        mask = groww_valid
+        styler = view.style.apply(_return_style, subset=["Small return %"])
+        styler = styler.apply(
+            lambda row: [GROWW_ROW_STYLE] * len(row) if mask[row.name] else [""] * len(row),
+            axis=1,
+        )
         st.dataframe(
             styler,
             use_container_width=True,
@@ -333,6 +413,7 @@ def _render_screener_table(analyses: list) -> None:
                 "General acceptance %": st.column_config.NumberColumn(format="%.1f"),
                 "Premium %": st.column_config.NumberColumn(format="%+.1f"),
                 "Google Finance": st.column_config.LinkColumn(display_text="Google ↗"),
+                "Groww": st.column_config.LinkColumn(display_text="Groww ↗"),
             },
         )
 
@@ -498,16 +579,25 @@ def render_buyback_page() -> None:
 
     analyses = load_analyses()
 
+    groww_items = _cached_groww_buybacks()
+
     with tab_live:
-        _render_live_announcements()
+        _render_live_announcements(groww_items)
 
     with tab_screen:
+        groww_items = _render_groww_panel() or groww_items
         worth = [a for a in analyses if a.worth_playing and a.status == "active"]
         if worth:
             st.success(
                 f"**{len(worth)}** active offer(s) with small-holder return ≥ {WORTH_PLAYING_RETURN_PCT:.0f}%."
             )
-        _render_screener_table(analyses)
+        valid_groww = sum(1 for g in groww_items if g.record_still_valid)
+        if valid_groww:
+            st.caption(
+                f"Rows highlighted **green** when listed on Groww with record date still valid "
+                f"({valid_groww} open offer(s) qualify today)."
+            )
+        _render_screener_table(analyses, groww_items)
 
     with tab_calc:
         _render_calculator()

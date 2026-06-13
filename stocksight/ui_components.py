@@ -48,6 +48,8 @@ try:
     from .news_scanner import attach_news_scanner_columns
     from .quality_gate import (
         GATE_COL,
+        GATE_SCORE_COL,
+        GATE_WHY_COL,
         apply_quality_gate_columns,
         build_scenario_confluence_map,
         dataframe_gate_styler,
@@ -83,6 +85,8 @@ except ImportError:
     from news_scanner import attach_news_scanner_columns  # type: ignore[no-redef]
     from quality_gate import (  # type: ignore[no-redef]
         GATE_COL,
+        GATE_SCORE_COL,
+        GATE_WHY_COL,
         apply_quality_gate_columns,
         build_scenario_confluence_map,
         dataframe_gate_styler,
@@ -150,6 +154,9 @@ def stock_sight_column_config() -> dict:
     """Shared column config for StockSight composite / gate columns."""
     if st is None:
         return {}
+    gate_col = "Quality Gate"
+    gate_score_col = "Gate score"
+    gate_why_col = "Gate why"
     return {
         "Composite": st.column_config.NumberColumn("Composite", format="%.1f"),
         "StockSight score": st.column_config.NumberColumn("StockSight score", format="%.1f"),
@@ -168,9 +175,11 @@ def stock_sight_column_config() -> dict:
         "G4 RS": st.column_config.NumberColumn("G4 RS", format="%d"),
         "G5 Trend": st.column_config.NumberColumn("G5 Trend", format="%d"),
         "G6 News": st.column_config.NumberColumn("G6 News", format="%d"),
-        GATE_COL: st.column_config.TextColumn(GATE_COL, width="small"),
-        GATE_SCORE_COL: st.column_config.ProgressColumn(GATE_SCORE_COL, min_value=0, max_value=100, format="%d"),
-        GATE_WHY_COL: st.column_config.TextColumn(GATE_WHY_COL, width="large"),
+        gate_col: st.column_config.TextColumn(gate_col, width="small"),
+        gate_score_col: st.column_config.ProgressColumn(
+            gate_score_col, min_value=0, max_value=100, format="%d",
+        ),
+        gate_why_col: st.column_config.TextColumn(gate_why_col, width="large"),
     }
 
 

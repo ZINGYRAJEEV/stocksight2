@@ -18,6 +18,7 @@ from screener_bulk_order import (
     fetch_company_news_for_symbols,
     screener_login_configured,
 )
+from screener_session_ui import render_screener_session_panel
 from ui_components import inject_css, page_audience_note, safe_set_page_config
 
 META = {
@@ -28,38 +29,20 @@ META = {
 
 
 def _render_screener_setup() -> None:
-    if screener_login_configured():
-        st.success(
-            "Screener.in session configured — fetching "
+    render_screener_session_panel(
+        key_prefix="bo_screener",
+        success_message=(
+            "Screener.in session active — fetching "
             f"[order announcements]({SCREENER_ORDER_URL}), "
             f"[bulk deals]({SCREENER_BULK_DEALS_URL}), and "
             f"[block deals]({SCREENER_BLOCK_DEALS_URL})."
-        )
-        return
-    with st.expander("🔐 Enable Screener.in feeds (free login)", expanded=True):
-        st.markdown(
-            f"""
-[Screener.in](https://www.screener.in/) full-text search and **Trades & Deals** pages require a
-**free** account when fetched programmatically.
-
-**Setup** — add to `.streamlit/secrets.toml`:
-
-```toml
-[screener]
-sessionid = "paste-from-browser"
-csrftoken = "paste-from-browser"
-```
-
-1. Log in at [screener.in/login](https://www.screener.in/login/).
-2. DevTools → Application → Cookies → `www.screener.in` → copy `sessionid` and `csrftoken`.
-3. Restart Streamlit.
-
-**Reference links**
-- [Order full-text search]({SCREENER_ORDER_URL})
-- [Trades hub]({SCREENER_TRADES_URL}) · [Bulk deals]({SCREENER_BULK_DEALS_URL}) · [Block deals]({SCREENER_BLOCK_DEALS_URL})
-- [Bulk & block deals feature](https://www.screener.in/docs/changelog/Bulk-Blockdeals-Screener/)
-"""
-        )
+        ),
+        extra_setup_links=(
+            f"- [Order full-text search]({SCREENER_ORDER_URL})\n"
+            f"- [Trades hub]({SCREENER_TRADES_URL}) · "
+            f"[Bulk deals]({SCREENER_BULK_DEALS_URL}) · [Block deals]({SCREENER_BLOCK_DEALS_URL})"
+        ),
+    )
 
 
 def _ticker_from_slug(slug: str) -> str:
