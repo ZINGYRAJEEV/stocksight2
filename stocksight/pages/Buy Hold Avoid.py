@@ -7,6 +7,8 @@ import streamlit as st
 import pandas as pd
 from scan_history_store import append_scan_record
 from screener import UNIVERSES, screen_stocks
+from session_utils import deduplicate_scan_results
+from stock_analysis_framework import StockAnalysisFramework
 from ui_components import (
     filter_column_config,
     inject_css,
@@ -20,6 +22,13 @@ from ui_components import (
 
 safe_set_page_config(page_title="Buy / Hold / Avoid | StockSight", page_icon="📊", layout="wide")
 inject_css()
+
+# Feature flag for stock analysis framework
+enable_analysis_framework = st.sidebar.checkbox(
+    "Enable 7-Category Analysis (Beta)",
+    value=True,
+    help="Adds Valuation, Profitability, Growth, Financial Health, Cash Flow, Management, Relative Strength scores"
+)
 
 st.markdown("""
 <style>
@@ -221,6 +230,18 @@ if fetch_btn:
             rsi_min=0.0,
             progress_callback=progress_cb,
         )
+    
+    # Remove duplicate records
+    if not df.empty:
+        df = deduplicate_scan_results(df)
+    
+    # Apply 7-category stock analysis framework if enabled
+    if enable_analysis_framework and not df.empty:
+        try:
+            framework = StockAnalysisFramework()
+            df = framework.enrich_dataframe(df)
+        except Exception as e:
+            st.warning(f"⚠️ Stock analysis framework error: {str(e)}")
 
     try:
         syms_out: list[str] = []

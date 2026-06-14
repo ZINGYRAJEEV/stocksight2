@@ -20,6 +20,8 @@ from ui_components import (
     render_watchlist_panel,
     safe_set_page_config,
 )
+from session_utils import deduplicate_scan_results
+from stock_analysis_framework import StockAnalysisFramework
 from volume_led_screener import (
     META,
     MONTHLY_RSI_ENTRY,
@@ -120,6 +122,13 @@ def render_volume_led_page() -> None:
     st.markdown(f"### {META['emoji']} {META['title']}")
     page_audience_note(META["audience"], META["purpose"])
     _rules_panel()
+    
+    # Feature flag for stock analysis framework
+    enable_analysis_framework = st.sidebar.checkbox(
+        "Enable 7-Category Analysis (Beta)",
+        value=True,
+        help="Adds Valuation, Profitability, Growth, Financial Health, Cash Flow, Management, Relative Strength scores"
+    )
 
     key = "vlm"
     session_key = f"{key}_results"
@@ -353,6 +362,19 @@ def render_volume_led_page() -> None:
         )
         data = [result_to_row(r, i) for i, r in enumerate(ordered, start=1)]
         df = pd.DataFrame(data)
+        
+        # Remove duplicate records
+        if not df.empty:
+            df = deduplicate_scan_results(df)
+        
+        # Apply 7-category stock analysis framework if enabled
+        if enable_analysis_framework and not df.empty:
+            try:
+                framework = StockAnalysisFramework()
+                df = framework.enrich_dataframe(df)
+            except Exception as e:
+                st.warning(f"⚠️ Stock analysis framework error: {str(e)}")
+        
         df = prepare_scan_results_df(
             df,
             universe_name=last_uni,

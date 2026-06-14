@@ -1,6 +1,9 @@
 """
 StockSight — main fundamental + momentum screener (PE, volume, RSI, composite score).
 For: active traders and investors who want one ranked list across Nifty 50/500 or S&P 500.
+
+Enhanced with 7-category stock analysis framework (Valuation, Profitability, Growth,
+Financial Health, Cash Flow, Management, Relative Strength).
 """
 
 import streamlit as st
@@ -32,6 +35,9 @@ from ui_components import (
     render_watchlist_panel,
     safe_set_page_config,
 )
+from session_utils import SessionStateManager, safe_update_dataframe, deduplicate_scan_results
+from stock_analysis_framework import StockAnalysisFramework
+
 try:
     from quality_gate import GATE_COL, dataframe_gate_styler, render_quality_gate_legend
 except ImportError:
@@ -152,12 +158,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-if "app1_results_df" not in st.session_state:
-    st.session_state.app1_results_df = pd.DataFrame()
-if "app1_last_run" not in st.session_state:
-    st.session_state.app1_last_run = None
-if "app1_is_running" not in st.session_state:
-    st.session_state.app1_is_running = False
+# Initialize session state with proper duplicate prevention
+session_mgr = SessionStateManager("app1")
+session_mgr.initialize()
+
+# User preferences
+enable_analysis_framework = st.sidebar.checkbox(
+    "Enable 7-Category Analysis (Beta)",
+    value=True,
+    help="Adds Valuation, Profitability, Growth, Financial Health, Cash Flow, Management, Relative Strength scores"
+)
 
 col_h1, col_h2 = st.columns([3, 1])
 with col_h1:
@@ -279,7 +289,7 @@ st.caption(
 
 
 def run_stock_scan(progress_ph, status_ph):
-    st.session_state.app1_is_running = True
+    session_mgr.set_running(True)
     progress_bar = progress_ph.progress(0, text="Initialising…")
     status_text = status_ph
 
@@ -304,6 +314,18 @@ def run_stock_scan(progress_ph, status_ph):
         max_debt_equity=float(max_de_ui) if fund_on else None,
         min_revenue_growth_pct=float(min_rev_ui) if fund_on else None,
     )
+    
+    # Remove any duplicate records from scan results
+    if not df.empty:
+        df = deduplicate_scan_results(df)
+    
+    # Apply 7-category stock analysis framework if enabled
+    if enable_analysis_framework and not df.empty:
+        try:
+            framework = StockAnalysisFramework()
+            df = framework.enrich_dataframe(df)
+        except Exception as e:
+            st.warning(f"⚠️ Stock analysis framework error: {str(e)}")
 
     try:
         syms_out: list[str] = []
@@ -324,17 +346,18 @@ def run_stock_scan(progress_ph, status_ph):
 
     progress_ph.empty()
     status_ph.empty()
-    st.session_state.app1_results_df = df
-    st.session_state.app1_last_run = datetime.now()
-    st.session_state.app1_is_running = False
+    
+    # Use safe update to prevent duplicates
+    session_mgr.set_results(df)
+    session_mgr.set_running(False)
     st.session_state.pop("app1_yahoo_cache_sig", None)
 
 
 if run_app1:
     run_stock_scan(scan_progress_ph, scan_status_ph)
 
-if auto_refresh and st.session_state.app1_last_run:
-    elapsed = (datetime.now() - st.session_state.app1_last_run).total_seconds()
+if auto_refresh and session_mgr.get_last_run():
+    elapsed = (datetime.now() - session_mgr.get_last_run()).total_seconds()
     if elapsed >= 60:
         st.rerun()
     else:
@@ -346,10 +369,10 @@ st.markdown("---")
 if universe == "S&P 500 (NYSE)":
     st.caption(us_market_status_label())
 
-df = st.session_state.app1_results_df
-if df.empty and st.session_state.app1_last_run is None:
+df = session_mgr.get_results()
+if df.empty and session_mgr.get_last_run() is None:
     st.info("👆 Adjust filters if needed, then click **SCAN NOW** to populate the results table here.")
-elif df.empty and st.session_state.app1_last_run is not None:
+elif df.empty and session_mgr.get_last_run() is not None:
     st.warning("⚠️ No stocks passed the current filter combination. Try relaxing the thresholds.")
 else:
     total_scanned = len(UNIVERSES[universe])
