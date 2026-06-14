@@ -65,6 +65,7 @@ def _import_navigation_pages():
         "page_nse_intraday_intel",
         "page_pre_investigation",
         "page_peter_lynch",
+        "page_financially_free_swing",
         "page_volume_led_growth",
         "page_crisis_value",
         "page_fast_movers",
@@ -144,6 +145,7 @@ try:
     page_nse_intraday_intel = _nav["page_nse_intraday_intel"]
     page_pre_investigation = _nav["page_pre_investigation"]
     page_peter_lynch = _nav["page_peter_lynch"]
+    page_financially_free_swing = _nav["page_financially_free_swing"]
     page_volume_led_growth = _nav["page_volume_led_growth"]
     page_crisis_value = _nav["page_crisis_value"]
     page_fast_movers = _nav["page_fast_movers"]
@@ -253,6 +255,7 @@ NAV_PAGES = {
         st.Page(page_ath_playbook, title="ATH Strategy Playbook", icon="📖"),
     ],
     "🎯 Stage 2 Momentum": [
+        st.Page(page_financially_free_swing, title="Financially Free Swing", icon="💹"),
         st.Page(page_stage2_momentum, title="Stage 2 + VCP Screener", icon="🎯"),
         st.Page(page_volume_gravity, title="Volume Gravity (VWAP / POC)", icon="⚖️"),
     ],

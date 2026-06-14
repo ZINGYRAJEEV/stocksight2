@@ -279,6 +279,12 @@ def page_fast_movers() -> None:
     exec_stocksight_page("Fast Movers.py")
 
 
+def page_financially_free_swing() -> None:
+    from financially_free_page import render_financially_free_page
+
+    render_financially_free_page()
+
+
 def page_volume_led_growth() -> None:
     from volume_led_page import render_volume_led_page
 
@@ -338,6 +344,7 @@ __all__ = [
     "page_pre_investigation",
     "page_peter_lynch",
     "page_fast_movers",
+    "page_financially_free_swing",
     "page_volume_led_growth",
     "page_crisis_value",
 ]

@@ -1,0 +1,54 @@
+[
+  {
+    "stock": "Sarla Performance Fibers Ltd ",
+    "raw_ticker": "",
+    "buyback_pct": 1.41,
+    "small_holder_holding_pct": 1.0,
+    "participation_pct": 50.0,
+    "offer_type": "Tender",
+    "announcement_price": 6900.0,
+    "buyback_price": 10000.0,
+    "record_date": "05-jun-2026",
+    "post_buyback_price": 6900.0,
+    "status": "active"
+  },
+  {
+    "stock": "Bajaj Auto",
+    "raw_ticker": "BAJAJ-AUTO.NS",
+    "buyback_pct": 1.41,
+    "small_holder_holding_pct": 1.0,
+    "participation_pct": 50.0,
+    "offer_type": "Tender",
+    "announcement_price": 6900.0,
+    "buyback_price": 10000.0,
+    "record_date": "29-Feb-2024",
+    "post_buyback_price": 6900.0,
+    "status": "past"
+  },
+  {
+    "stock": "TCS",
+    "raw_ticker": "TCS.NS",
+    "buyback_pct": 1.5,
+    "small_holder_holding_pct": 2.5,
+    "participation_pct": 50.0,
+    "offer_type": "Tender",
+    "announcement_price": 3800.0,
+    "buyback_price": 4250.0,
+    "record_date": "",
+    "post_buyback_price": 3800.0,
+    "status": "past"
+  },
+  {
+    "stock": "Wipro",
+    "raw_ticker": "WIPRO.NS",
+    "buyback_pct": 2.0,
+    "small_holder_holding_pct": 3.0,
+    "participation_pct": 50.0,
+    "offer_type": "Tender",
+    "announcement_price": 450.0,
+    "buyback_price": 500.0,
+    "record_date": "",
+    "post_buyback_price": 450.0,
+    "status": "past"
+  }
+]
