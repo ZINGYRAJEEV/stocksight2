@@ -1051,7 +1051,37 @@ def _ratings_breakdown_from_frame(rec: pd.DataFrame) -> str:
     return ", ".join(parts)
 
 
-def fetch_analyst_recommendation(raw_ticker: str, *, current_price: Optional[float] = None) -> dict[str, Any]:
+def fetch_analyst_recommendation(raw_ticker: str, *, current_price: Optional[float] = None, prefer_tradeview: bool = True) -> dict[str, Any]:
+    """
+    Analyst consensus from TradingView (preferred) or Yahoo Finance (`Ticker.info` + `recommendations`).
+    
+    Args:
+        raw_ticker: Stock ticker symbol (e.g., 'RELIANCE.NS')
+        current_price: Optional current price for upside calculations
+        prefer_tradeview: If True, try TradingView first before falling back to Yahoo
+    
+    Returns:
+        Dictionary with analyst data (consensus, count, targets, upside)
+    
+    Best-effort; NSE coverage varies. Educational only.
+    """
+    # Try TradingView first if preferred
+    if prefer_tradeview:
+        try:
+            from tradeview_analyst import fetch_tradeview_analyst_data
+            market = "NSE" if ".NS" in str(raw_ticker) else "US"
+            tv_symbol = str(raw_ticker).replace(".NS", "").replace(".BO", "").split(":")[-1]
+            tv_data = fetch_tradeview_analyst_data(tv_symbol, market=market)
+            if tv_data and tv_data.get("consensus"):
+                return tv_data
+        except Exception:
+            pass  # Fall through to Yahoo Finance
+    
+    # Fall back to Yahoo Finance
+    return _fetch_analyst_recommendation_yahoo(raw_ticker, current_price)
+
+
+def _fetch_analyst_recommendation_yahoo(raw_ticker: str, current_price: Optional[float] = None) -> dict[str, Any]:
     """
     Analyst consensus from Yahoo Finance (`Ticker.info` + `recommendations`).
     Best-effort; NSE coverage varies. Educational only.
@@ -1150,6 +1180,9 @@ def fetch_analyst_recommendation(raw_ticker: str, *, current_price: Optional[flo
         "ratings_breakdown": breakdown,
         "summary": summary,
     }
+
+
+
 
 
 def enrich_dataframe_analyst_recommendations(
