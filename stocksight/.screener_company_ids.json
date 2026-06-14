@@ -958,5 +958,60 @@
     "id": 295,
     "name": "Asian Paints Ltd",
     "slug": "ASIANPAINT"
+  },
+  "CEINSYS": {
+    "id": 1085308,
+    "name": "Ceinsys Tech Ltd",
+    "slug": "CEINSYS"
+  },
+  "KALPATARU": {
+    "id": 1285507,
+    "name": "Kalpataru Ltd",
+    "slug": "KALPATARU"
+  },
+  "VDEAL": {
+    "id": 1284947,
+    "name": "Vdeal System Ltd",
+    "slug": "VDEAL"
+  },
+  "BANSALWIRE": {
+    "id": 1284840,
+    "name": "Bansal Wire Industries Ltd",
+    "slug": "BANSALWIRE"
+  },
+  "SAMMAANCAP": {
+    "id": 496506,
+    "name": "Sammaan Capital Ltd",
+    "slug": "SAMMAANCAP"
+  },
+  "538713": {
+    "id": 1085309,
+    "name": "Atishay Ltd",
+    "slug": "538713"
+  },
+  "K2INFRA": {
+    "id": 1284741,
+    "name": "K2 Infragen Ltd",
+    "slug": "K2INFRA"
+  },
+  "ASHOKA": {
+    "id": 282,
+    "name": "Ashoka Buildcon Ltd",
+    "slug": "ASHOKA"
+  },
+  "FINCABLES": {
+    "id": 788,
+    "name": "Finolex Cables Ltd",
+    "slug": "FINCABLES"
+  },
+  "REPCOHOME": {
+    "id": 353946,
+    "name": "Repco Home Finance Ltd",
+    "slug": "REPCOHOME"
+  },
+  "GENXAI": {
+    "id": 1286001,
+    "name": "GenXAI Analytics Ltd",
+    "slug": "GENXAI"
   }
 }
