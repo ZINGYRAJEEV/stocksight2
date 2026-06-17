@@ -3442,7 +3442,7 @@ def render_breeze_positions_page() -> None:
         st.warning("🟠 Breeze isn't connected — add credentials / refresh the daily token above.")
         return
 
-    st.session_state.setdefault("bpos_auto_refresh", True)
+    st.session_state.setdefault("bpos_auto_refresh", False)
     st.session_state.setdefault("bpos_refresh_sec", 45)
 
     t1, t2, t3 = st.columns([1.0, 1.1, 1.0])

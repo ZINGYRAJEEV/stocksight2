@@ -17,11 +17,19 @@ from ui_components import (
     page_audience_note,
     prepare_scan_results_df,
     render_clickable_scan_table,
+    render_historical_detail_panel,
     render_watchlist_panel,
     safe_set_page_config,
 )
 from session_utils import deduplicate_scan_results
 from stock_analysis_framework import StockAnalysisFramework
+from multibagger import (
+    CURATED_NSE_LABEL,
+    CURATED_US_LABEL,
+    LEGACY_CURATED_KEY,
+    is_nse_source,
+    is_us_source,
+)
 from volume_led_screener import (
     META,
     MONTHLY_RSI_ENTRY,
@@ -39,6 +47,67 @@ from volume_led_screener import (
     sort_results_dataframe,
     sort_volume_led_results,
 )
+
+
+_VLM_QUICK_UNIVERSES_NSE: list[tuple[str, str]] = [
+    ("Curated", CURATED_NSE_LABEL),
+    ("Nifty 50", "Nifty 50 (NSE)"),
+    ("Nifty 500", "Nifty 500 (NSE)"),
+    ("500+SM", "Nifty 500 + Small/Mid Movers (NSE)"),
+]
+
+_VLM_QUICK_UNIVERSES_US: list[tuple[str, str]] = [
+    ("Curated US", CURATED_US_LABEL),
+    ("S&P 500", "S&P 500 (NYSE)"),
+]
+
+
+def _universe_sources_for_market(market: str) -> list[str]:
+    if market == "US":
+        return [s for s in SCAN_SOURCES if is_us_source(s)]
+    return [s for s in SCAN_SOURCES if is_nse_source(s)]
+
+
+def _render_universe_picker(key: str) -> str:
+    """Market toggle, quick-pick buttons, and full universe dropdown."""
+    uni_key = f"{key}_universe"
+    market_key = f"{key}_market"
+
+    if st.session_state.get(uni_key) == LEGACY_CURATED_KEY:
+        st.session_state[uni_key] = CURATED_NSE_LABEL
+
+    market = st.radio(
+        "Market",
+        ["NSE", "US"],
+        horizontal=True,
+        key=market_key,
+        format_func=lambda m: "🇮🇳 NSE (India)" if m == "NSE" else "🇺🇸 US (NYSE/NASDAQ)",
+    )
+
+    sources = _universe_sources_for_market(market)
+    current = st.session_state.get(uni_key)
+    if current not in sources:
+        st.session_state[uni_key] = sources[0]
+
+    quick = _VLM_QUICK_UNIVERSES_US if market == "US" else _VLM_QUICK_UNIVERSES_NSE
+    st.caption("Quick universe")
+    qcols = st.columns(len(quick))
+    for col, (label, uni_name) in zip(qcols, quick):
+        with col:
+            if st.button(label, key=f"{key}_quni_{market}_{label}", use_container_width=True):
+                st.session_state[uni_key] = uni_name
+                st.rerun()
+
+    ensure_session_choice(uni_key, sources, sources[0])
+    return st.selectbox(
+        "Stock universe",
+        sources,
+        key=uni_key,
+        help=(
+            "Curated lists scan fastest. Nifty 500 can take several minutes. "
+            "US names use the same growth rules; market-cap filter is in ₹ Cr (NSE-style)."
+        ),
+    )
 
 
 def _rules_panel() -> None:
@@ -137,15 +206,7 @@ def render_volume_led_page() -> None:
         c1, c2, c3 = st.columns([1.0, 1.05, 1.2])
         with c1:
             st.markdown("#### Universe")
-            uni_key = f"{key}_universe"
-            nse_sources = [s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s]
-            ensure_session_choice(uni_key, nse_sources, nse_sources[0])
-            universe = st.selectbox(
-                "Stock universe (NSE)",
-                nse_sources,
-                key=uni_key,
-                help="Start with Curated or Nifty 200; Nifty 500 takes several minutes.",
-            )
+            universe = _render_universe_picker(key)
             sector_key = f"{key}_sector"
             sector_options = ["all"] + list(SECTOR_BUCKETS.keys())
             sector_labels = ["All sectors (grouped)"] + list(SECTOR_BUCKETS.values())
@@ -210,7 +271,8 @@ def render_volume_led_page() -> None:
     scan_progress = st.empty()
     run = st.button("▶  SCAN NOW", use_container_width=True, key=f"{key}_scan")
     st.caption(
-        "Use **Nifty 200** or **Curated** first. Results are grouped by sector bucket after the scan."
+        "Use **Quick universe** buttons or the dropdown. **Curated** / **Nifty 50** are fastest; "
+        "results are grouped by sector bucket after the scan."
     )
 
     base_thr = BaseScreenThresholds(
@@ -350,6 +412,40 @@ def render_volume_led_page() -> None:
         **quality_gate_column_config(),
     }
 
+    chart_sel_key = f"{key}_chart_selected"
+
+    def _on_chart_row_select(row: pd.Series) -> None:
+        try:
+            st.session_state[chart_sel_key] = str(row["Ticker"])
+        except Exception:
+            pass
+
+    master_ordered = (
+        sort_volume_led_results(results, rank_by=rank_by)
+        if rank_by in ("momentum", "ma200", "monthly_rsi")
+        else list(results)
+    )
+    master_rows = [result_to_row(r, i) for i, r in enumerate(master_ordered, start=1)]
+    master_df = pd.DataFrame(master_rows)
+    if not master_df.empty:
+        master_df = deduplicate_scan_results(master_df)
+        if enable_analysis_framework:
+            try:
+                framework = StockAnalysisFramework()
+                master_df = framework.enrich_dataframe(master_df)
+            except Exception as e:
+                st.warning(f"⚠️ Stock analysis framework error: {str(e)}")
+        master_df = prepare_scan_results_df(
+            master_df,
+            universe_name=last_uni,
+            cache_key_prefix=f"{key}_master",
+            raw_ticker_col="Raw",
+            apply_stock_sight=True,
+            sort_by_gate=(rank_by == "gate"),
+        )
+        if rank_by in ("composite", "gate"):
+            master_df = sort_results_dataframe(master_df, rank_by)
+
     def _render_sector_table(bucket_key: str, rows: list) -> None:
         if not rows:
             st.caption("No matches in this sector bucket for current filters.")
@@ -392,6 +488,8 @@ def render_volume_led_page() -> None:
             universe_name=last_uni,
             column_config=col_cfg,
             height=min(480, 48 + len(df) * 36),
+            show_panel=False,
+            on_row_select=_on_chart_row_select,
         )
 
     if last_sector != "all":
@@ -425,6 +523,8 @@ def render_volume_led_page() -> None:
                 universe_name=last_uni,
                 column_config=col_cfg,
                 height=min(520, 48 + len(df_all) * 36),
+                show_panel=False,
+                on_row_select=_on_chart_row_select,
             )
 
         bucket_keys = [k for k in SECTOR_BUCKETS if k != "generic"]
@@ -435,6 +535,15 @@ def render_volume_led_page() -> None:
 
         with st.expander("Generic bucket (base screen only — unclassified sector)", expanded=False):
             _render_sector_table("generic", grouped.get("generic", []))
+
+    if not master_df.empty:
+        st.markdown("---")
+        render_historical_detail_panel(
+            master_df,
+            universe_name=last_uni,
+            key_prefix=f"{key}_detail",
+            selected_ticker=st.session_state.get(chart_sel_key),
+        )
 
     csv_ordered = (
         sort_volume_led_results(results, rank_by=rank_by)

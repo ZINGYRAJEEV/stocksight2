@@ -26,6 +26,7 @@ try:
         DECISION_ZONES,
         compute_score,
         decision_from_metrics,
+        fetch_monthly_history,
         fetch_price_history,
         matrix_decision,
         matrix_decision_note,
@@ -33,6 +34,7 @@ try:
         compute_vwap,
         enrich_dataframe_recent_news,
         format_recent_news_cell,
+        hist_series,
     )
     from .signals import SignalResult, SCENARIOS, enrich_results_news, scenario_display_title
     from .scan_history_store import append_scan_record, build_first_seen_map
@@ -63,6 +65,7 @@ except ImportError:
         DECISION_ZONES,
         compute_score,
         decision_from_metrics,
+        fetch_monthly_history,
         fetch_price_history,
         matrix_decision,
         matrix_decision_note,
@@ -70,6 +73,7 @@ except ImportError:
         compute_vwap,
         enrich_dataframe_recent_news,
         format_recent_news_cell,
+        hist_series,
     )
     from signals import SignalResult, SCENARIOS, enrich_results_news, scenario_display_title
     from scan_history_store import append_scan_record, build_first_seen_map
@@ -1027,11 +1031,14 @@ def render_historical_detail_panel(
     universe_name: str = "",
     key_prefix: str = "hist",
     selected_ticker: Optional[str] = None,
+    chart_show_rsi: bool = False,
+    chart_show_monthly_rsi: bool = False,
+    chart_show_ema21: bool = False,
 ) -> None:
     """Yahoo ~1y historical fields **and** an interactive Yahoo-Finance-style chart.
 
     Click a ticker in the picker below the table to load 1M/3M/6M/1Y/2Y/5Y/MAX price chart
-    with 50-DMA / 200-DMA overlays, range slider, and a period-return summary.
+    with 50-DMA / 200-DMA overlays, optional RSI panes, range slider, and period-return summary.
     """
     if df is None or df.empty:
         return
@@ -1120,9 +1127,20 @@ def render_historical_detail_panel(
         except Exception:
             picked_row = None
         if picked_row is not None:
-            _render_pre_buy_research_card(picked_row, raw_ticker=raw)
+            _render_pre_buy_research_card(
+                picked_row,
+                raw_ticker=raw,
+                key_prefix=key_prefix,
+            )
 
-        render_progressive_history_chart(raw, display_ticker=pick, key=f"{key_prefix}_progchart")
+        render_progressive_history_chart(
+            raw,
+            display_ticker=pick,
+            key=f"{key_prefix}_progchart",
+            show_rsi=chart_show_rsi,
+            show_monthly_rsi=chart_show_monthly_rsi,
+            show_ema21=chart_show_ema21,
+        )
 
 
 def render_clickable_scan_table(
@@ -1144,6 +1162,9 @@ def render_clickable_scan_table(
     sort_by_gate: bool = False,
     apply_stock_sight: Optional[bool] = None,
     stock_sight_overlay: bool = True,
+    chart_show_rsi: bool = False,
+    chart_show_monthly_rsi: bool = False,
+    chart_show_ema21: bool = False,
 ) -> Optional[str]:
     """Render a results dataframe with row selection wired to the chart/research panel.
 
@@ -1245,6 +1266,9 @@ def render_clickable_scan_table(
             universe_name=universe_name,
             key_prefix=f"{key_prefix}_hist",
             selected_ticker=selected_ticker,
+            chart_show_rsi=chart_show_rsi,
+            chart_show_monthly_rsi=chart_show_monthly_rsi,
+            chart_show_ema21=chart_show_ema21,
         )
 
     return selected_ticker
@@ -1291,7 +1315,12 @@ def _decision_color(decision: str) -> str:
     return "#7abeac"
 
 
-def _render_pre_buy_research_card(row: pd.Series, *, raw_ticker: str) -> None:
+def _render_pre_buy_research_card(
+    row: pd.Series,
+    *,
+    raw_ticker: str,
+    key_prefix: str = "prebuy",
+) -> None:
     """Render a research summary card for the selected ticker — pre-buy checklist data.
 
     Shows decision/score block, growth, research links and the analyst section.
@@ -1382,6 +1411,21 @@ def _render_pre_buy_research_card(row: pd.Series, *, raw_ticker: str) -> None:
             unsafe_allow_html=True,
         )
 
+    sym_clean = (raw_ticker or "").replace(".NS", "").replace(".BO", "").strip().upper()
+    if sym_clean:
+        prefix_slug = hashlib.md5(f"{key_prefix}:{sym_clean}".encode()).hexdigest()[:10]
+        btn_key = f"val_rb_{prefix_slug}"
+        if st.button(
+            f"🧮 Prefill Valuation Rulebook ({sym_clean})",
+            key=btn_key,
+            help="Sets ticker on Valuation Rulebook — open that page from the sidebar.",
+        ):
+            st.session_state.val_prefill_ticker = sym_clean
+            st.session_state.val_baseline = None
+            st.success(
+                f"**{sym_clean}** queued. Open **🌱 Theme Screens → Valuation Rulebook** in the sidebar."
+            )
+
     # Analyst section — only show if any analyst column is populated
     analyst_consensus = _g("Analyst consensus")
     analyst_mean = _g("Analyst mean (1-5)")
@@ -1453,14 +1497,113 @@ def _cached_period_history(raw_ticker: str, period: str) -> Optional[pd.DataFram
         return None
 
 
+def _rsi_zone_label(rsi: Optional[float], *, monthly: bool = False) -> str:
+    if rsi is None or (isinstance(rsi, float) and np.isnan(rsi)):
+        return "—"
+    r = float(rsi)
+    if monthly:
+        if r >= 90:
+            return "Peak momentum"
+        if r >= 70:
+            return "Above FF floor (70)"
+        return "Below momentum floor"
+    if r >= 70:
+        return "Overbought"
+    if r <= 30:
+        return "Oversold"
+    if r >= 55:
+        return "Bullish"
+    return "Neutral"
+
+
+def _latest_rsi_value(series: pd.Series) -> Optional[float]:
+    if series is None or series.empty:
+        return None
+    s = series.dropna()
+    if s.empty:
+        return None
+    return round(float(s.iloc[-1]), 1)
+
+
+def _monthly_rsi_series(raw_ticker: str) -> pd.Series:
+    import yfinance as yf
+
+    try:
+        mhist = fetch_monthly_history(raw_ticker, period="10y")
+        if mhist is None or mhist.empty:
+            mhist = yf.Ticker(raw_ticker).history(period="10y", interval="1mo", auto_adjust=True)
+    except Exception:
+        return pd.Series(dtype=float)
+    if mhist is None or mhist.empty:
+        return pd.Series(dtype=float)
+    closes = hist_series(mhist, "Close").dropna()
+    if len(closes) < 16:
+        return pd.Series(dtype=float)
+    return rsi_series_wilder(closes, 14)
+
+
+def _normalize_chart_index(index) -> pd.DatetimeIndex:
+    """Timezone-naive datetimes — Plotly range sliders mis-scale tz-aware mixed series."""
+    idx = pd.DatetimeIndex(pd.to_datetime(index))
+    if idx.tz is not None:
+        idx = idx.tz_convert(None)
+    return idx
+
+
+def _plotly_x_range(index) -> list:
+    xs = _normalize_chart_index(index)
+    if len(xs) < 2:
+        pad = pd.Timedelta(days=1)
+    else:
+        span = xs[-1] - xs[0]
+        pad = max(span * 0.02, pd.Timedelta(days=1))
+    return [xs[0] - pad, xs[-1] + pad]
+
+
+def _overlay_history(raw_ticker: str, display_hist: pd.DataFrame) -> pd.DataFrame:
+    """Longer history for MA overlays when the visible window is short (e.g. 1M)."""
+    if len(display_hist) >= 200:
+        return display_hist
+    for extra in ("2y", "1y", "6mo"):
+        long_hist = _cached_period_history(raw_ticker, extra)
+        if long_hist is not None and len(long_hist) > len(display_hist):
+            return long_hist
+    return display_hist
+
+
+def _series_on_display(full: pd.Series, display_index) -> pd.Series:
+    """Map indicator series onto the visible chart dates."""
+    if full is None or full.empty:
+        return pd.Series(dtype=float)
+    left = pd.DataFrame(index=_normalize_chart_index(display_index))
+    right = pd.DataFrame(
+        {"v": pd.to_numeric(full, errors="coerce").values},
+        index=_normalize_chart_index(full.index),
+    )
+    right = right.sort_index()
+    if right.empty:
+        return pd.Series(dtype=float)
+    merged = pd.merge_asof(
+        left.sort_index(),
+        right,
+        left_index=True,
+        right_index=True,
+        direction="backward",
+    )
+    return merged["v"]
+
+
 def render_progressive_history_chart(
     raw_ticker: str,
     *,
     display_ticker: str = "",
     key: str = "progchart",
     default_period_label: str = "1Y",
+    show_rsi: bool = False,
+    show_monthly_rsi: bool = False,
+    show_ema21: bool = False,
 ) -> None:
-    """Yahoo-Finance-like progressive chart: range pills, area line, 50/200-DMA, range slider."""
+    """Yahoo-Finance-like progressive chart: range pills, area line, 50/200-DMA, optional RSI panes."""
     if not raw_ticker:
         return
     label = display_ticker or raw_ticker
@@ -1480,9 +1623,14 @@ def render_progressive_history_chart(
     except ValueError:
         default_idx = 3
 
+    chart_title = (
+        f"📈 {html.escape(label)} — price · volume"
+        + (" · RSI" if show_rsi else "")
+        + (" · monthly RSI" if show_monthly_rsi else "")
+    )
     st.markdown(
         f"<div style='font-family:IBM Plex Mono, monospace; font-size:1.05rem; "
-        f"color:#25d366; margin: 6px 0;'>📈 {html.escape(label)} — interactive chart "
+        f"color:#25d366; margin: 6px 0;'>{chart_title} "
         f"<span style='color:#7abeac; font-size:0.78rem;'>({html.escape(raw_ticker)})</span></div>",
         unsafe_allow_html=True,
     )
@@ -1501,6 +1649,10 @@ def render_progressive_history_chart(
         st.warning(f"No Yahoo Finance history available for **{raw_ticker}** at range **{selected}**.")
         return
 
+    chart_x = _normalize_chart_index(hist.index)
+    x_range = _plotly_x_range(hist.index)
+    plot_key_suffix = f"{raw_ticker.replace('.', '_')}_{period_value}"
+
     closes = hist["Close"].astype(float)
     start_px = float(closes.iloc[0])
     end_px = float(closes.iloc[-1])
@@ -1509,106 +1661,316 @@ def render_progressive_history_chart(
     period_low = float(closes.min())
     drawdown_from_high = (1.0 - end_px / period_high) * 100.0 if period_high > 0 else 0.0
 
-    m1, m2, m3, m4, m5 = st.columns(5)
+    daily_rsi = rsi_series_wilder(closes, 14) if show_rsi else pd.Series(dtype=float)
+    daily_rsi_now = _latest_rsi_value(daily_rsi) if show_rsi else None
+    monthly_rsi = _monthly_rsi_series(raw_ticker) if show_monthly_rsi else pd.Series(dtype=float)
+    monthly_rsi_now = _latest_rsi_value(monthly_rsi) if show_monthly_rsi else None
+
+    if show_rsi or show_monthly_rsi:
+        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+    else:
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m6 = m7 = None
+
     m1.metric("Price", f"{end_px:,.2f}")
     m2.metric(f"{selected} return", f"{ret_pct:+.2f}%")
     m3.metric(f"{selected} high", f"{period_high:,.2f}")
     m4.metric(f"{selected} low", f"{period_low:,.2f}")
     m5.metric("↓ from high", f"-{drawdown_from_high:.1f}%")
+    if m6 is not None and show_rsi:
+        m6.metric("RSI (14)", f"{daily_rsi_now:.1f}" if daily_rsi_now is not None else "—")
+    if m7 is not None and show_monthly_rsi:
+        m7.metric(
+            "Monthly RSI",
+            f"{monthly_rsi_now:.1f}" if monthly_rsi_now is not None else "—",
+            help="Financially Free momentum floor = 70 on monthly chart",
+        )
+
+    if show_rsi or show_monthly_rsi:
+        zones = []
+        if daily_rsi_now is not None:
+            zones.append(f"Daily: **{_rsi_zone_label(daily_rsi_now)}**")
+        if monthly_rsi_now is not None:
+            zones.append(f"Monthly: **{_rsi_zone_label(monthly_rsi_now, monthly=True)}**")
+        if zones:
+            st.caption("RSI read · " + " · ".join(zones))
 
     if go is None:
         st.line_chart(closes)
+        if show_rsi and not daily_rsi.empty:
+            st.markdown("**RSI (14)**")
+            st.line_chart(daily_rsi)
+        if show_monthly_rsi and not monthly_rsi.empty:
+            st.markdown("**Monthly RSI (14)**")
+            st.line_chart(monthly_rsi)
         return
 
     color = "#25d366" if ret_pct >= 0 else "#e05252"
     fill = "rgba(37, 211, 102, 0.18)" if ret_pct >= 0 else "rgba(224, 82, 82, 0.18)"
 
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=hist.index,
-            y=closes,
-            mode="lines",
-            line=dict(color=color, width=2),
-            fill="tozeroy",
-            fillcolor=fill,
-            name="Close",
-            hovertemplate="%{x|%d %b %Y}<br><b>%{y:,.2f}</b><extra></extra>",
-        )
-    )
+    if show_rsi and make_subplots is not None:
+        overlay_hist = _overlay_history(raw_ticker, hist)
+        overlay_closes = overlay_hist["Close"].astype(float)
 
-    if len(closes) >= 50:
-        ma50 = closes.rolling(50).mean()
+        fig = make_subplots(
+            rows=3,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            row_heights=[0.55, 0.18, 0.27],
+        )
         fig.add_trace(
             go.Scatter(
-                x=hist.index,
-                y=ma50,
+                x=chart_x,
+                y=closes,
                 mode="lines",
-                line=dict(color="#f0b429", width=1.2, dash="dot"),
-                name="50-DMA",
-                hovertemplate="50-DMA: %{y:,.2f}<extra></extra>",
-            )
+                line=dict(color=color, width=2.2),
+                name="Close",
+                hovertemplate="%{x|%d %b %Y}<br><b>%{y:,.2f}</b><extra></extra>",
+            ),
+            row=1,
+            col=1,
         )
-    if len(closes) >= 200:
-        ma200 = closes.rolling(200).mean()
+        if show_ema21 and len(overlay_closes) >= 21:
+            ema21 = _series_on_display(
+                overlay_closes.ewm(span=21, adjust=False).mean(),
+                hist.index,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=chart_x,
+                    y=ema21,
+                    mode="lines",
+                    line=dict(color="#c084fc", width=1.3, dash="dot"),
+                    name="21-EMA",
+                    hovertemplate="21-EMA: %{y:,.2f}<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
+        if len(overlay_closes) >= 50:
+            ma50 = _series_on_display(overlay_closes.rolling(50).mean(), hist.index)
+            fig.add_trace(
+                go.Scatter(
+                    x=chart_x,
+                    y=ma50,
+                    mode="lines",
+                    line=dict(color="#f0b429", width=1.2, dash="dot"),
+                    name="50-DMA",
+                    hovertemplate="50-DMA: %{y:,.2f}<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
+        if len(overlay_closes) >= 200:
+            ma200 = _series_on_display(overlay_closes.rolling(200).mean(), hist.index)
+            fig.add_trace(
+                go.Scatter(
+                    x=chart_x,
+                    y=ma200,
+                    mode="lines",
+                    line=dict(color="#4db8ff", width=1.2, dash="dash"),
+                    name="200-DMA",
+                    hovertemplate="200-DMA: %{y:,.2f}<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
+
+        if "Volume" in hist.columns and hist["Volume"].notna().any():
+            vols = hist["Volume"].astype(float)
+            fig.add_trace(
+                go.Bar(
+                    x=chart_x,
+                    y=vols,
+                    name="Volume",
+                    marker_color="rgba(122, 190, 172, 0.55)",
+                    hovertemplate="%{x|%d %b %Y}<br>Volume: %{y:,.0f}<extra></extra>",
+                ),
+                row=2,
+                col=1,
+            )
+
+        rsi_plot = _series_on_display(daily_rsi, hist.index)
         fig.add_trace(
             go.Scatter(
-                x=hist.index,
-                y=ma200,
+                x=chart_x,
+                y=rsi_plot,
                 mode="lines",
-                line=dict(color="#4db8ff", width=1.2, dash="dash"),
-                name="200-DMA",
-                hovertemplate="200-DMA: %{y:,.2f}<extra></extra>",
-            )
+                name="RSI(14)",
+                line=dict(color="#7abeac", width=1.5),
+                hovertemplate="RSI: %{y:.1f}<extra></extra>",
+            ),
+            row=3,
+            col=1,
         )
+        fig.add_hline(y=70, line_width=1, line_dash="dash", line_color="rgba(224, 82, 82, 0.45)", row=3, col=1)
+        fig.add_hline(y=30, line_width=1, line_dash="dash", line_color="rgba(37, 211, 102, 0.45)", row=3, col=1)
+        fig.add_hrect(y0=70, y1=100, fillcolor="rgba(224, 82, 82, 0.06)", line_width=0, row=3, col=1)
+        fig.add_hrect(y0=0, y1=30, fillcolor="rgba(37, 211, 102, 0.06)", line_width=0, row=3, col=1)
 
-    # Anchor a y-axis range that doesn't drop to 0 (area fills stay readable).
-    y_pad = max((period_high - period_low) * 0.10, 0.01)
-    y_min = max(0.0, period_low - y_pad)
-    y_max = period_high + y_pad
+        y_pad = max((period_high - period_low) * 0.08, period_high * 0.002, 1.0)
+        y_min = period_low - y_pad
+        y_max = period_high + y_pad
 
-    fig.update_layout(
-        template="plotly_white",
-        height=420,
-        margin=dict(l=10, r=10, t=30, b=10),
-        showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        hovermode="x unified",
-        xaxis=dict(
-            rangeslider=dict(visible=True, thickness=0.06),
-            type="date",
-            showgrid=True,
-            gridcolor="#eef2f7",
-        ),
-        yaxis=dict(
-            title="Price",
-            range=[y_min, y_max],
-            showgrid=True,
-            gridcolor="#eef2f7",
-        ),
-    )
-    st.plotly_chart(fig, use_container_width=True, key=f"{key}_plot")
-
-    # Volume sub-chart (cleaner separately so the price area stays prominent).
-    if "Volume" in hist.columns and hist["Volume"].notna().any():
-        vol_fig = go.Figure(
-            go.Bar(
-                x=hist.index,
-                y=hist["Volume"].astype(float),
-                marker_color="#7abeac",
-                name="Volume",
-                hovertemplate="%{x|%d %b %Y}<br>Volume: %{y:,.0f}<extra></extra>",
-            )
-        )
-        vol_fig.update_layout(
+        fig.update_layout(
             template="plotly_white",
-            height=150,
-            margin=dict(l=10, r=10, t=10, b=10),
-            showlegend=False,
-            xaxis=dict(type="date", showgrid=False),
-            yaxis=dict(title="Volume", gridcolor="#eef2f7"),
+            height=560,
+            margin=dict(l=12, r=12, t=36, b=12),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            hovermode="x unified",
+            uirevision=plot_key_suffix,
         )
-        st.plotly_chart(vol_fig, use_container_width=True, key=f"{key}_vol")
+        fig.update_xaxes(
+            range=x_range,
+            autorange=False,
+            type="date",
+            gridcolor="#eef2f7",
+            rangeslider=dict(visible=False),
+        )
+        fig.update_yaxes(
+            title_text="Price",
+            range=[y_min, y_max],
+            autorange=False,
+            gridcolor="#eef2f7",
+            row=1,
+            col=1,
+        )
+        fig.update_yaxes(title_text="Volume", gridcolor="#eef2f7", row=2, col=1)
+        fig.update_yaxes(
+            title_text="RSI",
+            range=[0, 100],
+            autorange=False,
+            gridcolor="#eef2f7",
+            row=3,
+            col=1,
+        )
+
+        st.plotly_chart(fig, use_container_width=True, key=f"{key}_{plot_key_suffix}_plot")
+
+        if show_monthly_rsi and not monthly_rsi.empty:
+            m_show = monthly_rsi.dropna()
+            if len(m_show) > 60:
+                m_show = m_show.iloc[-60:]
+            m_x = _normalize_chart_index(m_show.index)
+            m_fig = go.Figure()
+            m_fig.add_trace(
+                go.Scatter(
+                    x=m_x,
+                    y=m_show.values,
+                    mode="lines+markers",
+                    name="Monthly RSI(14)",
+                    line=dict(color="#f0b429", width=1.8),
+                    marker=dict(size=5),
+                    hovertemplate="%{x|%b %Y}<br>Monthly RSI: %{y:.1f}<extra></extra>",
+                )
+            )
+            m_fig.add_hline(y=70, line_width=1.5, line_dash="dot", line_color="#25d366")
+            m_fig.add_hline(y=30, line_width=1, line_dash="dash", line_color="rgba(37, 211, 102, 0.45)")
+            m_fig.add_hrect(y0=70, y1=100, fillcolor="rgba(37, 211, 102, 0.10)", line_width=0)
+            m_fig.update_layout(
+                template="plotly_white",
+                height=220,
+                margin=dict(l=12, r=12, t=28, b=12),
+                title=dict(text="Monthly RSI (14) — FF momentum floor at 70", font=dict(size=13)),
+                showlegend=False,
+                hovermode="x unified",
+                uirevision=f"{plot_key_suffix}_mrsi",
+                yaxis=dict(title="Monthly RSI", range=[0, 100], autorange=False, gridcolor="#eef2f7"),
+                xaxis=dict(
+                    type="date",
+                    range=_plotly_x_range(m_x),
+                    autorange=False,
+                    gridcolor="#eef2f7",
+                ),
+            )
+            st.plotly_chart(m_fig, use_container_width=True, key=f"{key}_{plot_key_suffix}_mrsi")
+    else:
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=hist.index,
+                y=closes,
+                mode="lines",
+                line=dict(color=color, width=2),
+                fill="tozeroy",
+                fillcolor=fill,
+                name="Close",
+                hovertemplate="%{x|%d %b %Y}<br><b>%{y:,.2f}</b><extra></extra>",
+            )
+        )
+
+        if len(closes) >= 50:
+            ma50 = closes.rolling(50).mean()
+            fig.add_trace(
+                go.Scatter(
+                    x=hist.index,
+                    y=ma50,
+                    mode="lines",
+                    line=dict(color="#f0b429", width=1.2, dash="dot"),
+                    name="50-DMA",
+                    hovertemplate="50-DMA: %{y:,.2f}<extra></extra>",
+                )
+            )
+        if len(closes) >= 200:
+            ma200 = closes.rolling(200).mean()
+            fig.add_trace(
+                go.Scatter(
+                    x=hist.index,
+                    y=ma200,
+                    mode="lines",
+                    line=dict(color="#4db8ff", width=1.2, dash="dash"),
+                    name="200-DMA",
+                    hovertemplate="200-DMA: %{y:,.2f}<extra></extra>",
+                )
+            )
+
+        y_pad = max((period_high - period_low) * 0.10, 0.01)
+        y_min = max(0.0, period_low - y_pad)
+        y_max = period_high + y_pad
+
+        fig.update_layout(
+            template="plotly_white",
+            height=420,
+            margin=dict(l=10, r=10, t=30, b=10),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            hovermode="x unified",
+            xaxis=dict(
+                rangeslider=dict(visible=True, thickness=0.06),
+                type="date",
+                showgrid=True,
+                gridcolor="#eef2f7",
+            ),
+            yaxis=dict(
+                title="Price",
+                range=[y_min, y_max],
+                showgrid=True,
+                gridcolor="#eef2f7",
+            ),
+        )
+        st.plotly_chart(fig, use_container_width=True, key=f"{key}_plot")
+
+        if "Volume" in hist.columns and hist["Volume"].notna().any():
+            vol_fig = go.Figure(
+                go.Bar(
+                    x=hist.index,
+                    y=hist["Volume"].astype(float),
+                    marker_color="#7abeac",
+                    name="Volume",
+                    hovertemplate="%{x|%d %b %Y}<br>Volume: %{y:,.0f}<extra></extra>",
+                )
+            )
+            vol_fig.update_layout(
+                template="plotly_white",
+                height=150,
+                margin=dict(l=10, r=10, t=10, b=10),
+                showlegend=False,
+                xaxis=dict(type="date", showgrid=False),
+                yaxis=dict(title="Volume", gridcolor="#eef2f7"),
+            )
+            st.plotly_chart(vol_fig, use_container_width=True, key=f"{key}_vol")
 
     summary = pd.DataFrame(
         {
@@ -1620,16 +1982,26 @@ def render_progressive_history_chart(
             "Return %": [round(ret_pct, 2)],
             f"{selected} high": [round(period_high, 2)],
             f"{selected} low": [round(period_low, 2)],
+            "RSI (14)": [daily_rsi_now],
+            "Monthly RSI": [monthly_rsi_now],
             "Avg volume": [
                 int(hist["Volume"].mean()) if "Volume" in hist.columns and hist["Volume"].notna().any() else None
             ],
         }
     )
-    st.dataframe(summary, use_container_width=True, hide_index=True)
-    st.caption(
-        f"Source: Yahoo Finance ({raw_ticker}) · adjusted daily closes · "
-        f"50/200-DMA overlays are computed on the visible range."
-    )
+    show_summary_cols = [c for c in summary.columns if summary[c].iloc[0] is not None]
+    st.dataframe(summary[show_summary_cols], use_container_width=True, hide_index=True)
+    cap_parts = [
+        f"Source: Yahoo Finance ({raw_ticker}) · adjusted daily closes",
+        "50/200-DMA overlays on visible range",
+    ]
+    if show_ema21:
+        cap_parts.append("21-EMA = Financially Free trailing-stop line")
+    if show_rsi:
+        cap_parts.append("RSI(14) = Wilder · shaded 30/70 zones")
+    if show_monthly_rsi:
+        cap_parts.append("Monthly RSI green band ≥ 70 = FF momentum floor")
+    st.caption(" · ".join(cap_parts))
 
 
 def signal_results_download(

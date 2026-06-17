@@ -224,6 +224,15 @@ def render_bulk_order_page() -> None:
     with c3:
         deal_days = st.selectbox("Deal window (days)", [7, 15, 30, 60], index=2, key="bo_days")
     with c4:
+        auto_refresh = st.checkbox(
+            "Enable auto-refresh",
+            value=False,
+            key="bo_auto_refresh",
+            help="Off by default. Turn on to reload the Screener feed on a timer while this tab stays open.",
+        )
+
+    refresh_sec = 300
+    if auto_refresh:
         refresh_sec = st.slider("Auto-refresh (s)", 120, 900, 300, 60, key="bo_refresh")
 
     extra_tickers = st.text_input(
@@ -233,11 +242,13 @@ def render_bulk_order_page() -> None:
         placeholder="MASTER, RELIANCE, TCS",
     )
 
-    @st.fragment(run_every=timedelta(seconds=int(refresh_sec)))
-    def _live_panel() -> None:
+    def _live_panel_body() -> None:
         if st.button("🔄 Refresh now", key="bo_refresh_btn"):
             _cached_intel.clear()
             _cached_company_news.clear()
+
+        if auto_refresh:
+            st.caption(f"Auto-refresh **on** · every **{int(refresh_sec)}s**")
 
         with st.spinner("Fetching from Screener.in…"):
             data = _cached_intel(
@@ -369,5 +380,16 @@ def render_bulk_order_page() -> None:
             f"Last fetch: {data.get('fetched_at', '—')} · "
             f"Screener login: **{'yes' if data.get('login_configured') else 'no'}**"
         )
+
+    if auto_refresh:
+        @st.fragment(run_every=timedelta(seconds=int(refresh_sec)))
+        def _live_panel() -> None:
+            if not st.session_state.get("bo_auto_refresh"):
+                return
+            _live_panel_body()
+    else:
+        @st.fragment
+        def _live_panel() -> None:
+            _live_panel_body()
 
     _live_panel()

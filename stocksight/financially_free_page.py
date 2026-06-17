@@ -312,6 +312,10 @@ def render_financially_free_page() -> None:
         universe_name=last_uni,
         column_config=col_cfg,
         height=min(560, 48 + len(df) * 38),
+        chart_show_rsi=True,
+        chart_show_monthly_rsi=True,
+        chart_show_ema21=True,
+        caption="💡 Click any row — chart shows price, volume, daily RSI(14), monthly RSI, and 21-EMA.",
     )
 
     st.download_button(

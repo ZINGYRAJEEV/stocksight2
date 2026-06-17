@@ -62,7 +62,7 @@ with st.container(border=True):
             key="live_nse_preset",
         )
     with c2:
-        auto = st.checkbox("Auto-refresh (5 min)", value=True, key="live_nse_auto")
+        auto = st.checkbox("Enable auto-refresh (5 min)", value=False, key="live_nse_auto")
         explain = st.checkbox("Why it fell", value=True, key="live_nse_explain")
     with c3:
         run = st.button("▶ Scan now", use_container_width=True, key="live_nse_run")
@@ -113,7 +113,7 @@ if auto and st.session_state.live_nse_last_run and not st.session_state.live_nse
 
 rows = st.session_state.live_nse_rows
 if not rows and st.session_state.live_nse_last_run is None:
-    st.warning("Click **Scan now** or wait for auto-refresh to populate live matches.")
+    st.warning("Click **Scan now** to populate live matches, or enable auto-refresh.")
 elif not rows:
     st.warning("No names passed all filters this run.")
 else:

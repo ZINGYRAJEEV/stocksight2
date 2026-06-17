@@ -280,12 +280,21 @@ def _render_live_announcements(groww_items: list | None = None) -> None:
     with c4:
         max_days = st.selectbox("Window", [7, 14, 30, 45], index=2, key="bb_ann_days")
 
-    refresh_sec = st.slider("Auto-refresh (seconds)", 60, 600, 180, 60, key="bb_ann_refresh")
+    auto_refresh = st.checkbox(
+        "Enable auto-refresh",
+        value=False,
+        key="bb_ann_auto_refresh",
+        help="Off by default. Turn on to refresh the buyback feed on a timer while this tab stays open.",
+    )
+    refresh_sec = 180
+    if auto_refresh:
+        refresh_sec = st.slider("Auto-refresh (seconds)", 60, 600, 180, 60, key="bb_ann_refresh")
 
-    @st.fragment(run_every=timedelta(seconds=int(refresh_sec)))
-    def _live_feed() -> None:
+    def _live_feed_body() -> None:
         if st.button("🔄 Refresh now", key="bb_ann_manual_refresh"):
             _cached_buyback_announcements.clear()
+        if auto_refresh:
+            st.caption(f"Auto-refresh **on** · every **{int(refresh_sec)}s**")
         with st.spinner("Fetching buyback headlines…"):
             rows = _cached_buyback_announcements(int(max_days), bool(enrich))
         if new_only:
@@ -369,6 +378,17 @@ def _render_live_announcements(groww_items: list | None = None) -> None:
                     st.link_button("Open news", row.get("Announcement") or SCREENER_IN_BUYBACK_URL)
                 with b3:
                     st.link_button("Screener company", row.get("Screener") or SCREENER_IN_BUYBACK_URL)
+
+    if auto_refresh:
+        @st.fragment(run_every=timedelta(seconds=int(refresh_sec)))
+        def _live_feed() -> None:
+            if not st.session_state.get("bb_ann_auto_refresh"):
+                return
+            _live_feed_body()
+    else:
+        @st.fragment
+        def _live_feed() -> None:
+            _live_feed_body()
 
     _live_feed()
 

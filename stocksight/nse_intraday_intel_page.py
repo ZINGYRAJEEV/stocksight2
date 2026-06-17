@@ -341,14 +341,33 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
     with c3:
         max_co = st.slider("Max companies", 5, 40, 24, key="nii_max")
     with c4:
-        refresh_sec = st.slider("Auto-refresh (s)", 120, 900, 300, 60, key="nii_refresh")
+        auto_refresh = st.checkbox(
+            "Enable auto-refresh",
+            value=False,
+            key="nii_auto_refresh",
+            help="Off by default — click **Refresh analysis** to reload. "
+            "Turn on to poll Screener on an interval while this tab stays open.",
+        )
 
-    @st.fragment(run_every=timedelta(seconds=int(refresh_sec)))
-    def _live_intel() -> None:
-        if st.button("🔄 Refresh analysis", key="nii_refresh_btn"):
+    refresh_sec = 300
+    if auto_refresh:
+        refresh_sec = st.slider(
+            "Auto-refresh interval (seconds)",
+            120,
+            900,
+            300,
+            60,
+            key="nii_refresh",
+        )
+
+    def _live_intel_body() -> None:
+        if st.button("🔄 Refresh analysis", key="nii_refresh_btn", type="primary"):
             _cached_intel.clear()
             _cached_company_news.clear()
             _cached_analysis.clear()
+
+        if auto_refresh:
+            st.caption(f"Auto-refresh **on** · every **{int(refresh_sec)}s** (manual refresh still clears cache)")
 
         if not screener_login_configured():
             st.warning("Configure Screener cookies to load the Bulk Order announcement feed.")
@@ -416,5 +435,16 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
                     st.markdown(f"**Rule:** {t['rule']}")
 
         st.caption(f"Screener login: **{'yes' if screener_login_configured() else 'no'}**")
+
+    if auto_refresh:
+        @st.fragment(run_every=timedelta(seconds=int(refresh_sec)))
+        def _live_intel() -> None:
+            if not st.session_state.get("nii_auto_refresh"):
+                return
+            _live_intel_body()
+    else:
+        @st.fragment
+        def _live_intel() -> None:
+            _live_intel_body()
 
     _live_intel()

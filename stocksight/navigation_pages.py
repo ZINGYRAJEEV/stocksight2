@@ -291,6 +291,24 @@ def page_volume_led_growth() -> None:
     render_volume_led_page()
 
 
+def page_valuation_rulebook() -> None:
+    from valuation_model_page import render_valuation_rulebook_page
+
+    render_valuation_rulebook_page()
+
+
+def page_earnings_surprise() -> None:
+    from earnings_surprise_page import render_earnings_surprise_page
+
+    render_earnings_surprise_page()
+
+
+def page_multibagger_patterns() -> None:
+    from multibagger_patterns_page import render_multibagger_patterns_page
+
+    render_multibagger_patterns_page()
+
+
 def page_crisis_value() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
@@ -347,4 +365,7 @@ __all__ = [
     "page_financially_free_swing",
     "page_volume_led_growth",
     "page_crisis_value",
+    "page_valuation_rulebook",
+    "page_earnings_surprise",
+    "page_multibagger_patterns",
 ]
