@@ -25,6 +25,7 @@ from financially_free_screener import (
 from multibagger import SCAN_SOURCES
 from quality_gate import quality_gate_column_config
 from scan_history_store import append_scan_record
+from screener_session_ui import render_screener_session_panel
 from ui_components import (
     ensure_session_choice,
     filter_column_config,
@@ -146,6 +147,7 @@ def render_financially_free_page() -> None:
     _render_market_cycle()
 
     key = "ff"
+    render_screener_session_panel(key_prefix=f"{key}_screener")
     session_key = f"{key}_results"
     nse_sources = [s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s]
 
@@ -334,4 +336,7 @@ def render_financially_free_page() -> None:
         "[Chittorgarh](https://www.chittorgarh.com/) for IPO bases · TradingView for monthly ROC.
 """
     )
-    st.caption("⚠️ Educational only — not SEBI-registered advice. Verify every setup on your chart.")
+    st.caption(
+        "* ROCE/ROE from **Screener.in** for NSE names when the session is active; "
+        "* = ROCE proxied from ROE on Yahoo. Verify on charts before trading."
+    )

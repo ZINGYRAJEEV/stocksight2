@@ -4,7 +4,8 @@ Earnings Surprise — unpriced quarterly jump screener.
 Finds stocks where **revenue and profit jumped sharply QoQ** (latest vs prior quarter)
 with **quality / forward growth** signals, but the **share price has not re-rated much**.
 
-Uses Yahoo Finance quarterly income statements + price history. Cross-check on Screener.in.
+NSE/BSE: **Screener.in** quarterly Sales+ / Net Profit+ (QoQ) and top ROCE first;
+Yahoo Finance as fallback. Price history still from Yahoo.
 """
 
 from __future__ import annotations
@@ -62,7 +63,8 @@ META = {
         "sharp **QoQ revenue & profit jumps**, solid fundamentals, but **muted share-price reaction**."
     ),
     "purpose": (
-        "Compares the **latest two reported quarters** (Yahoo quarterly P&L) for revenue and PAT jumps, "
+        "Compares the **latest two reported quarters** (Screener.in for NSE, Yahoo fallback) for revenue "
+        "and PAT jumps, "
         "layers **ROCE / YoY growth** quality gates, and filters names where price is still **near 200-DMA**, "
         "**below 52-week highs**, and **3M return is capped**. Rank by surprise score."
     ),
@@ -105,6 +107,7 @@ class EarningsSurpriseFilters:
     max_debt_equity: float = 1.0
     min_market_cap_cr: float = 300.0
     info_delay_sec: float = 0.12
+    screener_delay_sec: float = 0.22
 
 
 @dataclass
@@ -136,6 +139,8 @@ class EarningsSurpriseResult:
     verdict: str
     pass_notes: list[str] = field(default_factory=list)
     links: dict = field(default_factory=dict)
+    qoq_source: str = ""
+    fundamentals_source: str = ""
 
 
 def _pick_row(df: pd.DataFrame, candidates: tuple[str, ...]) -> Optional[pd.Series]:
@@ -339,6 +344,15 @@ def _passes_filters(
     return True, notes
 
 
+def _is_indian_ticker(raw: str) -> bool:
+    return raw.endswith(".NS") or raw.endswith(".BO")
+
+
+def _screener_links(disp: str) -> dict:
+    slug = disp.replace(".NS", "").replace(".BO", "")
+    return {"Screener.in": f"https://www.screener.in/company/{slug}/consolidated/"}
+
+
 def scan_earnings_surprise(
     scan_source: str,
     filters: EarningsSurpriseFilters | None = None,
@@ -365,11 +379,50 @@ def scan_earnings_surprise(
             if not info.get("symbol") and not info.get("shortName"):
                 continue
 
-            qoq = extract_quarterly_qoq(stock)
+            qoq: dict = {}
+            qoq_source = ""
+            fund_source = ""
+            disp = raw.replace(".NS", "").replace(".BO", "")
+            screener_html = ""
+
+            if _is_indian_ticker(raw):
+                try:
+                    from screener_in_data import (
+                        fetch_screener_company_html,
+                        fetch_screener_quarterly_qoq,
+                        enrich_fundamentals_from_screener,
+                    )
+
+                    screener_html = fetch_screener_company_html(disp)
+                    screener_qoq = fetch_screener_quarterly_qoq(disp, html=screener_html)
+                    if screener_qoq.get("qoq_sales_pct") is not None and screener_qoq.get("qoq_profit_pct") is not None:
+                        qoq = screener_qoq
+                        qoq_source = str(screener_qoq.get("source") or "Screener.in")
+                    if flt.screener_delay_sec > 0:
+                        time.sleep(flt.screener_delay_sec)
+                except Exception:
+                    pass
+
+            if not qoq:
+                qoq = extract_quarterly_qoq(stock)
+                if qoq:
+                    qoq_source = "Yahoo Finance quarterly P&L"
             if not qoq:
                 continue
 
             fund = extract_multibagger_fundamentals(info)
+            if _is_indian_ticker(raw):
+                try:
+                    from screener_in_data import enrich_fundamentals_from_screener
+
+                    fund = enrich_fundamentals_from_screener(
+                        disp,
+                        fund,
+                        html=screener_html,
+                    )
+                    fund_source = str(fund.get("screener_fundamentals_source") or "")
+                except Exception:
+                    pass
             price = float(info.get("regularMarketPrice") or info.get("currentPrice") or 0.0)
             if price <= 0:
                 continue
@@ -409,6 +462,9 @@ def scan_earnings_surprise(
 
             sector, _ = get_sector_industry(stock)
             disp = raw.replace(".NS", "").replace(".BO", "")
+            links = get_stock_links(raw)
+            if _is_indian_ticker(raw):
+                links = {**links, **_screener_links(disp)}
             score = _surprise_score(
                 qoq.get("qoq_sales_pct"),
                 qoq.get("qoq_profit_pct"),
@@ -454,7 +510,9 @@ def scan_earnings_surprise(
                     surprise_score=score,
                     verdict=verdict,
                     pass_notes=notes,
-                    links=get_stock_links(raw),
+                    links=links,
+                    qoq_source=qoq_source,
+                    fundamentals_source=fund_source,
                 )
             )
         except Exception:
@@ -515,4 +573,5 @@ def result_to_row(r: EarningsSurpriseResult, rank: int) -> dict:
         "Sector": r.sector,
         "D/E": r.debt_equity,
         "Notes": " · ".join(r.pass_notes[:4]),
+        "QoQ src": r.qoq_source or "—",
     }

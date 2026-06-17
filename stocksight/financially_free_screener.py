@@ -45,8 +45,9 @@ META = {
         "VCP bases, ROCE/ROE quality, and **21-EMA** risk discipline."
     ),
     "purpose": (
-        "Monthly **ROC** + **Nifty/Gold** cycle panel, stock scan for leaders/VCP/quality, "
-        "concentrated-portfolio rules (5–10 names, ~10% stop). Yahoo proxies — verify on charts."
+        "Monthly ritual (monthly ROC, Nifty/Gold) · stock scan for leaders/VCP/quality, "
+        "concentrated-portfolio rules (5–10 names, ~10% stop). "
+        "NSE names: ROCE/ROE from Screener.in when available; Yahoo for price/technicals."
     ),
 }
 
@@ -92,6 +93,7 @@ class FinanciallyFreeFilters:
     require_above_21ema: bool = False
     sector_keyword: str = ""
     stop_loss_pct: float = 10.0
+    screener_delay_sec: float = 0.22
 
 
 @dataclass
@@ -136,6 +138,8 @@ class FinanciallyFreeResult:
     ff_score: float
     scan_mode: str
     action_hint: str
+    roce_is_roe_proxy: bool = False
+    fundamentals_source: str = ""
     links: dict = field(default_factory=dict)
 
 
@@ -432,8 +436,19 @@ def scan_financially_free(
             continue
 
         fund = extract_multibagger_fundamentals(info)
+        disp = _display_ticker(raw)
+        if raw.endswith(".NS") or raw.endswith(".BO"):
+            try:
+                from screener_in_data import enrich_fundamentals_from_screener
+
+                fund = enrich_fundamentals_from_screener(disp, fund, delay_sec=flt.screener_delay_sec)
+            except Exception:
+                pass
+
         roce = fund.get("roce_pct")
-        roe = normalize_return_pct(_gf(info, ("returnOnEquity",)))
+        roe = fund.get("roe_pct") or normalize_return_pct(_gf(info, ("returnOnEquity",)))
+        roce_proxy = bool(fund.get("roce_is_roe_proxy"))
+        fund_source = str(fund.get("screener_fundamentals_source") or "")
         pct_below = extra.get("pct_below_52w_high")
         vcp_score = float(vcp.get("vcp_score") or 0.0)
 
@@ -455,7 +470,6 @@ def scan_financially_free(
         )
         pe = get_pe(stock)
         stage = _infer_stage(trend_pass, extra, rs_rank=min(100.0, max(50.0, (rs_pp or 0) + 50)))
-        disp = _display_ticker(raw)
         stop_px = round(price * (1.0 - flt.stop_loss_pct / 100.0), 2)
         rsi_14 = _daily_rsi_14(hist)
         monthly_rsi = _monthly_rsi_14(raw, stock)
@@ -472,6 +486,8 @@ def scan_financially_free(
                 eps_growth_pct=eps_g,
                 roce_pct=roce,
                 roe_pct=roe,
+                roce_is_roe_proxy=roce_proxy,
+                fundamentals_source=fund_source,
                 pct_below_52w_high=pct_below,
                 pct_above_52w_low=extra.get("pct_above_52w_low"),
                 rs_vs_nifty_pp=round(float(rs_pp), 2) if rs_pp is not None else None,
@@ -536,6 +552,11 @@ def sort_ff_results(
 
 
 def result_to_row(r: FinanciallyFreeResult, rank: int, stop_pct: float = 10.0) -> dict:
+    roce_lbl = (
+        f"{r.roce_pct:.1f}" + ("*" if r.roce_is_roe_proxy else "")
+        if r.roce_pct is not None
+        else "—"
+    )
     return {
         "S.No.": rank,
         "Name": r.label,
@@ -549,8 +570,9 @@ def result_to_row(r: FinanciallyFreeResult, rank: int, stop_pct: float = 10.0) -
         "PE": r.pe,
         "EPS": r.eps,
         "EPS growth %": r.eps_growth_pct,
-        "ROCE %": r.roce_pct,
+        "ROCE %": roce_lbl,
         "ROE %": r.roe_pct,
+        "Fund src": r.fundamentals_source or "Yahoo",
         "% below 52w high": r.pct_below_52w_high,
         "RSI (14)": r.rsi_14,
         "Monthly RSI": r.monthly_rsi_14,

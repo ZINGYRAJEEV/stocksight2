@@ -18,6 +18,7 @@ from earnings_surprise_screener import (
 )
 from quality_gate import quality_gate_column_config
 from scan_history_store import append_scan_record
+from screener_session_ui import render_screener_session_panel
 from ui_components import (
     ensure_session_choice,
     filter_column_config,
@@ -48,8 +49,8 @@ especially if the stock is **not near 52-week highs** and **hasn't rallied** in 
 | **Bright future** | ROCE, YoY quarterly growth proxies (sales & profit) |
 | **Price asleep** | Near/below 200-DMA, below 52w high, capped 3M return, reasonable PEG |
 
-**Data:** Yahoo `quarterly_financials` / `quarterly_income_stmt` for QoQ; Yahoo `info` for YoY growth & ROCE.
-**Always cross-check** quarterly results on [Screener.in](https://www.screener.in) before acting.
+**Data:** **Screener.in** quarterly Sales+ / Net Profit+ and top **ROCE** for NSE names (primary);
+Yahoo quarterly P&L as fallback; Yahoo price history for DMA / returns.
 
 **Not the same as:** Multibagger / Volume-Led screens — those use **YoY** quarterly fields, not **QoQ** jumps.
 """
@@ -91,6 +92,7 @@ def render_earnings_surprise_page() -> None:
     )
 
     key = "esur"
+    render_screener_session_panel(key_prefix=f"{key}_screener")
     session_key = f"{key}_results"
 
     with st.container(border=True):
@@ -269,6 +271,8 @@ def render_earnings_surprise_page() -> None:
             "Google Finance": st.column_config.LinkColumn(display_text="Google ↗"),
             "Moneycontrol": st.column_config.LinkColumn(display_text="MC ↗"),
             "TradingView": st.column_config.LinkColumn(display_text="TV ↗"),
+            "Screener.in": st.column_config.LinkColumn(display_text="Screener ↗"),
+            "QoQ src": st.column_config.TextColumn(width="medium"),
         },
     )
 
@@ -285,6 +289,7 @@ def render_earnings_surprise_page() -> None:
             st.markdown(f"**{r.label}** ({r.latest_q} vs {r.prior_q}): {' · '.join(r.pass_notes)}")
 
     st.caption(
-        "* ROCE from ROE when Yahoo omits ROCE. YoY % = Yahoo quarterly YoY proxies. "
-        "QoQ % = computed from Yahoo quarterly P&L. Educational only — not investment advice."
+        "* ROCE from Screener.in when available; else Yahoo (ROE proxy marked *). "
+        "QoQ % = Screener.in quarterly Sales+ / Net Profit+ for NSE; Yahoo fallback. "
+        "Educational only — not investment advice."
     )
