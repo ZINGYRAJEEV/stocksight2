@@ -26,6 +26,100 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
+def _parse_metric(val: Any) -> Optional[float]:
+    """Best-effort numeric parse for heterogeneous screener cells."""
+    if val is None:
+        return None
+    if isinstance(val, float) and np.isnan(val):
+        return None
+    if isinstance(val, str):
+        s = val.strip().replace("%", "").replace("×", "").replace("*", "")
+        if not s or s.lower() in ("—", "-", "n/a", "nan", "none", "yes", "no"):
+            return None
+        try:
+            f = float(s.replace(",", ""))
+            return None if np.isnan(f) else f
+        except ValueError:
+            return None
+    try:
+        f = float(val)
+        return None if np.isnan(f) else f
+    except (TypeError, ValueError):
+        return None
+
+
+# Map framework canonical keys → column names used across theme / scenario screeners.
+_ANALYSIS_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "PE": ("P/E", "PE Ratio", "pe", "Stock P/E"),
+    "Sector_PE": ("Sector P/E", "Sector_PE", "sector_pe"),
+    "PB": ("P/B", "pb", "Price to Book"),
+    "EV_EBITDA": ("EV/EBITDA", "EV EBITDA", "ev_ebitda"),
+    "PEG": ("PEG proxy", "peg", "peg_proxy"),
+    "EPS_Growth": (
+        "EPS growth %",
+        "Profit 3Y %",
+        "Profit TTM %",
+        "Earnings CAGR %",
+        "YoY profit %",
+        "eps_growth",
+        "profit_growth_3y_pct",
+    ),
+    "Operating_Margin": ("Operating margin %", "Op margin %", "operating_margin_pct"),
+    "ROE": ("ROE %", "roe_pct"),
+    "ROCE": ("ROCE %", "roce_pct"),
+    "Net_Margin": ("Net margin %", "net_margin_pct"),
+    "Net_Margin_Trend": ("Net margin trend", "net_margin_trend"),
+    "Revenue_CAGR_3Y": (
+        "Sales 3Y %",
+        "Rev growth %",
+        "Revenue CAGR 3Y %",
+        "Qtr Sales Var %",
+        "sales_growth_3y_pct",
+    ),
+    "Revenue_Growth": (
+        "Sales TTM %",
+        "YoY sales %",
+        "revenue_growth_pct",
+        "sales_growth_ttm_pct",
+    ),
+    "Debt_Equity": ("D/E", "debt_equity", "Debt/Equity"),
+    "Interest_Coverage": ("Interest coverage", "interest_coverage"),
+    "Current_Ratio": ("Current ratio", "current_ratio"),
+    "Operating_Cash_Flow": ("Operating cash flow", "ocf"),
+    "Net_Profit": ("Net profit", "net_profit"),
+    "Free_Cash_Flow": ("Free cash flow", "fcf"),
+    "CapEx": ("CapEx", "capex"),
+    "CFO_PAT_Ratio": ("CFO/PAT", "cfo_pat_ratio"),
+    "Promoter_Holding": ("Promoter holding %", "promoter_holding_pct"),
+    "Pledging": ("Pledging %", "pledging_pct"),
+    "Dividend_Years": ("Dividend years", "dividend_years"),
+    "Buyback_Done": ("Buyback done", "buyback_done"),
+    "RS_1M": ("1M return %", "Return 1M %", "return_1m_pct", "1M %"),
+    "RS_3M": ("3M return %", "Return 3M %", "return_3m_pct", "3M %"),
+    "RS_1Y": ("1Y return %", "Return 1Y %", "return_1y_pct", "1Y %"),
+    "At_New_High": ("At new high", "at_new_high"),
+    "Market_Direction": ("Market direction", "market_direction"),
+    "Order_Book": ("Order book", "order_book"),
+    "Guidance_Met": ("Guidance met", "guidance_met"),
+}
+
+
+def normalize_analysis_row(row: dict[str, Any] | pd.Series) -> dict[str, Any]:
+    """Map heterogeneous screener columns to keys expected by the 7-category framework."""
+    out = row.to_dict() if isinstance(row, pd.Series) else dict(row)
+    for canonical, aliases in _ANALYSIS_COLUMN_ALIASES.items():
+        if _parse_metric(out.get(canonical)) is not None:
+            continue
+        for alias in aliases:
+            if alias not in out:
+                continue
+            parsed = _parse_metric(out[alias])
+            if parsed is not None:
+                out[canonical] = parsed
+                break
+    return out
+
+
 class AnalysisGrade(Enum):
     """Grade for each analysis category."""
     EXCELLENT = "A+"
@@ -158,8 +252,8 @@ class StockAnalysisFramework:
         
         # P/E Analysis (0-25 points)
         try:
-            pe = float(row.get("PE", 0)) or 0
-            sector_pe = float(row.get("Sector_PE", pe)) or pe
+            pe = _parse_metric(row.get("PE")) or 0
+            sector_pe = _parse_metric(row.get("Sector_PE")) or pe
             
             if pe > 0 and sector_pe > 0:
                 pe_discount = ((sector_pe - pe) / sector_pe) * 100
@@ -180,7 +274,7 @@ class StockAnalysisFramework:
         
         # P/B Analysis (0-20 points)
         try:
-            pb = float(row.get("PB", 0)) or 0
+            pb = _parse_metric(row.get("PB")) or 0
             if 0 < pb <= 2.0:
                 scores.append(20)
             elif pb <= 3.0:
@@ -195,7 +289,7 @@ class StockAnalysisFramework:
         
         # EV/EBITDA Analysis (0-20 points)
         try:
-            ev_ebitda = float(row.get("EV_EBITDA", 0)) or 0
+            ev_ebitda = _parse_metric(row.get("EV_EBITDA")) or 0
             if 0 < ev_ebitda <= 12:
                 scores.append(20)
             elif ev_ebitda <= 15:
@@ -210,8 +304,8 @@ class StockAnalysisFramework:
         
         # PEG Analysis (0-35 points)
         try:
-            peg = float(row.get("PEG", 0)) or 0
-            eps_growth = float(row.get("EPS_Growth", 0)) or 0
+            peg = _parse_metric(row.get("PEG")) or 0
+            eps_growth = _parse_metric(row.get("EPS_Growth")) or 0
             
             if peg > 0:
                 if peg < self.thresholds["peg_max"]:
@@ -251,7 +345,7 @@ class StockAnalysisFramework:
         
         # Operating Margin (0-30 points)
         try:
-            opm = float(row.get("Operating_Margin", 0)) or 0
+            opm = _parse_metric(row.get("Operating_Margin")) or 0
             details["operating_margin"] = opm
             
             if opm >= self.thresholds["operating_margin_min"]:
@@ -267,7 +361,7 @@ class StockAnalysisFramework:
         
         # ROE (0-35 points)
         try:
-            roe = float(row.get("ROE", 0)) or 0
+            roe = _parse_metric(row.get("ROE")) or 0
             details["roe"] = roe
             
             if roe >= self.thresholds["roe_min"]:
@@ -285,7 +379,7 @@ class StockAnalysisFramework:
         
         # ROCE (0-20 points)
         try:
-            roce = float(row.get("ROCE", 0)) or 0
+            roce = _parse_metric(row.get("ROCE")) or 0
             details["roce"] = roce
             
             if roce >= 18:
@@ -303,8 +397,8 @@ class StockAnalysisFramework:
         
         # Net Margin Trend (0-15 points)
         try:
-            nm = float(row.get("Net_Margin", 0)) or 0
-            nm_trend = float(row.get("Net_Margin_Trend", 0)) or 0  # YoY change
+            nm = _parse_metric(row.get("Net_Margin")) or 0
+            nm_trend = _parse_metric(row.get("Net_Margin_Trend")) or 0
             details["net_margin"] = nm
             details["net_margin_trend"] = nm_trend
             
@@ -321,8 +415,10 @@ class StockAnalysisFramework:
         
         score = np.mean(scores) if scores else 0
         # Pass if operating margin AND ROE meet minimum thresholds
-        passed = (float(row.get("Operating_Margin", 0)) or 0 >= self.thresholds["operating_margin_min"] and
-                  float(row.get("ROE", 0)) or 0 >= self.thresholds["roe_min"])
+        passed = (
+            (_parse_metric(row.get("Operating_Margin")) or 0) >= self.thresholds["operating_margin_min"]
+            and (_parse_metric(row.get("ROE")) or 0) >= self.thresholds["roe_min"]
+        )
         
         return score, passed, details
     
@@ -341,7 +437,7 @@ class StockAnalysisFramework:
         
         # Revenue CAGR 3Y (0-35 points)
         try:
-            rev_cagr = float(row.get("Revenue_CAGR_3Y", 0)) or 0
+            rev_cagr = _parse_metric(row.get("Revenue_CAGR_3Y")) or 0
             details["revenue_cagr_3y"] = rev_cagr
             
             if rev_cagr >= self.thresholds["revenue_growth_3y_min"]:
@@ -359,8 +455,8 @@ class StockAnalysisFramework:
         
         # EPS Growth vs Revenue Growth (0-30 points)
         try:
-            eps_growth = float(row.get("EPS_Growth", 0)) or 0
-            rev_growth = float(row.get("Revenue_Growth", 0)) or 0
+            eps_growth = _parse_metric(row.get("EPS_Growth")) or 0
+            rev_growth = _parse_metric(row.get("Revenue_Growth")) or 0
             details["eps_growth"] = eps_growth
             details["revenue_growth"] = rev_growth
             
@@ -379,7 +475,7 @@ class StockAnalysisFramework:
         
         # Order Book / Guidance (0-20 points)
         try:
-            order_book = float(row.get("Order_Book", 0)) or 0
+            order_book = _parse_metric(row.get("Order_Book")) or 0
             guidance_met = int(row.get("Guidance_Met", 0)) or 0  # 1=yes, 0=no
             details["order_book"] = order_book
             details["guidance_met"] = guidance_met
@@ -394,7 +490,7 @@ class StockAnalysisFramework:
             scores.append(0)
         
         score = np.mean(scores) if scores else 0
-        passed = (float(row.get("Revenue_CAGR_3Y", 0)) or 0 >= self.thresholds["revenue_growth_3y_min"])
+        passed = (_parse_metric(row.get("Revenue_CAGR_3Y")) or 0) >= self.thresholds["revenue_growth_3y_min"]
         
         return score, passed, details
     
@@ -413,7 +509,7 @@ class StockAnalysisFramework:
         
         # Debt-to-Equity (0-35 points)
         try:
-            de = float(row.get("Debt_Equity", 0)) or 0
+            de = _parse_metric(row.get("Debt_Equity")) or 0
             details["debt_equity"] = de
             
             if de < 0.5:  # Conservative
@@ -433,7 +529,7 @@ class StockAnalysisFramework:
         
         # Interest Coverage Ratio (0-35 points)
         try:
-            icr = float(row.get("Interest_Coverage", 0)) or 0
+            icr = _parse_metric(row.get("Interest_Coverage")) or 0
             details["interest_coverage"] = icr
             
             if icr >= self.thresholds["interest_coverage_min"]:
@@ -451,7 +547,7 @@ class StockAnalysisFramework:
         
         # Current Ratio (0-30 points)
         try:
-            cr = float(row.get("Current_Ratio", 0)) or 0
+            cr = _parse_metric(row.get("Current_Ratio")) or 0
             details["current_ratio"] = cr
             
             if cr >= self.thresholds["current_ratio_min"]:
@@ -469,9 +565,11 @@ class StockAnalysisFramework:
         
         score = np.mean(scores) if scores else 0
         # Pass if D/E < 1 AND Interest Coverage > 3x AND Current ratio > 1.5
-        passed = (float(row.get("Debt_Equity", 0)) or 0 < self.thresholds["debt_equity_max"] and
-                  float(row.get("Interest_Coverage", 0)) or 0 >= self.thresholds["interest_coverage_min"] and
-                  float(row.get("Current_Ratio", 0)) or 0 >= self.thresholds["current_ratio_min"])
+        passed = (
+            (_parse_metric(row.get("Debt_Equity")) or 0) < self.thresholds["debt_equity_max"]
+            and (_parse_metric(row.get("Interest_Coverage")) or 0) >= self.thresholds["interest_coverage_min"]
+            and (_parse_metric(row.get("Current_Ratio")) or 0) >= self.thresholds["current_ratio_min"]
+        )
         
         return score, passed, details
     
@@ -490,8 +588,8 @@ class StockAnalysisFramework:
         
         # OCF vs Net Profit (0-35 points)
         try:
-            ocf = float(row.get("Operating_Cash_Flow", 0)) or 0
-            np_val = float(row.get("Net_Profit", 0)) or 0
+            ocf = _parse_metric(row.get("Operating_Cash_Flow")) or 0
+            np_val = _parse_metric(row.get("Net_Profit")) or 0
             details["ocf"] = ocf
             details["net_profit"] = np_val
             
@@ -516,8 +614,8 @@ class StockAnalysisFramework:
         
         # Free Cash Flow (0-35 points)
         try:
-            fcf = float(row.get("Free_Cash_Flow", 0)) or 0
-            capex = float(row.get("CapEx", 0)) or 0
+            fcf = _parse_metric(row.get("Free_Cash_Flow")) or 0
+            capex = _parse_metric(row.get("CapEx")) or 0
             details["fcf"] = fcf
             details["capex"] = capex
             
@@ -533,7 +631,7 @@ class StockAnalysisFramework:
         
         # CFO/PAT Ratio (0-30 points)
         try:
-            cfo_pat = float(row.get("CFO_PAT_Ratio", 0)) or 0
+            cfo_pat = _parse_metric(row.get("CFO_PAT_Ratio")) or 0
             details["cfo_pat_ratio"] = cfo_pat
             
             if cfo_pat >= self.thresholds["cfo_pat_min"]:
@@ -550,8 +648,10 @@ class StockAnalysisFramework:
             scores.append(0)
         
         score = np.mean(scores) if scores else 0
-        passed = (float(row.get("CFO_PAT_Ratio", 0)) or 0 >= self.thresholds["cfo_pat_min"] and
-                  float(row.get("Free_Cash_Flow", 0)) or 0 > 0)
+        passed = (
+            (_parse_metric(row.get("CFO_PAT_Ratio")) or 0) >= self.thresholds["cfo_pat_min"]
+            and (_parse_metric(row.get("Free_Cash_Flow")) or 0) > 0
+        )
         
         return score, passed, details
     
@@ -570,7 +670,7 @@ class StockAnalysisFramework:
         
         # Promoter Holding (0-40 points)
         try:
-            promoter = float(row.get("Promoter_Holding", 0)) or 0
+            promoter = _parse_metric(row.get("Promoter_Holding")) or 0
             details["promoter_holding"] = promoter
             
             if promoter >= self.thresholds["promoter_holding_min"]:
@@ -588,7 +688,7 @@ class StockAnalysisFramework:
         
         # Pledging (0-35 points) - lower is better
         try:
-            pledging = float(row.get("Pledging", 0)) or 0
+            pledging = _parse_metric(row.get("Pledging")) or 0
             details["pledging"] = pledging
             
             if pledging < self.thresholds["pledging_max"]:
@@ -625,8 +725,10 @@ class StockAnalysisFramework:
             scores.append(0)
         
         score = np.mean(scores) if scores else 0
-        passed = (float(row.get("Promoter_Holding", 0)) or 0 >= self.thresholds["promoter_holding_min"] and
-                  float(row.get("Pledging", 0)) or 0 < self.thresholds["pledging_max"])
+        passed = (
+            (_parse_metric(row.get("Promoter_Holding")) or 0) >= self.thresholds["promoter_holding_min"]
+            and (_parse_metric(row.get("Pledging")) or 0) < self.thresholds["pledging_max"]
+        )
         
         return score, passed, details
     
@@ -645,7 +747,7 @@ class StockAnalysisFramework:
         
         # 1M Performance vs Index (0-20 points)
         try:
-            rs_1m = float(row.get("RS_1M", 0)) or 0
+            rs_1m = _parse_metric(row.get("RS_1M")) or 0
             details["rs_1m_pct"] = rs_1m
             
             if rs_1m > 5:
@@ -663,7 +765,7 @@ class StockAnalysisFramework:
         
         # 3M Performance vs Index (0-25 points)
         try:
-            rs_3m = float(row.get("RS_3M", 0)) or 0
+            rs_3m = _parse_metric(row.get("RS_3M")) or 0
             details["rs_3m_pct"] = rs_3m
             
             if rs_3m > 10:
@@ -681,7 +783,7 @@ class StockAnalysisFramework:
         
         # 1Y Performance vs Index (0-25 points)
         try:
-            rs_1y = float(row.get("RS_1Y", 0)) or 0
+            rs_1y = _parse_metric(row.get("RS_1Y")) or 0
             details["rs_1y_pct"] = rs_1y
             
             if rs_1y > 30:
@@ -715,7 +817,7 @@ class StockAnalysisFramework:
         
         score = np.mean(scores) if scores else 0
         # Pass if positive momentum overall
-        passed = (float(row.get("RS_1Y", 0)) or 0 > 0)
+        passed = (_parse_metric(row.get("RS_1Y")) or 0) > 0
         
         return score, passed, details
     
@@ -731,6 +833,7 @@ class StockAnalysisFramework:
         Returns:
             AnalysisMetrics with all scores and details
         """
+        row = pd.Series(normalize_analysis_row(row))
         ticker = str(row.get("Ticker", "UNKNOWN"))
         metrics = AnalysisMetrics(ticker=ticker)
         
