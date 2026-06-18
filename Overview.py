@@ -70,6 +70,7 @@ def _import_navigation_pages():
         "page_crisis_value",
         "page_valuation_rulebook",
         "page_earnings_surprise",
+        "page_value_growth",
         "page_multibagger_patterns",
         "page_fast_movers",
         "page_scan_history",
@@ -153,6 +154,7 @@ try:
     page_crisis_value = _nav["page_crisis_value"]
     page_valuation_rulebook = _nav["page_valuation_rulebook"]
     page_earnings_surprise = _nav["page_earnings_surprise"]
+    page_value_growth = _nav["page_value_growth"]
     page_multibagger_patterns = _nav["page_multibagger_patterns"]
     page_fast_movers = _nav["page_fast_movers"]
     page_scan_history = _nav["page_scan_history"]
@@ -237,6 +239,7 @@ NAV_PAGES = {
         st.Page(page_proven_multibaggers, title="Proven Multibaggers (500%+)", icon="🏆"),
         st.Page(page_volume_led_growth, title="Volume-Led Growth", icon="📈"),
         st.Page(page_peter_lynch, title="Peter Lynch (PEG / GARP)", icon="🦉"),
+        st.Page(page_value_growth, title="Value Growth (P/E · EPS)", icon="📐"),
         st.Page(page_valuation_rulebook, title="Valuation Rulebook", icon="🧮"),
         st.Page(page_earnings_surprise, title="Earnings Surprise", icon="💎"),
         st.Page(page_crisis_value, title="Crisis Value (Steady Earnings)", icon="🏦"),

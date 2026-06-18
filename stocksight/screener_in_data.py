@@ -166,6 +166,117 @@ def _parse_ratio_block(html: str, label: str) -> Optional[float]:
         return None
 
 
+def _parse_top_ratio_text(html: str, label: str) -> str:
+    """Raw text block after a top-ratio label (price, mcap units, etc.)."""
+    m = re.search(rf'id=["\']top-ratios["\'][^>]*>(.*?)</section>', html, re.S | re.I)
+    if not m:
+        return ""
+    pat = (
+        rf'<span class="name">\s*{re.escape(label)}\s*</span>'
+        rf'.*?<span class="nowrap value">(.*?)</span>'
+    )
+    hit = re.search(pat, m.group(1), re.S | re.I)
+    if not hit:
+        return ""
+    return _clean_cell(re.sub(r"<[^>]+>", " ", hit.group(1)))
+
+
+def _parse_market_cap_cr(html: str) -> Optional[float]:
+    raw = _parse_top_ratio_text(html, "Market Cap")
+    if not raw:
+        val = _parse_ratio_block(html, "Market Cap")
+        return round(val, 1) if val is not None else None
+    num = _parse_screener_number(raw)
+    if num is None:
+        return None
+    low = raw.lower()
+    if "lakh" in low and "cr" in low:
+        return round(float(num) * 100_000.0, 1)
+    if "cr" in low:
+        return round(float(num), 1)
+    return round(float(num), 1)
+
+
+def _parse_compounded_table(html: str, title: str) -> dict[str, Optional[float]]:
+    """Parse Screener ranges-table blocks like Compounded Profit Growth."""
+    out: dict[str, Optional[float]] = {}
+    for table_html in re.findall(r'<table class="ranges-table">(.*?)</table>', html, re.S | re.I):
+        if title.lower() not in table_html.lower():
+            continue
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, re.S | re.I):
+            cells = [
+                _clean_cell(re.sub(r"<[^>]+>", "", c))
+                for c in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", row, re.S | re.I)
+            ]
+            if len(cells) < 2:
+                continue
+            label = cells[0].rstrip(":").strip().lower()
+            val = _parse_screener_number(cells[1])
+            if "10 year" in label:
+                out["y10"] = val
+            elif "5 year" in label:
+                out["y5"] = val
+            elif "3 year" in label:
+                out["y3"] = val
+            elif label == "ttm":
+                out["ttm"] = val
+        break
+    return out
+
+
+def _parse_trailing_eps(html: str) -> tuple[Optional[float], Optional[int]]:
+    """Latest Mar FY EPS in Rs from consolidated P&L."""
+    headers, data = _parse_section_table(html, "profit-loss")
+    eps_vals = _row_values(data, "eps in rs", "eps")
+    if not eps_vals or not headers:
+        return None, None
+    for hdr, val in zip(reversed(headers), reversed(eps_vals)):
+        if val is not None and val > 0:
+            year = None
+            m = re.search(r"(20\d{2})", hdr or "")
+            if m:
+                year = int(m.group(1))
+            return round(float(val), 2), year
+    return None, None
+
+
+def fetch_screener_value_profile(display_ticker: str, *, html: str = "") -> dict:
+    """
+    Value / GARP fields from Screener.in consolidated page:
+    P/E, price, trailing EPS, compounded profit growth (3Y/5Y/TTM), ROCE/ROE.
+    """
+    page = html or fetch_screener_company_html(display_ticker)
+    if not page:
+        return {}
+
+    pe = _parse_ratio_block(page, "Stock P/E")
+    price = _parse_ratio_block(page, "Current Price")
+    mcap_cr = _parse_market_cap_cr(page)
+    eps, eps_year = _parse_trailing_eps(page)
+    profit_g = _parse_compounded_table(page, "Compounded Profit Growth")
+    sales_g = _parse_compounded_table(page, "Compounded Sales Growth")
+    roce = _parse_ratio_block(page, "ROCE")
+    roe = _parse_ratio_block(page, "ROE")
+
+    slug = display_ticker.replace(".NS", "").replace(".BO", "").strip().lower()
+    return {
+        "pe": pe,
+        "price": price,
+        "market_cap_cr": mcap_cr,
+        "trailing_eps": eps,
+        "eps_fy": eps_year,
+        "profit_growth_3y_pct": profit_g.get("y3"),
+        "profit_growth_5y_pct": profit_g.get("y5"),
+        "profit_growth_ttm_pct": profit_g.get("ttm"),
+        "sales_growth_3y_pct": sales_g.get("y3"),
+        "sales_growth_ttm_pct": sales_g.get("ttm"),
+        "roce_pct": roce,
+        "roe_pct": roe,
+        "screener_url": f"https://www.screener.in/company/{slug}/consolidated/",
+        "source": "Screener.in consolidated",
+    }
+
+
 def fetch_screener_top_ratios(display_ticker: str, *, html: str = "") -> dict:
     """ROCE / ROE from Screener.in top-ratios panel (latest reported)."""
     page = html or fetch_screener_company_html(display_ticker)

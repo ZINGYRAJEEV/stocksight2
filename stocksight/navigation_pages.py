@@ -303,6 +303,12 @@ def page_earnings_surprise() -> None:
     render_earnings_surprise_page()
 
 
+def page_value_growth() -> None:
+    from value_growth_page import render_value_growth_page
+
+    render_value_growth_page()
+
+
 def page_multibagger_patterns() -> None:
     from multibagger_patterns_page import render_multibagger_patterns_page
 
@@ -367,5 +373,6 @@ __all__ = [
     "page_crisis_value",
     "page_valuation_rulebook",
     "page_earnings_surprise",
+    "page_value_growth",
     "page_multibagger_patterns",
 ]

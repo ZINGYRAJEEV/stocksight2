@@ -49,6 +49,8 @@ class StockContext:
     week_high52: str = "—"
     week_low52: str = "—"
     price: Optional[float] = None
+    prev_close: Optional[float] = None
+    gap_pct: Optional[float] = None
     drawdown_pct: Optional[float] = None
     ret_6m_pct: Optional[float] = None
     vol_ratio: Optional[float] = None
@@ -181,6 +183,26 @@ def _fmt_inr(price: float) -> str:
     return f"₹{price:,.2f}"
 
 
+def _info_float(info: dict, keys: tuple[str, ...]) -> Optional[float]:
+    for key in keys:
+        val = info.get(key)
+        if val is None:
+            continue
+        try:
+            fv = float(val)
+            if fv > 0:
+                return fv
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _gap_vs_prev_close(ltp: float, prev_close: float) -> Optional[float]:
+    if prev_close <= 0:
+        return None
+    return round((ltp - prev_close) / prev_close * 100.0, 2)
+
+
 def fetch_stock_context(raw_ticker: str) -> StockContext:
     ctx = StockContext()
     if not raw_ticker:
@@ -207,21 +229,38 @@ def fetch_stock_context(raw_ticker: str) -> StockContext:
         ctx.note = "Insufficient price history for context."
         return ctx
 
-    price = float(hist["Close"].iloc[-1])
-    ctx.price = round(price, 2)
-    ctx.approx_price = f"~{_fmt_inr(price)}"
+    info: dict = {}
+    try:
+        info = yf.Ticker(raw_ticker).info or {}
+    except Exception:
+        info = {}
+
+    prev_close = _info_float(info, ("previousClose", "regularMarketPreviousClose"))
+    if prev_close is None and len(hist) >= 2:
+        prev_close = float(hist["Close"].iloc[-2])
+    elif prev_close is None:
+        prev_close = float(hist["Close"].iloc[-1])
+
+    ltp = _info_float(info, ("regularMarketPrice", "currentPrice"))
+    if ltp is None:
+        ltp = float(hist["Close"].iloc[-1])
+
+    ctx.price = round(ltp, 2)
+    ctx.prev_close = round(prev_close, 2) if prev_close else None
+    ctx.gap_pct = _gap_vs_prev_close(ltp, prev_close) if prev_close else None
+    ctx.approx_price = _fmt_inr(ltp)
 
     window = hist.tail(252) if len(hist) >= 252 else hist
     whigh = float(window["High"].max())
     wlow = float(window["Low"].min())
     ctx.week_high52 = _fmt_inr(whigh)
     ctx.week_low52 = _fmt_inr(wlow)
-    ctx.drawdown_pct = round((whigh - price) / whigh * 100, 1) if whigh else None
-    ctx.near_52w_low = bool(wlow and price <= wlow * 1.08)
+    ctx.drawdown_pct = round((whigh - ltp) / whigh * 100, 1) if whigh else None
+    ctx.near_52w_low = bool(wlow and ltp <= wlow * 1.08)
 
     bars_6m = min(126, len(hist) - 1)
     if bars_6m > 0:
-        ctx.ret_6m_pct = round((price / float(hist["Close"].iloc[-bars_6m]) - 1) * 100, 1)
+        ctx.ret_6m_pct = round((ltp / float(hist["Close"].iloc[-bars_6m]) - 1) * 100, 1)
 
     vr = compute_volume_ratio(hist["Volume"])
     ctx.vol_ratio = round(float(vr), 2) if vr is not None else None
@@ -229,7 +268,7 @@ def fetch_stock_context(raw_ticker: str) -> StockContext:
     ma20_s = hist["Close"].rolling(20).mean()
     if len(ma20_s) and ma20_s.iloc[-1] == ma20_s.iloc[-1]:
         ma20 = float(ma20_s.iloc[-1])
-        ctx.pct_vs_ma20 = round((price - ma20) / ma20 * 100, 1)
+        ctx.pct_vs_ma20 = round((ltp - ma20) / ma20 * 100, 1)
 
     ret6 = ctx.ret_6m_pct or 0.0
     dd = ctx.drawdown_pct or 0.0
@@ -247,6 +286,8 @@ def fetch_stock_context(raw_ticker: str) -> StockContext:
         ctx.trend = "HIGH_VOLATILITY"
 
     notes: list[str] = []
+    if ctx.gap_pct is not None:
+        notes.append(f"Gap {ctx.gap_pct:+.2f}% vs prev close")
     if ctx.drawdown_pct is not None:
         notes.append(f"{ctx.drawdown_pct:.0f}% below 52-week high")
     if ctx.ret_6m_pct is not None:
@@ -257,11 +298,9 @@ def fetch_stock_context(raw_ticker: str) -> StockContext:
         notes.append("Trading near 52-week lows")
 
     try:
-        stk = yf.Ticker(raw_ticker)
-        sec, ind = get_sector_industry(stk)
+        sec, ind = get_sector_industry(yf.Ticker(raw_ticker))
         ctx.sector = sec or "—"
         ctx.industry = ind or "—"
-        info = stk.info or {}
         mcap = info.get("marketCap")
         if mcap:
             ctx.market_cap_cr = round(float(mcap) / 1e7, 1)

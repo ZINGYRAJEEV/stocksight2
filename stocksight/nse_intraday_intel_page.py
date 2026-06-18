@@ -15,6 +15,7 @@ from nse_intraday_intel import (
     build_market_themes,
     ist_clock_label,
     market_session_phase,
+    _fmt_inr,
 )
 from screener_bulk_order import (
     ORDER_SEARCH_PRESETS,
@@ -58,9 +59,13 @@ def _intel_summary_df(records: list[IntradayIntelRecord]) -> pd.DataFrame:
     rows: list[dict] = []
     for r in records:
         em = _SENTIMENT_EMOJI.get(r.intraday.sentiment, "⚪")
+        ctx = r.stock_context
         rows.append({
             "Ticker": r.ticker,
             "Company": r.name,
+            "LTP ₹": ctx.price,
+            "Prev close ₹": ctx.prev_close,
+            "Gap %": ctx.gap_pct,
             "Type": _NEWS_TYPE_LABEL.get(r.news_type, r.news_type),
             "Sentiment": f"{em} {r.intraday.sentiment.replace('_', ' ')}",
             "Strength": "★" * r.intraday.strength + "☆" * (3 - r.intraday.strength),
@@ -87,6 +92,15 @@ def _render_company_detail(r: IntradayIntelRecord) -> None:
     st.caption(f"{r.sector} · {r.news_date} · {_NEWS_TYPE_LABEL.get(r.news_type, r.news_type)}")
 
     m1, m2, m3, m4 = st.columns(4)
+    m1.metric("LTP", ctx.approx_price)
+    gap_lbl = f"{ctx.gap_pct:+.2f}%" if ctx.gap_pct is not None else "—"
+    m2.metric("Gap vs prev close", gap_lbl)
+    prev_lbl = _fmt_inr(ctx.prev_close) if ctx.prev_close else "—"
+    m3.metric("Prev close", prev_lbl)
+    m4.metric("Now (IST)", ist_clock_label())
+
+    m1, m2, m3, m4 = st.columns(4)
+    em = _SENTIMENT_EMOJI.get(intra.sentiment, "⚪")
     m1.metric("Sentiment", f"{em} {intra.sentiment.replace('_', ' ')}")
     m2.metric("Strength", "★" * intra.strength + "☆" * (3 - intra.strength))
     m3.metric("Bias", intra.bias.replace("_", " "))
@@ -95,7 +109,7 @@ def _render_company_detail(r: IntradayIntelRecord) -> None:
     t1, t2, t3 = st.columns(3)
     t1.metric("React by", intra.react_by or "—")
     t2.metric("Exit by", intra.exit_by or "—")
-    t3.metric("Now (IST)", ist_clock_label())
+    t3.metric("52W range", f"{ctx.week_low52} – {ctx.week_high52}")
 
     st.info(f"**Indicator:** {intra.indicator}")
     st.success(f"**Suggestion:** {intra.suggestion}")
@@ -115,8 +129,10 @@ def _render_company_detail(r: IntradayIntelRecord) -> None:
     with c1:
         st.markdown("**Stock context**")
         st.write(
-            f"Price: **{ctx.approx_price}** · 52W H: **{ctx.week_high52}** · "
-            f"52W L: **{ctx.week_low52}** · Trend: **{ctx.trend.replace('_', ' ')}**"
+            f"Price: **{ctx.approx_price}** · Gap: **{ctx.gap_pct:+.2f}%** vs prev close "
+            f"({ _fmt_inr(ctx.prev_close) if ctx.prev_close else '—'}) · "
+            f"52W H: **{ctx.week_high52}** · 52W L: **{ctx.week_low52}** · "
+            f"Trend: **{ctx.trend.replace('_', ' ')}**"
         )
         st.caption(ctx.note)
     with c2:
@@ -205,6 +221,9 @@ def _cached_analysis(
                 "note": r.stock_context.note,
                 "week_high52": r.stock_context.week_high52,
                 "week_low52": r.stock_context.week_low52,
+                "price": r.stock_context.price,
+                "prev_close": r.stock_context.prev_close,
+                "gap_pct": r.stock_context.gap_pct,
             },
             "intraday": {
                 "sentiment": r.intraday.sentiment,
@@ -254,6 +273,9 @@ def _records_from_cache(raw: list[dict]) -> list[IntradayIntelRecord]:
                     note=sc["note"],
                     week_high52=sc["week_high52"],
                     week_low52=sc["week_low52"],
+                    price=sc.get("price"),
+                    prev_close=sc.get("prev_close"),
+                    gap_pct=sc.get("gap_pct"),
                 ),
                 intraday=IntradaySetup(
                     sentiment=ia["sentiment"],
@@ -398,6 +420,10 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
                 return
 
             st.success(f"**{len(records)}** companies analysed · query: `{order_query[:60]}`")
+            st.caption(
+                "**LTP** = live / latest Yahoo price · **Gap %** = change vs **previous close** "
+                "(refreshes when you click **Refresh analysis**)."
+            )
             st.link_button("🔗 Bulk Order feed on Screener", SCREENER_ORDER_URL)
 
             df = _intel_summary_df(records)
@@ -406,6 +432,9 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
                 use_container_width=True,
                 hide_index=True,
                 column_config={
+                    "LTP ₹": st.column_config.NumberColumn(format="₹%.2f"),
+                    "Prev close ₹": st.column_config.NumberColumn(format="₹%.2f"),
+                    "Gap %": st.column_config.NumberColumn(format="%+.2f"),
                     "React by": st.column_config.TextColumn("React by", width="small"),
                     "Exit by": st.column_config.TextColumn("Exit by", width="small"),
                     "Indicator": st.column_config.TextColumn("Indicator", width="medium"),
