@@ -226,18 +226,40 @@ def _parse_compounded_table(html: str, title: str) -> dict[str, Optional[float]]
 
 def _parse_trailing_eps(html: str) -> tuple[Optional[float], Optional[int]]:
     """Latest Mar FY EPS in Rs from consolidated P&L."""
+    series = _parse_eps_history(html)
+    if not series:
+        return None, None
+    fy, _lbl, eps = series[-1]
+    return eps, fy
+
+
+def _parse_eps_history(html: str) -> list[tuple[int, str, float]]:
+    """Mar FY EPS in Rs from consolidated P&L — oldest to newest."""
     headers, data = _parse_section_table(html, "profit-loss")
     eps_vals = _row_values(data, "eps in rs", "eps")
     if not eps_vals or not headers:
-        return None, None
-    for hdr, val in zip(reversed(headers), reversed(eps_vals)):
-        if val is not None and val > 0:
-            year = None
-            m = re.search(r"(20\d{2})", hdr or "")
-            if m:
-                year = int(m.group(1))
-            return round(float(val), 2), year
-    return None, None
+        return []
+    out: list[tuple[int, str, float]] = []
+    for hdr, val in zip(headers, eps_vals):
+        if val is None or float(val) <= 0:
+            continue
+        year = None
+        m = re.search(r"(20\d{2})", hdr or "")
+        if m:
+            year = int(m.group(1))
+        if year is None:
+            continue
+        out.append((year, (hdr or str(year)).strip(), round(float(val), 2)))
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def fetch_screener_eps_history(display_ticker: str, *, html: str = "") -> list[tuple[int, str, float]]:
+    """[(fy_year, header_label, eps_rs), ...] from Screener.in consolidated P&L."""
+    page = html or fetch_screener_company_html(display_ticker)
+    if not page:
+        return []
+    return _parse_eps_history(page)
 
 
 def fetch_screener_value_profile(display_ticker: str, *, html: str = "") -> dict:

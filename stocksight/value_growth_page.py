@@ -16,6 +16,7 @@ from value_growth_screener import (
     scan_value_growth,
     sort_value_growth_results,
 )
+from pe_history_ui import render_pe_history_panel
 from quality_gate import quality_gate_column_config
 from scan_history_store import append_scan_record
 from screener_session_ui import render_screener_session_panel
@@ -27,6 +28,7 @@ from ui_components import (
     page_audience_note,
     prepare_scan_results_df,
     render_clickable_scan_table,
+    render_historical_detail_panel,
     render_watchlist_panel,
     safe_set_page_config,
 )
@@ -253,13 +255,45 @@ def render_value_growth_page() -> None:
         },
     )
 
+    chart_sel_key = f"{key}_chart_selected"
+
+    def _on_chart_row_select(row: pd.Series) -> None:
+        try:
+            st.session_state[chart_sel_key] = str(row["Ticker"])
+        except Exception:
+            pass
+
     render_clickable_scan_table(
         df,
         key_prefix=f"{key}_results",
         universe_name=last_uni,
         column_config=col_cfg,
         height=min(560, 48 + len(df) * 38),
+        show_panel=False,
+        on_row_select=_on_chart_row_select,
     )
+
+    sel = st.session_state.get(chart_sel_key)
+    if sel and not df.empty:
+        st.markdown("---")
+        render_historical_detail_panel(
+            df,
+            universe_name=last_uni,
+            key_prefix=f"{key}_detail",
+            selected_ticker=sel,
+        )
+        raw_sym = None
+        hit = df[df["Ticker"].astype(str) == str(sel)]
+        if not hit.empty and "Raw" in hit.columns:
+            raw_sym = str(hit.iloc[0]["Raw"])
+        render_pe_history_panel(
+            display_ticker=str(sel),
+            raw_ticker=raw_sym,
+            key_prefix=f"{key}_pe",
+            max_pe_hint=float(max_pe),
+        )
+    elif not df.empty:
+        st.caption("💡 Click a row above to load price chart and **historical P/E** (Screener EPS + Yahoo).")
 
     with st.expander("Pass criteria notes (per stock)", expanded=False):
         for r in results[:25]:

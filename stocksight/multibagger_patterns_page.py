@@ -17,6 +17,7 @@ from multibagger_patterns_screener import (
     scan_multibagger_patterns,
     sort_mb_pattern_results,
 )
+from pe_history_ui import render_pe_history_panel
 from quality_gate import quality_gate_column_config
 from scan_history_store import append_scan_record
 from screener_session_ui import render_screener_session_panel
@@ -280,6 +281,19 @@ def render_multibagger_patterns_page() -> None:
             key_prefix=f"{key}_detail",
             selected_ticker=st.session_state.get(chart_sel_key),
         )
+        sel = st.session_state.get(chart_sel_key)
+        if sel:
+            raw_sym = None
+            hit = df[df["Ticker"].astype(str) == str(sel)]
+            if not hit.empty and "Raw" in hit.columns:
+                raw_sym = str(hit.iloc[0]["Raw"])
+            render_pe_history_panel(
+                display_ticker=str(sel),
+                raw_ticker=raw_sym,
+                key_prefix=f"{key}_pe",
+            )
+    elif not df.empty:
+        st.caption("💡 Click a row above to load price chart and **historical P/E** (Screener EPS + Yahoo).")
 
     with st.expander("Pass notes (per stock)", expanded=False):
         for r in results[:20]:

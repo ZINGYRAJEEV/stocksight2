@@ -9,6 +9,7 @@ from scan_history_store import append_scan_record
 from screener import UNIVERSES, screen_stocks
 from session_utils import deduplicate_scan_results
 from stock_analysis_framework import StockAnalysisFramework
+from pe_history_ui import render_pe_history_panel
 from ui_components import (
     filter_column_config,
     inject_css,
@@ -16,6 +17,7 @@ from ui_components import (
     page_audience_note,
     render_clickable_scan_table,
     render_decision_matrix_legend,
+    render_historical_detail_panel,
     render_watchlist_panel,
     safe_set_page_config,
 )
@@ -271,6 +273,13 @@ if df is None or df.empty:
     """)
 else:
     df = df.copy()
+    is_nse_uni = "NSE" in str(universe)
+    if "Raw" not in df.columns:
+        df["Raw"] = df["Ticker"].apply(
+            lambda t: f"{str(t).replace('.NS', '').replace('.BO', '')}.NS"
+            if is_nse_uni
+            else str(t)
+        )
     if "Action" not in df.columns and "Decision" in df.columns:
         df["Action"] = df["Decision"]
     df["BusinessLine"] = df["Ticker"].apply(
@@ -446,14 +455,53 @@ else:
                 "BusinessLine": st.column_config.LinkColumn("BusinessLine", display_text="BL ↗"),
             }
 
+            chart_sel_key = "bha_chart_selected"
+
+            def _on_bha_row_select(row: pd.Series) -> None:
+                try:
+                    st.session_state[chart_sel_key] = str(row["Ticker"])
+                except Exception:
+                    pass
+
             render_clickable_scan_table(
                 df_table[visible_cols],
                 key_prefix="bha_results",
-                universe_name="NSE",
+                universe_name=universe,
                 column_config=filter_column_config(df_table[visible_cols], col_cfg),
                 hide_index=False,
                 height=min(600, 60 + len(df_table) * 38),
+                show_panel=False,
+                on_row_select=_on_bha_row_select,
             )
+
+            table_sel = st.session_state.get(chart_sel_key)
+            if table_sel:
+                st.markdown("---")
+                render_historical_detail_panel(
+                    df_table,
+                    universe_name=universe,
+                    key_prefix="bha_detail",
+                    selected_ticker=table_sel,
+                )
+                hit = df_table[df_table["Ticker"].astype(str) == str(table_sel)]
+                raw_sym = str(hit.iloc[0]["Raw"]) if not hit.empty and "Raw" in hit.columns else None
+                pe_hint = None
+                if not hit.empty and "PE Ratio" in hit.columns:
+                    try:
+                        pe_hint = float(hit.iloc[0]["PE Ratio"])
+                    except (TypeError, ValueError):
+                        pe_hint = None
+                if is_nse_uni:
+                    render_pe_history_panel(
+                        display_ticker=str(table_sel).replace(".NS", "").replace(".BO", ""),
+                        raw_ticker=raw_sym,
+                        key_prefix="bha_pe",
+                        max_pe_hint=pe_hint,
+                    )
+                else:
+                    st.caption("Historical P/E chart uses Screener.in EPS — NSE/BSE names only.")
+            else:
+                st.caption("💡 Click a table row for price chart and **historical P/E** (NSE names).")
             csv = df_table[visible_cols].to_csv(index=False).encode("utf-8")
             st.download_button(
                 "⬇ Download Buy/Hold/Avoid CSV",
@@ -468,11 +516,27 @@ else:
             "Preview news links for",
             options=df["Ticker"].tolist(),
             index=0,
-            help="Pick a ticker to open Yahoo Finance news, Moneycontrol search, or BusinessLine headlines.",
+            help="Pick a ticker to open news links and historical P/E (NSE).",
         )
 
         if selected_ticker:
             clean_ticker = selected_ticker.replace(".NS", "").replace(".BO", "")
+            if view == "Cards" and is_nse_uni:
+                st.markdown("---")
+                raw_row = df[df["Ticker"].astype(str) == str(selected_ticker)]
+                raw_sym = str(raw_row.iloc[0]["Raw"]) if not raw_row.empty and "Raw" in raw_row.columns else f"{clean_ticker}.NS"
+                pe_hint = None
+                if not raw_row.empty and "PE Ratio" in raw_row.columns:
+                    try:
+                        pe_hint = float(raw_row.iloc[0]["PE Ratio"])
+                    except (TypeError, ValueError):
+                        pe_hint = None
+                render_pe_history_panel(
+                    display_ticker=clean_ticker,
+                    raw_ticker=raw_sym,
+                    key_prefix="bha_pe_cards",
+                    max_pe_hint=pe_hint,
+                )
             if selected_ticker.endswith(".NS"):
                 gf_exchange = "NSE"
             elif selected_ticker.endswith(".BO"):

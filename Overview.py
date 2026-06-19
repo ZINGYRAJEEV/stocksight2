@@ -235,14 +235,16 @@ NAV_PAGES = {
     ],
     "🌱 Theme Screens": [
         st.Page(page_multibagger, title="Multibagger Theme", icon="🌱"),
-        st.Page(page_multibagger_patterns, title="Multi-Bagger Patterns", icon="🚀"),
         st.Page(page_proven_multibaggers, title="Proven Multibaggers (500%+)", icon="🏆"),
         st.Page(page_volume_led_growth, title="Volume-Led Growth", icon="📈"),
         st.Page(page_peter_lynch, title="Peter Lynch (PEG / GARP)", icon="🦉"),
-        st.Page(page_value_growth, title="Value Growth (P/E · EPS)", icon="📐"),
         st.Page(page_valuation_rulebook, title="Valuation Rulebook", icon="🧮"),
         st.Page(page_earnings_surprise, title="Earnings Surprise", icon="💎"),
         st.Page(page_crisis_value, title="Crisis Value (Steady Earnings)", icon="🏦"),
+    ],
+    "📚 My Learning": [
+        st.Page(page_multibagger_patterns, title="Multi-Bagger Patterns", icon="🚀"),
+        st.Page(page_value_growth, title="Value Growth (P/E · EPS)", icon="📐"),
     ],
     "🤖 Algo Strategy": [
         st.Page(page_algo_strategy_hub, title="Algo Strategy Hub", icon="🤖"),
