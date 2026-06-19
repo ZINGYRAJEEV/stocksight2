@@ -15,9 +15,9 @@ import numpy as np
 import pandas as pd
 
 try:
-    from .screener_in_data import fetch_screener_eps_history, fetch_screener_value_profile
-except ImportError:
     from screener_in_data import fetch_screener_eps_history, fetch_screener_value_profile
+except ImportError:
+    from stocksight.screener_in_data import fetch_screener_eps_history, fetch_screener_value_profile
 
 
 @dataclass

@@ -80,6 +80,8 @@ def exec_stocksight_page(filename: str) -> None:
         "fast_movers_page",
         "crisis_value",
         "crisis_value_page",
+        "pe_history",
+        "pe_history_ui",
     ):
         sys.modules.pop(_m, None)
     path = _STOCKSIGHT / "pages" / filename

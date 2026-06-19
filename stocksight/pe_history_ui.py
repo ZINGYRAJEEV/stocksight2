@@ -15,7 +15,7 @@ except ImportError:
 try:
     from pe_history import build_pe_history, pe_history_to_dataframe
 except ImportError:
-    from .pe_history import build_pe_history, pe_history_to_dataframe  # type: ignore[no-redef]
+    from stocksight.pe_history import build_pe_history, pe_history_to_dataframe  # type: ignore[no-redef]
 
 
 @st.cache_data(ttl=900, show_spinner=False)
