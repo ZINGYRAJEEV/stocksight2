@@ -39,6 +39,28 @@ _RUPEE_CR = re.compile(
     r"(?:₹|rs\.?|inr)\s*([\d,.]+)\s*(crore|cr\.?|lakh|lakhs|million|mn)",
     re.I,
 )
+_ORDER_VALUE_PATTERNS = (
+    _RUPEE_CR,
+    re.compile(
+        r"(?:worth|valued|value|order)\s+(?:of\s+)?(?:₹|rs\.?|inr)?\s*([\d,.]+)\s*"
+        r"(crore|cr\.?|lakh|lakhs|million|mn)\b",
+        re.I,
+    ),
+    re.compile(
+        r"([\d,.]+)\s*(crore|cr\.?|lakh|lakhs|million|mn)\b",
+        re.I,
+    ),
+)
+_UNDISCLOSED_ORDER_KW = (
+    "undisclosed",
+    "not disclosed",
+    "no value",
+    "value not",
+    "amount not disclosed",
+    "value of the order is not",
+)
+_REL_AGE_RE = re.compile(r"^\d+\s*(?:m|min|h|hr|d|day)\b", re.I)
+_MW_ORDER_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*mw\b", re.I)
 
 
 @dataclass
@@ -92,6 +114,9 @@ class IntradayIntelRecord:
     intraday: IntradaySetup
     screener_url: str = ""
     nse_url: str = ""
+    order_value_cr: Optional[float] = None
+    order_value_label: str = "—"
+    published_at: str = "—"
 
 
 @dataclass
@@ -113,20 +138,70 @@ def _yahoo_ticker(slug: str) -> str:
     return f"{s.upper()}.NS"
 
 
-def _parse_rupees_to_cr(text: str) -> Optional[float]:
-    m = _RUPEE_CR.search(text or "")
-    if not m:
-        return None
-    try:
-        val = float(m.group(1).replace(",", ""))
-    except ValueError:
-        return None
-    unit = m.group(2).lower()
-    if unit.startswith("lakh"):
+def _amount_unit_to_cr(val: float, unit: str) -> float:
+    u = (unit or "").lower()
+    if u.startswith("lakh"):
         return val / 100.0
-    if unit.startswith("million") or unit == "mn":
+    if u.startswith("million") or u == "mn":
         return val * 0.1
     return val
+
+
+def _parse_rupees_to_cr(text: str) -> Optional[float]:
+    blob = text or ""
+    for pattern in _ORDER_VALUE_PATTERNS:
+        m = pattern.search(blob)
+        if not m:
+            continue
+        try:
+            val = float(m.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        return round(_amount_unit_to_cr(val, m.group(2)), 2)
+    return None
+
+
+def extract_order_win_value(
+    text: str,
+    news_type: str,
+) -> tuple[Optional[float], str]:
+    """Parse order-win rupee value for table display (amount in ₹ Cr)."""
+    if news_type != "ORDER_WIN":
+        return None, "—"
+    low = (text or "").lower()
+    if any(k in low for k in _UNDISCLOSED_ORDER_KW):
+        return None, "Undisclosed"
+    amount_cr = _parse_rupees_to_cr(text)
+    if amount_cr is not None:
+        if amount_cr >= 100:
+            return amount_cr, f"₹{amount_cr:,.0f} Cr"
+        if amount_cr >= 1:
+            return amount_cr, f"₹{amount_cr:,.1f} Cr"
+        return amount_cr, f"₹{amount_cr * 100:,.0f} L"
+    mw_m = _MW_ORDER_RE.search(text or "")
+    if mw_m:
+        return None, f"{mw_m.group(1).replace(',', '')} MW"
+    return None, "—"
+
+
+def format_screener_published(item: ScreenerBuybackItem) -> str:
+    """
+    Screener.in publish time for the table:
+    - relative age (15m, 2h) → estimated IST timestamp
+    - calendar date (10 June 2026) → date only
+    - else raw age_text
+    """
+    age_raw = (item.age_text or "").strip()
+    if item.published:
+        pub_ist = item.published.astimezone(IST)
+        if age_raw and _REL_AGE_RE.match(age_raw):
+            return pub_ist.strftime("%d %b %Y %H:%M IST")
+        if age_raw and not _REL_AGE_RE.match(age_raw):
+            return pub_ist.strftime("%d %b %Y")
+        return pub_ist.strftime("%d %b %Y %H:%M IST")
+    if age_raw:
+        return age_raw
+    return "—"
 
 
 def classify_news_type(text: str) -> str:
@@ -750,6 +825,8 @@ def build_intel_record(
         ctx=ctx,
         latest_news=latest_news,
     )
+    order_value_cr, order_value_label = extract_order_win_value(news_text, news_type)
+    published_at = format_screener_published(item)
 
     return IntradayIntelRecord(
         ticker=display_ticker,
@@ -763,6 +840,9 @@ def build_intel_record(
         intraday=intraday,
         screener_url=_screener_company_url(item.company, slug),
         nse_url=_nse_quote_url(yahoo),
+        order_value_cr=order_value_cr,
+        order_value_label=order_value_label,
+        published_at=published_at,
     )
 
 

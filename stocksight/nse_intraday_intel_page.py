@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
 
-from bulk_order_page import _news_by_slug
 from screener_session_ui import render_screener_session_panel
 from nse_intraday_intel import (
     IntradayIntelRecord,
@@ -20,8 +19,8 @@ from nse_intraday_intel import (
 from screener_bulk_order import (
     ORDER_SEARCH_PRESETS,
     SCREENER_ORDER_URL,
-    fetch_bulk_order_intel,
     fetch_company_news_for_symbols,
+    fetch_merged_order_announcements,
     screener_login_configured,
 )
 from ui_components import inject_css, page_audience_note, safe_set_page_config
@@ -31,6 +30,23 @@ META = {
     "emoji": "⚡",
     "nav_title": "NSE Intraday Intel",
 }
+
+
+def _news_by_slug(rows: list[dict]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for r in rows:
+        hl = r.get("headlines") or []
+        if not hl:
+            continue
+        text = " | ".join(hl)
+        for key in (
+            (r.get("slug") or "").strip().upper(),
+            (r.get("symbol") or "").strip().upper(),
+        ):
+            if key and key not in out:
+                out[key] = text
+    return out
+
 
 _NEWS_TYPE_LABEL = {
     "ORDER_WIN": "ORDER WIN",
@@ -62,6 +78,8 @@ def _intel_summary_df(records: list[IntradayIntelRecord]) -> pd.DataFrame:
         ctx = r.stock_context
         rows.append({
             "Ticker": r.ticker,
+            "Order value": r.order_value_label,
+            "Published": r.published_at,
             "Company": r.name,
             "LTP ₹": ctx.price,
             "Prev close ₹": ctx.prev_close,
@@ -89,15 +107,27 @@ def _render_company_detail(r: IntradayIntelRecord) -> None:
     em = _SENTIMENT_EMOJI.get(intra.sentiment, "⚪")
 
     st.markdown(f"#### {r.name} · `{r.ticker}`")
-    st.caption(f"{r.sector} · {r.news_date} · {_NEWS_TYPE_LABEL.get(r.news_type, r.news_type)}")
+    st.caption(
+        f"{r.sector} · **Published:** {r.published_at} · "
+        f"**Order value:** {r.order_value_label} · "
+        f"{_NEWS_TYPE_LABEL.get(r.news_type, r.news_type)}"
+    )
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("LTP", ctx.approx_price)
-    gap_lbl = f"{ctx.gap_pct:+.2f}%" if ctx.gap_pct is not None else "—"
-    m2.metric("Gap vs prev close", gap_lbl)
-    prev_lbl = _fmt_inr(ctx.prev_close) if ctx.prev_close else "—"
-    m3.metric("Prev close", prev_lbl)
-    m4.metric("Now (IST)", ist_clock_label())
+    if r.news_type == "ORDER_WIN":
+        m1.metric("Order value", r.order_value_label)
+        m2.metric("LTP", ctx.approx_price)
+        gap_lbl = f"{ctx.gap_pct:+.2f}%" if ctx.gap_pct is not None else "—"
+        m3.metric("Gap vs prev close", gap_lbl)
+        prev_lbl = _fmt_inr(ctx.prev_close) if ctx.prev_close else "—"
+        m4.metric("Prev close", prev_lbl)
+    else:
+        m1.metric("LTP", ctx.approx_price)
+        gap_lbl = f"{ctx.gap_pct:+.2f}%" if ctx.gap_pct is not None else "—"
+        m2.metric("Gap vs prev close", gap_lbl)
+        prev_lbl = _fmt_inr(ctx.prev_close) if ctx.prev_close else "—"
+        m3.metric("Prev close", prev_lbl)
+        m4.metric("Now (IST)", ist_clock_label())
 
     m1, m2, m3, m4 = st.columns(4)
     em = _SENTIMENT_EMOJI.get(intra.sentiment, "⚪")
@@ -157,14 +187,26 @@ def _render_company_detail(r: IntradayIntelRecord) -> None:
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _cached_intel(order_query: str, strict_filter: bool) -> dict:
-    return fetch_bulk_order_intel(
-        order_query=order_query,
-        strict_order_filter=strict_filter,
-        include_bulk_deals=False,
-        include_block_deals=False,
-        deal_days=7,
+def _cached_intel(
+    order_query: str,
+    strict_filter: bool,
+    include_press_releases: bool,
+) -> dict:
+    items, ann_status = fetch_merged_order_announcements(
+        order_query,
+        strict_filter=strict_filter,
+        include_press_release_feeds=include_press_releases,
     )
+    return {
+        "announcements": items,
+        "announcement_status": ann_status,
+        "bulk_deals": [],
+        "block_deals": [],
+        "bulk_status": "skipped",
+        "block_status": "skipped",
+        "login_configured": screener_login_configured(),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -184,8 +226,9 @@ def _cached_analysis(
     strict_filter: bool,
     max_companies: int,
     sort_by: str,
+    include_press_releases: bool,
 ) -> tuple[list[dict], list[dict], dict]:
-    data = _cached_intel(order_query, strict_filter)
+    data = _cached_intel(order_query, strict_filter, include_press_releases)
     items = data.get("announcements") or []
     slugs = list(dict.fromkeys(
         (getattr(it, "company_slug", "") or "").strip().upper()
@@ -226,6 +269,9 @@ def _cached_analysis(
             "news_type": r.news_type,
             "news_date": r.news_date,
             "latest_news": r.latest_news,
+            "order_value_cr": r.order_value_cr,
+            "order_value_label": r.order_value_label,
+            "published_at": r.published_at,
             "screener_url": r.screener_url,
             "nse_url": r.nse_url,
             "stock_context": {
@@ -278,6 +324,9 @@ def _records_from_cache(raw: list[dict]) -> list[IntradayIntelRecord]:
                 news_type=d["news_type"],
                 news_date=d["news_date"],
                 latest_news=d["latest_news"],
+                order_value_cr=d.get("order_value_cr"),
+                order_value_label=d.get("order_value_label", "—"),
+                published_at=d.get("published_at", "—"),
                 screener_url=d.get("screener_url", ""),
                 nse_url=d.get("nse_url", ""),
                 stock_context=StockContext(
@@ -351,7 +400,7 @@ def render_nse_intraday_intel_page() -> None:
     with st.expander("📖 How this screen works", expanded=False):
         st.markdown(
             f"""
-1. Pulls the same **order announcement** feed as [Bulk Order]({SCREENER_ORDER_URL}).
+1. Pulls **Bulk Order** filings plus **LODR press-release order wins** (e.g. KOEL 192 MW).
 2. Classifies each filing (order win, volume alert, legal, exchange query).
 3. Enriches with **price context** (52-week range, trend, volume ratio) via Yahoo Finance.
 4. Applies **intraday rules** (ORB, VWAP, volume confirmation, risk tier).
@@ -373,6 +422,13 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
             order_query = st.text_input("Custom query", value="order", key="nii_query")
     with c2:
         strict = st.checkbox("Strict order filter", value=False, key="nii_strict")
+        include_press = st.checkbox(
+            "Press release / LODR orders",
+            value=True,
+            key="nii_press",
+            help="Also scan Screener for wins/won order, LODR press releases, and MW orders "
+            "(e.g. KOEL HyperNext 192 MW).",
+        )
     with c3:
         max_co = st.slider("Max companies", 5, 60, 40, key="nii_max")
     sort_by = st.radio(
@@ -417,7 +473,7 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
 
         with st.spinner("Building intraday intel from Bulk Order feed…"):
             raw_records, themes, feed_meta = _cached_analysis(
-                order_query, strict, int(max_co), sort_by
+                order_query, strict, int(max_co), sort_by, include_press
             )
 
         records = _records_from_cache(raw_records)
@@ -454,9 +510,9 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
                     f"per company** (capped at **{int(max_co)}**). Raise **Max companies** to include more."
                 )
             st.caption(
-                "**LTP** = live / latest Yahoo price · **Gap %** = change vs **previous close**. "
-                "Data is cached ~5 min — click **Refresh analysis** after refreshing Bulk Order. "
-                "Bulk Order and this page use separate caches until you refresh here."
+                "**Order value** = ₹ Cr/L or **MW** for power orders · "
+                "**Published** = Screener time (IST for 15m/2h; date for calendar) · "
+                "Press-release feed **on** merges LODR / wins-order / MW searches."
             )
             st.link_button("🔗 Bulk Order feed on Screener", SCREENER_ORDER_URL)
 
@@ -466,6 +522,8 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
                 use_container_width=True,
                 hide_index=True,
                 column_config={
+                    "Order value": st.column_config.TextColumn("Order value", width="small"),
+                    "Published": st.column_config.TextColumn("Published", width="medium"),
                     "LTP ₹": st.column_config.NumberColumn(format="₹%.2f"),
                     "Prev close ₹": st.column_config.NumberColumn(format="₹%.2f"),
                     "Gap %": st.column_config.NumberColumn(format="%+.2f"),

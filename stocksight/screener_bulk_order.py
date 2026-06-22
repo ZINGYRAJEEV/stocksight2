@@ -40,7 +40,17 @@ ORDER_SEARCH_PRESETS: dict[str, str] = {
     "order received / win": '"order received" OR "order win" OR "bagged order"',
     "work order / contract": '"work order" OR "contract awarded" OR "letter of intent"',
     "purchase order": '"purchase order" OR "PO received"',
+    "press release / LODR order": (
+        'LODR "press release" order OR "media release" order OR "wins order" OR "won order"'
+    ),
 }
+
+# Extra Screener full-text feeds merged into NSE Intraday Intel (press-release order wins).
+INTRADAY_PRESS_RELEASE_QUERIES: tuple[str, ...] = (
+    '"wins order" OR "won order" OR wins order OR won order',
+    'LODR "press release" order OR "media release" order',
+    'MW order OR megawatt order OR hyperscale order',
+)
 
 _ORDER_POSITIVE = (
     "order received",
@@ -59,7 +69,11 @@ _ORDER_POSITIVE = (
     "order from",
     "new order",
     "major order",
+    "won order",
+    "wins order",
 )
+
+_WON_WINS_ORDER_RE = re.compile(r"\bw(?:on|ins)\b", re.I)
 
 _ORDER_NEGATIVE = (
     "order of the board",
@@ -112,11 +126,95 @@ def is_order_announcement(text: str) -> bool:
         return False
     if any(p in low for p in _ORDER_POSITIVE):
         return True
+    if _WON_WINS_ORDER_RE.search(low) and re.search(r"\border\b", low):
+        return True
+    if re.search(r"\b\d+(?:[.,]\d+)?\s*mw\b", low) and "order" in low:
+        return True
+    if any(k in low for k in ("press release", "media release", "regulation 30", "lodr")):
+        if any(
+            w in low
+            for w in ("order", "contract", "mw", "wins", "won", "awarded", "bagged", "wins")
+        ):
+            return True
     if " order " in f" {low} " and any(
         w in low for w in ("crore", "cr.", "lakh", "million", "billion", "₹", "rs.", "valued")
     ):
         return True
     return False
+
+
+def _dedupe_announcement_items(items: list[ScreenerBuybackItem]) -> list[ScreenerBuybackItem]:
+    seen: set[str] = set()
+    out: list[ScreenerBuybackItem] = []
+    for it in items:
+        slug = (it.company_slug or "").strip().upper()
+        title_key = re.sub(r"\s+", " ", (it.title or "")[:120].lower())
+        keys = [f"{slug}|{title_key}"]
+        if it.url:
+            keys.append(it.url.strip())
+        if any(k in seen for k in keys if k):
+            continue
+        for k in keys:
+            if k:
+                seen.add(k)
+        out.append(it)
+    return out
+
+
+def fetch_merged_order_announcements(
+    primary_query: str,
+    *,
+    strict_filter: bool = False,
+    include_press_release_feeds: bool = True,
+    limit_per_query: int = 45,
+    max_items: int = 80,
+) -> tuple[list[ScreenerBuybackItem], str]:
+    """
+    Merge primary order search with press-release / LODR / MW order feeds
+    (captures names like KOEL wins 192 MW HyperNext order).
+    """
+    queries = [primary_query]
+    if include_press_release_feeds:
+        for q in INTRADAY_PRESS_RELEASE_QUERIES:
+            if q not in queries:
+                queries.append(q)
+
+    all_items: list[ScreenerBuybackItem] = []
+    statuses: list[str] = []
+    workers = min(4, max(1, len(queries)))
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(
+                fetch_screener_order_announcements,
+                query=q,
+                limit=limit_per_query,
+                strict_filter=False,
+            )
+            for q in queries
+        ]
+        for fut in futures:
+            try:
+                items, status = fut.result()
+                statuses.append(status)
+                all_items.extend(items)
+            except Exception:
+                statuses.append("error")
+
+    merged = _dedupe_announcement_items(all_items)
+    if strict_filter and merged:
+        filtered = [
+            it for it in merged
+            if is_order_announcement(f"{it.title} {it.summary}")
+        ]
+        if filtered:
+            merged = filtered
+
+    if "auth_required" in statuses and not merged:
+        return [], "auth_required"
+    if not merged:
+        return [], "empty" if any(s in ("ok", "empty") for s in statuses) else "error"
+    return merged[:max_items], "ok"
 
 
 def fetch_screener_order_announcements(
