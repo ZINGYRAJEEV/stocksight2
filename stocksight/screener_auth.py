@@ -13,6 +13,7 @@ from __future__ import annotations
 import http.cookiejar
 import os
 import re
+import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -26,6 +27,8 @@ _USER_AGENT = (
     "Mozilla/5.0 (compatible; StockSight/1.0; +https://github.com/ZINGYRAJEEV/stocksight2)"
 )
 _TIMEOUT = 20
+_SESSION_VALID_CACHE_TTL_SEC = 180.0
+_session_valid_cache: dict[str, tuple[float, bool]] = {}
 
 _AUTH_FAIL_MARKERS = (
     "Register - Screener",
@@ -95,6 +98,13 @@ def is_screener_session_valid(cookies: Optional[dict[str, str]] = None) -> bool:
     sid = (creds.get("sessionid") or "").strip()
     if not sid:
         return False
+
+    cache_key = sid[:16]
+    now = time.time()
+    hit = _session_valid_cache.get(cache_key)
+    if hit and (now - hit[0]) < _SESSION_VALID_CACHE_TTL_SEC:
+        return hit[1]
+
     try:
         headers = {
             "User-Agent": _USER_AGENT,
@@ -106,10 +116,14 @@ def is_screener_session_valid(cookies: Optional[dict[str, str]] = None) -> bool:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             html = resp.read().decode("utf-8", "replace")
     except Exception:
+        _session_valid_cache[cache_key] = (now, False)
         return False
     if any(m in html for m in _AUTH_FAIL_MARKERS):
+        _session_valid_cache[cache_key] = (now, False)
         return False
-    return "overflow-wrap-anywhere" in html or "change-list" in html or "full-text" in html.lower()
+    ok = "overflow-wrap-anywhere" in html or "change-list" in html or "full-text" in html.lower()
+    _session_valid_cache[cache_key] = (now, ok)
+    return ok
 
 
 def _cookie_dict_from_jar(jar: http.cookiejar.CookieJar) -> dict[str, str]:

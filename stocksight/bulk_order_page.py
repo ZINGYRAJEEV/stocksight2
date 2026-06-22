@@ -230,6 +230,12 @@ def render_bulk_order_page() -> None:
             key="bo_auto_refresh",
             help="Off by default. Turn on to reload the Screener feed on a timer while this tab stays open.",
         )
+        include_headlines = st.checkbox(
+            "Headlines in table",
+            value=False,
+            key="bo_headlines",
+            help="Fetches one extra Screener request per company (slow on large lists).",
+        )
 
     refresh_sec = 300
     if auto_refresh:
@@ -275,12 +281,12 @@ def render_bulk_order_page() -> None:
             else:
                 st.success(f"**{len(items)}** announcement(s) · query: `{order_query[:80]}`")
                 news_map: dict[str, str] = {}
-                if data.get("login_configured"):
+                if include_headlines and data.get("login_configured"):
                     slugs = list(dict.fromkeys(
                         (getattr(it, "company_slug", "") or "").strip()
                         for it in items
                         if getattr(it, "company_slug", "")
-                    ))[:30]
+                    ))[:15]
                     if slugs:
                         news_map = _news_by_slug(_cached_company_news(tuple(slugs)))
                 df = _announcements_to_df(items, news_map)
@@ -358,13 +364,17 @@ def render_bulk_order_page() -> None:
                 symbols = symbols[:25]
                 if not symbols:
                     st.info("No tickers in current feeds — add symbols above or refresh order/deal tabs.")
-                else:
+                elif st.button("Load company news", key="bo_load_news", type="primary"):
                     with st.spinner(f"Fetching announcements for {len(symbols)} companies…"):
                         news_rows = fetch_company_news_for_symbols(
                             symbols,
                             limit_per_symbol=2,
                             max_age_days=60,
                         )
+                    st.session_state["bo_news_rows"] = news_rows
+                    st.session_state["bo_news_symbols"] = symbols
+                news_rows = st.session_state.get("bo_news_rows")
+                if news_rows:
                     st.success(f"**{len(news_rows)}** companies · latest filings from Screener")
                     st.dataframe(
                         _company_news_to_df(news_rows),
@@ -374,6 +384,11 @@ def render_bulk_order_page() -> None:
                             "Screener": st.column_config.LinkColumn(display_text="Company page ↗"),
                             "Latest news": st.column_config.TextColumn("Latest news", width="large"),
                         },
+                    )
+                elif symbols:
+                    st.info(
+                        f"**{len(symbols)}** tickers ready — click **Load company news** "
+                        "(skipped on auto-refresh to keep scans fast)."
                     )
 
         st.caption(

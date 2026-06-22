@@ -183,7 +183,8 @@ def _cached_analysis(
     order_query: str,
     strict_filter: bool,
     max_companies: int,
-) -> tuple[list[dict], list[dict]]:
+    sort_by: str,
+) -> tuple[list[dict], list[dict], dict]:
     data = _cached_intel(order_query, strict_filter)
     items = data.get("announcements") or []
     slugs = list(dict.fromkeys(
@@ -196,13 +197,25 @@ def _cached_analysis(
     if data.get("login_configured") and slugs:
         news_map = _news_by_slug(_cached_company_news(tuple(slugs)))
 
+    unique_slugs = list(dict.fromkeys(
+        (getattr(it, "company_slug", "") or "").strip().upper()
+        for it in items
+        if getattr(it, "company_slug", "")
+    ))
     records = build_intel_batch(
         items,
         news_by_slug=news_map,
         max_companies=max_companies,
         enrich_prices=True,
+        sort_by=sort_by,
     )
     themes = build_market_themes(records)
+    feed_meta = {
+        "announcement_count": len(items),
+        "unique_companies": len(unique_slugs),
+        "shown_companies": len(records),
+        "fetched_at": data.get("fetched_at", ""),
+    }
 
     def _rec_dict(r: IntradayIntelRecord) -> dict:
         return {
@@ -246,7 +259,7 @@ def _cached_analysis(
     return [_rec_dict(r) for r in records], [
         {"title": t.title, "icon": t.icon, "summary": t.summary, "rule": t.rule}
         for t in themes
-    ]
+    ], feed_meta
 
 
 def _records_from_cache(raw: list[dict]) -> list[IntradayIntelRecord]:
@@ -361,7 +374,14 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
     with c2:
         strict = st.checkbox("Strict order filter", value=False, key="nii_strict")
     with c3:
-        max_co = st.slider("Max companies", 5, 40, 24, key="nii_max")
+        max_co = st.slider("Max companies", 5, 60, 40, key="nii_max")
+    sort_by = st.radio(
+        "Sort results by",
+        ("newest", "strength"),
+        format_func=lambda x: "Newest filing first" if x == "newest" else "Setup strength (★)",
+        horizontal=True,
+        key="nii_sort",
+    )
     with c4:
         auto_refresh = st.checkbox(
             "Enable auto-refresh",
@@ -396,7 +416,9 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
             return
 
         with st.spinner("Building intraday intel from Bulk Order feed…"):
-            raw_records, themes = _cached_analysis(order_query, strict, int(max_co))
+            raw_records, themes, feed_meta = _cached_analysis(
+                order_query, strict, int(max_co), sort_by
+            )
 
         records = _records_from_cache(raw_records)
 
@@ -419,10 +441,22 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
                 )
                 return
 
-            st.success(f"**{len(records)}** companies analysed · query: `{order_query[:60]}`")
+            ann_n = feed_meta.get("announcement_count", len(records))
+            uniq_n = feed_meta.get("unique_companies", len(records))
+            st.success(
+                f"**{len(records)}** companies analysed · "
+                f"**{ann_n}** announcements in feed ({uniq_n} unique) · "
+                f"query: `{order_query[:60]}`"
+            )
+            if uniq_n > len(records):
+                st.warning(
+                    f"Bulk Order lists all **{ann_n}** rows; this screen shows **one newest filing "
+                    f"per company** (capped at **{int(max_co)}**). Raise **Max companies** to include more."
+                )
             st.caption(
-                "**LTP** = live / latest Yahoo price · **Gap %** = change vs **previous close** "
-                "(refreshes when you click **Refresh analysis**)."
+                "**LTP** = live / latest Yahoo price · **Gap %** = change vs **previous close**. "
+                "Data is cached ~5 min — click **Refresh analysis** after refreshing Bulk Order. "
+                "Bulk Order and this page use separate caches until you refresh here."
             )
             st.link_button("🔗 Bulk Order feed on Screener", SCREENER_ORDER_URL)
 

@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 IST = ZoneInfo("Asia/Kolkata")
 
 from buyback_announcements import _nse_quote_url, _screener_company_url
-from screener_buyback import ScreenerBuybackItem
+from screener_buyback import ScreenerBuybackItem, _parse_age_minutes
 from screener_bulk_order import is_order_announcement
 
 NEWS_TYPES = (
@@ -766,24 +766,66 @@ def build_intel_record(
     )
 
 
+def _announcement_recency_key(
+    item: ScreenerBuybackItem,
+    feed_index: int,
+) -> tuple:
+    """Higher = more recent. Uses published time, relative age, then feed position."""
+    if item.published:
+        return (0, item.published.timestamp(), -feed_index)
+    mins = _parse_age_minutes(item.age_text or "")
+    if mins is not None:
+        return (1, -mins, -feed_index)
+    return (2, -feed_index)
+
+
+def _newer_announcement(
+    left: ScreenerBuybackItem,
+    left_idx: int,
+    right: ScreenerBuybackItem,
+    right_idx: int,
+) -> ScreenerBuybackItem:
+    lk = _announcement_recency_key(left, left_idx)
+    rk = _announcement_recency_key(right, right_idx)
+    return left if lk >= rk else right
+
+
 def build_intel_batch(
     announcements: list[ScreenerBuybackItem],
     *,
     news_by_slug: Optional[dict[str, str]] = None,
     max_companies: int = 30,
     enrich_prices: bool = True,
+    sort_by: str = "newest",
 ) -> list[IntradayIntelRecord]:
-    """One intel card per company (most recent filing in the feed)."""
+    """One intel card per company (newest matching filing in the feed)."""
     news_map = news_by_slug or {}
     by_slug: dict[str, ScreenerBuybackItem] = {}
-    for item in announcements:
+    slug_index: dict[str, int] = {}
+    for idx, item in enumerate(announcements):
         slug = (item.company_slug or "").strip().upper()
         if not slug:
             continue
         if slug not in by_slug:
             by_slug[slug] = item
+            slug_index[slug] = idx
+        else:
+            kept = _newer_announcement(
+                by_slug[slug],
+                slug_index[slug],
+                item,
+                idx,
+            )
+            if kept is item:
+                slug_index[slug] = idx
+            by_slug[slug] = kept
 
-    slugs = list(by_slug.keys())[:max_companies]
+    ranked_slugs = sorted(
+        by_slug.keys(),
+        key=lambda s: _announcement_recency_key(by_slug[s], slug_index[s]),
+        reverse=True,
+    )
+    slugs = ranked_slugs[:max_companies]
     ctx_cache: dict[str, StockContext] = {}
     if enrich_prices:
         for slug in slugs:
@@ -803,10 +845,14 @@ def build_intel_batch(
             )
         )
 
-    out.sort(
-        key=lambda r: (r.intraday.strength, r.news_type == "ORDER_WIN"),
-        reverse=True,
-    )
+    if sort_by == "strength":
+        out.sort(
+            key=lambda r: (r.intraday.strength, r.news_type == "ORDER_WIN"),
+            reverse=True,
+        )
+    else:
+        slug_order = {s: i for i, s in enumerate(slugs)}
+        out.sort(key=lambda r: slug_order.get(r.ticker.upper(), 999))
     return out
 
 

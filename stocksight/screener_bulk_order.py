@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html import unescape
@@ -259,15 +260,21 @@ def fetch_company_news_for_symbols(
     *,
     limit_per_symbol: int = 2,
     max_age_days: int = 30,
+    max_workers: int = 6,
 ) -> list[dict]:
     """Latest Screener company announcements for a list of NSE tickers/slugs."""
-    out: list[dict] = []
+    clean: list[str] = []
     seen: set[str] = set()
     for raw in symbols:
         sym = (raw or "").replace(".NS", "").replace(".BO", "").strip().upper()
         if not sym or sym in seen:
             continue
         seen.add(sym)
+        clean.append(sym)
+    if not clean:
+        return []
+
+    def _one(sym: str) -> dict:
         cid, name, slug = resolve_screener_company_id(sym)
         items = fetch_company_recent_announcements(
             sym,
@@ -275,7 +282,7 @@ def fetch_company_news_for_symbols(
             max_age_days=max_age_days,
         )
         headlines = screener_items_to_headlines(items, limit=limit_per_symbol)
-        out.append({
+        return {
             "symbol": sym,
             "company": name or sym,
             "slug": slug or sym,
@@ -283,7 +290,30 @@ def fetch_company_news_for_symbols(
             "headlines": headlines,
             "announcements": items,
             "screener_url": f"{SCREENER_BASE}/company/{slug or sym}/" if slug or sym else "",
-        })
+        }
+
+    workers = min(max_workers, max(1, len(clean)))
+    if workers == 1:
+        return [_one(sym) for sym in clean]
+
+    out: list[dict] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_one, sym): sym for sym in clean}
+        for fut in as_completed(futures):
+            try:
+                out.append(fut.result())
+            except Exception:
+                sym = futures[fut]
+                out.append({
+                    "symbol": sym,
+                    "company": sym,
+                    "slug": sym,
+                    "company_id": None,
+                    "headlines": [],
+                    "announcements": [],
+                    "screener_url": "",
+                })
+    out.sort(key=lambda r: clean.index(r["symbol"]) if r["symbol"] in clean else 999)
     return out
 
 
@@ -295,20 +325,44 @@ def fetch_bulk_order_intel(
     include_block_deals: bool = True,
     deal_days: int = 30,
 ) -> dict:
-    """Aggregate all feeds for the Bulk Order page."""
-    announcements, ann_status = fetch_screener_order_announcements(
-        query=order_query,
-        strict_filter=strict_order_filter,
-    )
+    """Aggregate all feeds for the Bulk Order page (parallel Screener fetches)."""
     bulk_rows: list[BulkDealRow] = []
     block_rows: list[BulkDealRow] = []
     bulk_status = "skipped"
     block_status = "skipped"
+    announcements: list = []
+    ann_status = "error"
 
-    if include_bulk_deals:
-        bulk_rows, bulk_status = fetch_screener_bulk_deals(days=deal_days)
-    if include_block_deals:
-        block_rows, block_status = fetch_screener_block_deals(days=deal_days)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_ann = pool.submit(
+            fetch_screener_order_announcements,
+            query=order_query,
+            strict_filter=strict_order_filter,
+        )
+        f_bulk = (
+            pool.submit(fetch_screener_bulk_deals, days=deal_days)
+            if include_bulk_deals
+            else None
+        )
+        f_block = (
+            pool.submit(fetch_screener_block_deals, days=deal_days)
+            if include_block_deals
+            else None
+        )
+        try:
+            announcements, ann_status = f_ann.result()
+        except Exception:
+            announcements, ann_status = [], "error"
+        if f_bulk is not None:
+            try:
+                bulk_rows, bulk_status = f_bulk.result()
+            except Exception:
+                bulk_rows, bulk_status = [], "error"
+        if f_block is not None:
+            try:
+                block_rows, block_status = f_block.result()
+            except Exception:
+                block_rows, block_status = [], "error"
 
     return {
         "announcements": announcements,

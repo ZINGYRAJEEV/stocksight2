@@ -482,14 +482,13 @@ def fetch_company_recent_announcements(
         return []
 
     creds = get_screener_credentials()
-    paths: list[str] = []
+    paths: list[str] = [f"/announcements/recent/{cid}/"]
     if sym.isdigit():
         paths.append(f"/company/{sym}/")
     if slug:
         slug_path = f"/company/{slug}/"
         if slug_path not in paths:
             paths.append(slug_path)
-    paths.append(f"/announcements/recent/{cid}/")
     seen_paths: set[str] = set()
     items: list[ScreenerBuybackItem] = []
     for path in paths:
