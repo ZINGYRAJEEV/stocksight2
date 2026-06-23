@@ -85,14 +85,24 @@ def fetch_tradingview_news(
     if not symbol:
         return []
 
-    tv_symbol = resolve_tradingview_symbol(symbol, market=market)
-    candidates = [tv_symbol]
     clean = (symbol or "").strip().upper().replace(".NS", "").replace(".BO", "")
-    alt = NSE_TV_SYMBOL_ALIASES.get(clean)
-    if alt and f"NSE:{alt}" not in candidates:
-        candidates.append(f"NSE:{alt}")
-    if f"NSE:{clean}" not in candidates:
-        candidates.append(f"NSE:{clean}")
+    mkt = (market or "NSE").upper()
+    candidates: list[str] = []
+    if mkt == "US":
+        for prefix in ("NASDAQ", "NYSE"):
+            sym = f"{prefix}:{clean}"
+            if sym not in candidates:
+                candidates.append(sym)
+        if clean not in candidates:
+            candidates.append(clean)
+    else:
+        tv_symbol = resolve_tradingview_symbol(symbol, market="NSE")
+        candidates = [tv_symbol]
+        alt = NSE_TV_SYMBOL_ALIASES.get(clean)
+        if alt and f"NSE:{alt}" not in candidates:
+            candidates.append(f"NSE:{alt}")
+        if f"NSE:{clean}" not in candidates:
+            candidates.append(f"NSE:{clean}")
 
     headers = {
         **TRADINGVIEW_HEADERS,

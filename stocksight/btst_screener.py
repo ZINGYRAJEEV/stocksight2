@@ -42,6 +42,7 @@ except ImportError:
 
 IST = ZoneInfo("Asia/Kolkata")
 ET = ZoneInfo("America/New_York")
+CEST = ZoneInfo("Europe/Berlin")
 
 META = {
     "id": "btst",
@@ -54,10 +55,101 @@ META = {
     ),
     "purpose": (
         "Scores **close position (CPR)**, volume surge, trend (MA20/50), and RSI. "
-        "Grade **A/B** names get entry (3:25 PM) and morning exit rules. "
-        "Data: **Breeze** when connected, else Yahoo."
+        "Grade **A/B** names get entry and morning exit rules with **CEST** times for European traders. "
+        "Data: **Breeze** when connected (NSE), else Yahoo."
     ),
 }
+
+
+@dataclass
+class BtstTiming:
+    """BTST scan / entry / exit windows in market-local and Europe/Berlin time."""
+    market: str
+    scan_market: str
+    scan_cest: str
+    entry_market: str
+    entry_cest: str
+    exit_market: str
+    exit_cest: str
+    exit_deadline_market: str
+    exit_deadline_cest: str
+    schedule_rows: list[tuple[str, str, str]] = field(default_factory=list)
+
+
+def _market_tz(market: str) -> ZoneInfo:
+    return ET if (market or "NSE").upper() == "US" else IST
+
+
+def _market_tz_label(market: str) -> str:
+    return "ET" if (market or "NSE").upper() == "US" else "IST"
+
+
+def _dt_market_local(hour: int, minute: int, market: str) -> datetime:
+    return datetime.now(tz=_market_tz(market)).replace(
+        hour=hour, minute=minute, second=0, microsecond=0,
+    )
+
+
+def _fmt_hm(dt: datetime, tz_label: str | None = None) -> str:
+    label = tz_label or dt.strftime("%Z")
+    h12 = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{h12}:{dt.minute:02d} {ampm} {label}"
+
+
+def _fmt_time_range(sh: int, sm: int, eh: int, em: int, market: str) -> tuple[str, str]:
+    mkt_lbl = _market_tz_label(market)
+    start = _dt_market_local(sh, sm, market)
+    end = _dt_market_local(eh, em, market)
+    market_range = f"{_fmt_hm(start, mkt_lbl)} – {_fmt_hm(end, mkt_lbl)}"
+    cs = start.astimezone(CEST)
+    ce = end.astimezone(CEST)
+    cest_lbl = cs.strftime("%Z")
+    cest_range = f"{_fmt_hm(cs, cest_lbl)} – {_fmt_hm(ce, cest_lbl)}"
+    return market_range, cest_range
+
+
+def _fmt_single_time(hour: int, minute: int, market: str) -> tuple[str, str]:
+    dt = _dt_market_local(hour, minute, market)
+    cest = dt.astimezone(CEST)
+    return _fmt_hm(dt, _market_tz_label(market)), _fmt_hm(cest, cest.strftime("%Z"))
+
+
+def btst_timing_schedule(market: str = "NSE") -> BtstTiming:
+    """Return BTST windows for the selected market with CEST/CET equivalents."""
+    mkt = (market or "NSE").upper()
+    if mkt == "US":
+        scan_m, scan_c = _fmt_time_range(14, 45, 15, 30, mkt)
+        entry_m, entry_c = _fmt_time_range(15, 50, 15, 58, mkt)
+        exit_m, exit_c = _fmt_time_range(9, 30, 10, 0, mkt)
+        exit_dead_m, exit_dead_c = _fmt_single_time(10, 0, mkt)
+        rows = [
+            (scan_c, scan_m, "🌙 **Run BTST scan** — close strength into the NYSE/NASDAQ bell"),
+            (entry_c, entry_m, "✅ **Entry** — Grade A/B before the close"),
+            (exit_c, exit_m, "☀️ **Next-morning exit** — book gap-up opens · flat by deadline"),
+        ]
+    else:
+        scan_m, scan_c = _fmt_time_range(14, 45, 15, 20, mkt)
+        entry_m, entry_c = _fmt_time_range(15, 25, 15, 28, mkt)
+        exit_m, exit_c = _fmt_time_range(9, 15, 10, 0, mkt)
+        exit_dead_m, exit_dead_c = _fmt_single_time(10, 0, mkt)
+        rows = [
+            (scan_c, scan_m, "🌙 **Run BTST scan** — close strength on today's NSE bar"),
+            (entry_c, entry_m, "✅ **Entry** — Grade A/B (CNC delivery)"),
+            (exit_c, exit_m, "☀️ **Next-morning exit** — book gap-up at open · flat by deadline"),
+        ]
+    return BtstTiming(
+        market=mkt,
+        scan_market=scan_m,
+        scan_cest=scan_c,
+        entry_market=entry_m,
+        entry_cest=entry_c,
+        exit_market=exit_m,
+        exit_cest=exit_c,
+        exit_deadline_market=exit_dead_m,
+        exit_deadline_cest=exit_dead_c,
+        schedule_rows=rows,
+    )
 
 
 @dataclass
@@ -120,6 +212,11 @@ class BtstResult:
     target_t2_pct: float = 3.5
     entry_window: str = "3:25–3:28 PM IST"
     morning_rule: str = ""
+    tv_news: str = "—"
+    tv_sentiment: str = "—"
+    tv_headline_sentiment: str = "—"
+    tv_rating: str = "—"
+    tv_sentiment_note: str = "—"
     pass_notes: list[str] = field(default_factory=list)
     reject_reason: str = ""
     links: dict = field(default_factory=dict)
@@ -127,32 +224,52 @@ class BtstResult:
 
 def ist_session_hint() -> tuple[str, str]:
     """Return (phase_label, user_hint) for NSE BTST timing."""
+    timing = btst_timing_schedule("NSE")
     now = datetime.now(tz=IST)
     t = now.hour * 60 + now.minute
     if t < 14 * 60 + 45:
-        return "PRE_SCAN", "Best run **2:45–3:20 PM IST** — today's bar may still be forming."
+        return (
+            "PRE_SCAN",
+            f"Best run **{timing.scan_market}** (**{timing.scan_cest}**) — today's bar may still be forming.",
+        )
     if t < 15 * 60 + 20:
-        return "BTST_WINDOW", "Ideal BTST scan window — close strength reflects today's tape."
+        return "BTST_WINDOW", f"Ideal BTST scan window — **{timing.scan_cest}** your time."
     if t < 15 * 60 + 30:
-        return "ENTRY_WINDOW", "Entry window **3:25–3:28 PM IST** — confirm Grade A/B before buying."
+        return (
+            "ENTRY_WINDOW",
+            f"Entry **{timing.entry_market}** (**{timing.entry_cest}**) — confirm Grade A/B before buying.",
+        )
     if t < 16 * 60:
         return "LATE", "Late session — only enter if CPR/volume still qualify; prefer CNC delivery."
-    return "POST_MARKET", "Market closed — review list for **tomorrow morning** exit plan (9:15–10:00 AM IST)."
+    return (
+        "POST_MARKET",
+        f"Market closed — morning exit **{timing.exit_market}** (**{timing.exit_cest}**).",
+    )
 
 
 def us_session_hint() -> tuple[str, str]:
     """Return (phase_label, user_hint) for US (NYSE / NASDAQ) BTST timing."""
+    timing = btst_timing_schedule("US")
     now = datetime.now(tz=ET)
     t = now.hour * 60 + now.minute
     if t < 14 * 60 + 45:
-        return "PRE_SCAN", "Best run **2:45–3:30 PM ET** — today's bar may still be forming."
+        return (
+            "PRE_SCAN",
+            f"Best run **{timing.scan_market}** (**{timing.scan_cest}**) — today's bar may still be forming.",
+        )
     if t < 15 * 60 + 30:
-        return "BTST_WINDOW", "Ideal US BTST scan — close strength into the NYSE/NASDAQ close."
+        return "BTST_WINDOW", f"Ideal US BTST scan — **{timing.scan_cest}** your time."
     if t < 15 * 60 + 55:
-        return "ENTRY_WINDOW", "Entry window **3:50–3:58 PM ET** — confirm Grade A/B before the close."
+        return (
+            "ENTRY_WINDOW",
+            f"Entry **{timing.entry_market}** (**{timing.entry_cest}**) — confirm Grade A/B before the close.",
+        )
     if t < 16 * 60:
         return "LATE", "Near the bell — only enter if CPR/volume still qualify."
-    return "POST_MARKET", "US session closed — exit plan for **next open 9:30–10:00 AM ET**."
+    return (
+        "POST_MARKET",
+        f"US session closed — exit plan **{timing.exit_market}** (**{timing.exit_cest}**).",
+    )
 
 
 def btst_session_hint(market: str = "NSE") -> tuple[str, str]:
@@ -166,7 +283,9 @@ def _is_us_ticker(raw: str) -> bool:
 
 
 def _entry_window_for_ticker(raw: str) -> str:
-    return "3:50–3:58 PM ET" if _is_us_ticker(raw) else "3:25–3:28 PM IST"
+    mkt = "US" if _is_us_ticker(raw) else "NSE"
+    timing = btst_timing_schedule(mkt)
+    return f"{timing.entry_market} · {timing.entry_cest}"
 
 
 def _compute_cpr(high: float, low: float, close: float) -> float:
@@ -229,12 +348,13 @@ def _assign_grade(score: float, cpr: float, vol_ratio: float, flt: BtstFilters) 
 
 
 def _morning_rule(pct_change: float, cpr: float, *, market: str = "NSE") -> str:
+    timing = btst_timing_schedule(market)
     if (market or "NSE").upper() == "US":
-        exit_note = "**100% flat by 10:00 AM ET**"
-        open_note = "Gap-up ≥1.5%: book **50%** at the open (9:30 ET)"
+        exit_note = f"**100% flat by {timing.exit_deadline_market}** ({timing.exit_deadline_cest})"
+        open_note = f"Gap-up ≥1.5%: book **50%** at the open ({timing.exit_market.split(' – ')[0]})"
     else:
-        exit_note = "**100% flat by 10:00 AM IST**"
-        open_note = "Gap-up ≥1.5%: book **50%** at open"
+        exit_note = f"**100% flat by {timing.exit_deadline_market}** ({timing.exit_deadline_cest})"
+        open_note = f"Gap-up ≥1.5%: book **50%** at open ({timing.exit_market.split(' – ')[0]})"
     base = (
         f"{open_note} · +0.5–1.5% gap: book **30–50%** in first 5 min · "
         "Flat: hold only if breaks **session open high** by 30 min else exit · "

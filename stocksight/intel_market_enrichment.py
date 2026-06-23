@@ -109,7 +109,7 @@ def fetch_pead_snapshot(
         return empty
 
 
-def fetch_tv_context(display_ticker: str) -> dict[str, Any]:
+def fetch_tv_context(display_ticker: str, *, market: str = "NSE") -> dict[str, Any]:
     """TradingView headlines + technical rating/sentiment."""
     from tradeview_analyst import (
         combine_tv_sentiment,
@@ -131,12 +131,13 @@ def fetch_tv_context(display_ticker: str) -> dict[str, Any]:
     if not ticker:
         return empty
 
-    items = fetch_tradingview_news(ticker, market="NSE", limit=3)
+    mkt = (market or "NSE").upper()
+    items = fetch_tradingview_news(ticker, market=mkt, limit=3)
     titles = [it.get("title", "") for it in items if it.get("title")]
     hl_label, hl_note = score_headline_sentiment(titles)
 
-    analyst = fetch_tradeview_analyst_data(ticker, market="NSE")
-    technical = fetch_tradeview_sentiment(ticker, market="NSE")
+    analyst = fetch_tradeview_analyst_data(ticker, market=mkt)
+    technical = fetch_tradeview_sentiment(ticker, market=mkt)
     overall, note = combine_tv_sentiment(hl_label, technical)
 
     news_lines: list[str] = []
@@ -164,7 +165,7 @@ def fetch_market_context_snapshot(
     ctx: Optional["StockContext"] = None,
 ) -> MarketContextSnapshot:
     pead = fetch_pead_snapshot(display_ticker, ctx=ctx)
-    tv = fetch_tv_context(display_ticker)
+    tv = fetch_tv_context(display_ticker, market="NSE")
 
     filing_sent = "—"
     if ctx and getattr(ctx, "trend", None):
@@ -238,3 +239,46 @@ def enrich_intel_records(
         rec.market_sentiment_note = snap.market_sentiment_note
 
     return records
+
+
+def enrich_btst_results(
+    results: list[Any],
+    *,
+    market: str = "NSE",
+    delay_sec: float = 0.1,
+    max_workers: int = 4,
+) -> list[Any]:
+    """Attach TradingView news and sentiment to BTST scan results."""
+    if not results:
+        return results
+
+    mkt = (market or "NSE").upper()
+    snapshots: dict[str, dict[str, Any]] = {}
+    workers = min(max_workers, max(1, len(results)))
+
+    def _one(result: Any) -> tuple[str, dict[str, Any]]:
+        snap = fetch_tv_context(result.ticker, market=mkt)
+        if delay_sec > 0:
+            time.sleep(delay_sec)
+        return result.ticker.upper(), snap
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_one, r) for r in results]
+        for fut in as_completed(futures):
+            try:
+                key, snap = fut.result()
+                snapshots[key] = snap
+            except Exception:
+                continue
+
+    for result in results:
+        snap = snapshots.get(result.ticker.upper())
+        if not snap:
+            continue
+        result.tv_news = snap.get("tv_news") or "—"
+        result.tv_sentiment = snap.get("tv_sentiment") or "—"
+        result.tv_headline_sentiment = snap.get("tv_headline_sentiment") or "—"
+        result.tv_rating = snap.get("tv_rating") or "—"
+        result.tv_sentiment_note = snap.get("tv_sentiment_note") or "—"
+
+    return results

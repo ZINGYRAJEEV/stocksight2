@@ -11,11 +11,14 @@ import streamlit as st
 from btst_screener import (
     META,
     BtstFilters,
+    BtstTiming,
     btst_session_hint,
+    btst_timing_schedule,
     scan_btst,
     universe_options,
 )
 from intraday import MARKET_LABEL, MARKETS, market_session_window
+from intel_market_enrichment import enrich_btst_results
 from scan_history_store import append_scan_record
 from ui_components import (
     inject_css,
@@ -28,6 +31,7 @@ from ui_components import (
 
 IST = ZoneInfo("Asia/Kolkata")
 ET = ZoneInfo("America/New_York")
+CEST = ZoneInfo("Europe/Berlin")
 
 _GRADE_STYLE = {
     "A": "background-color:#dcfce7;color:#166534;font-weight:700;",
@@ -35,6 +39,16 @@ _GRADE_STYLE = {
 }
 
 _LINK_COLUMNS = ("Yahoo Finance", "Google Finance", "Moneycontrol", "TradingView", "MarketWatch")
+
+_TV_SENTIMENT_EMOJI = {
+    "Bullish": "🟢",
+    "Mildly bullish": "🟢",
+    "Bearish": "🔴",
+    "Mildly bearish": "🔴",
+    "Neutral": "⚪",
+    "Mixed": "🟡",
+    "—": "⚪",
+}
 
 
 def _link_column_config() -> dict:
@@ -47,26 +61,21 @@ def _link_column_config() -> dict:
     }
 
 
-def _rules_panel(market: str = "NSE") -> None:
+def _rules_panel(market: str = "NSE", timing: BtstTiming | None = None) -> None:
+    timing = timing or btst_timing_schedule(market)
     is_us = (market or "NSE").upper() == "US"
-    tz = "ET" if is_us else "IST"
-    scan_win = "2:45–3:30 PM ET" if is_us else "2:45–3:20 PM IST"
-    entry_win = "3:50–3:58 PM ET" if is_us else "3:25–3:28 PM IST"
-    exit_win = "9:30–10:00 AM ET" if is_us else "9:15–10:00 AM IST"
     mkt_label = "NYSE / NASDAQ" if is_us else "NSE"
     with st.expander("📖 BTST methodology & rules", expanded=True):
         st.markdown(
             f"""
 **Edge:** Stocks that **close in the top quartile** of the day's range on **≥1.8× volume**
-tend to continue into the **next morning** ({exit_win}). Expectancy is small (~1%/trade)
-but repeatable with discipline.
+tend to continue into the **next morning**. Expectancy is small (~1%/trade) but repeatable with discipline.
 
-| Phase | Rule |
-|-------|------|
-| **Scan** | **{scan_win}** on today's daily bar ({mkt_label}) |
-| **Entry** | **{entry_win}** — Grade **A** (full size) or **B** (half size) |
-| **Exit** | Book on gap-up open; **100% flat by 10:00 AM {tz}** next day |
-| **Stop** | **−1.5%** from entry or below **prior day low** |
+| Phase | Your time (CEST/CET) | Market time | Rule |
+|-------|----------------------|-------------|------|
+| **Scan** | **{timing.scan_cest}** | {timing.scan_market} | Today's daily bar ({mkt_label}) |
+| **Entry** | **{timing.entry_cest}** | {timing.entry_market} | Grade **A** (full) or **B** (half) |
+| **Exit** | **{timing.exit_cest}** | {timing.exit_market} | Flat by **{timing.exit_deadline_cest}** |
 
 **Grade A:** Score ≥ 70 · CPR ≥ 75% · Vol ≥ 1.8× · Green day · RSI 50–78
 
@@ -80,7 +89,7 @@ but repeatable with discipline.
                 [
                     "CPR = (Close - Low) / (High - Low) × 100",
                     "Vol× = Today volume / 20-day average",
-                    "Target T1: +2% (book 40%) · T2: +3.5% (book 40%) · Runner: exit 10:00 AM",
+                    f"Target T1: +2% (book 40%) · T2: +3.5% (book 40%) · Runner: exit {timing.exit_deadline_cest}",
                     "Morning: Gap-up ≥1.5% → sell 50% at open",
                 ]
             ),
@@ -88,9 +97,31 @@ but repeatable with discipline.
         )
 
 
+def _render_cest_schedule(timing: BtstTiming) -> None:
+    flag = "🇺🇸 NYSE & NASDAQ" if timing.market == "US" else "🇮🇳 NSE"
+    cest_lbl = datetime.now(tz=CEST).strftime("%Z")
+    with st.container(border=True):
+        st.markdown(f"#### 📅 Your BTST playbook · {flag}")
+        st.caption(
+            f"Times in **Europe/Berlin** ({cest_lbl} in summer · CET in winter) — "
+            "updates when you change market."
+        )
+        lines = [
+            "| Your time (CEST/CET) | Market time | Action |",
+            "|----------------------|-------------|--------|",
+        ]
+        for cest, mkt, action in timing.schedule_rows:
+            lines.append(f"| **{cest}** | {mkt} | {action} |")
+        st.markdown("\n".join(lines))
+
+
 def _results_df(results: list) -> pd.DataFrame:
     rows = []
     for i, r in enumerate(results, start=1):
+        tv_em = _TV_SENTIMENT_EMOJI.get(r.tv_sentiment, "⚪")
+        tv_news = r.tv_news or "—"
+        if len(tv_news) > 140:
+            tv_news = tv_news[:140] + "…"
         rows.append(
             {
                 "Rank": i,
@@ -108,6 +139,8 @@ def _results_df(results: list) -> pd.DataFrame:
                 "T2 %": r.target_t2_pct,
                 "Entry": r.entry_window,
                 "Sector": r.sector,
+                "TV sentiment": f"{tv_em} {r.tv_sentiment}",
+                "TV news": tv_news,
                 "Morning exit": r.morning_rule[:90] + ("…" if len(r.morning_rule) > 90 else ""),
                 "Notes": " · ".join(r.pass_notes[:3]),
                 "Raw": r.raw_ticker,
@@ -119,7 +152,8 @@ def _results_df(results: list) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     core = [
         "Rank", "Grade", "Ticker", "Score", "CPR %", "Vol×", "Day %", "RSI", "vs MA20 %",
-        "Price", "Stop", "T1 %", "T2 %", "Entry", "Sector", "Morning exit", "Notes",
+        "Price", "Stop", "T1 %", "T2 %", "Entry", "Sector", "TV sentiment", "TV news",
+        "Morning exit", "Notes",
     ]
     link_cols = [c for c in _LINK_COLUMNS if c in df.columns]
     tail = [c for c in df.columns if c not in core + link_cols + ["Raw"]]
@@ -143,6 +177,18 @@ def _render_pick_card(r) -> None:
 
     st.success(f"**Entry:** {r.entry_window} · **T1** +{r.target_t1_pct}% · **T2** +{r.target_t2_pct}%")
     st.info(f"**Tomorrow morning:** {r.morning_rule}")
+    if r.tv_news and r.tv_news != "—":
+        tv_em = _TV_SENTIMENT_EMOJI.get(r.tv_sentiment, "⚪")
+        st.markdown("**TradingView news**")
+        st.caption(
+            f"{tv_em} **Sentiment:** {r.tv_sentiment} · "
+            f"Headlines: {r.tv_headline_sentiment} · **Rating:** {r.tv_rating}"
+        )
+        if r.tv_sentiment_note and r.tv_sentiment_note != "—":
+            st.caption(r.tv_sentiment_note)
+        for line in r.tv_news.split(" | "):
+            if line.strip():
+                st.markdown(f"- {line}")
     if r.pass_notes:
         st.caption(" · ".join(r.pass_notes))
     if r.links:
@@ -168,7 +214,7 @@ def render_btst_page() -> None:
     st.markdown(f"### {META['emoji']} {META['title']}")
     page_audience_note(META["audience"], META["purpose"])
 
-    m1, m2 = st.columns(2)
+    m1, m2, m3 = st.columns([1.0, 1.0, 1.2])
     with m1:
         market = st.radio(
             "Market",
@@ -177,18 +223,28 @@ def render_btst_page() -> None:
             horizontal=True,
             key=f"{key}_market",
         )
+    timing = btst_timing_schedule(market)
     with m2:
+        cest_now = datetime.now(tz=CEST)
+        cest_lbl = cest_now.strftime("%Z")
+        st.metric("Your time", cest_now.strftime(f"%H:%M {cest_lbl}"))
+        st.caption(f"BTST scan: **{timing.scan_cest}**")
+    with m3:
         sess = market_session_window(market)
-        st.metric("Session", sess.get("window", "—"))
+        st.metric("Market session", sess.get("window", "—"))
         st.caption(f"{sess.get('market_local_str', '')} · {sess.get('tip', '')}")
 
-    _rules_panel(market)
+    _render_cest_schedule(timing)
+    _rules_panel(market, timing)
 
     phase, hint = btst_session_hint(market)
+    cest_lbl = datetime.now(tz=CEST).strftime("%Z")
+    cest_now_str = datetime.now(tz=CEST).strftime(f"%d %b %Y %H:%M {cest_lbl}")
     if market == "US":
-        now_lbl = datetime.now(tz=ET).strftime("%d %b %Y %H:%M ET")
+        mkt_now = datetime.now(tz=ET).strftime("%d %b %Y %H:%M ET")
     else:
-        now_lbl = datetime.now(tz=IST).strftime("%d %b %Y %H:%M IST")
+        mkt_now = datetime.now(tz=IST).strftime("%d %b %Y %H:%M IST")
+    now_lbl = f"{cest_now_str} · {mkt_now}"
 
     if phase == "BTST_WINDOW":
         st.success(f"**{now_lbl}** — {hint}")
@@ -230,6 +286,12 @@ def render_btst_page() -> None:
             universe = st.selectbox("Universe", uni_opts, index=uni_opts.index(default_uni), key=f"{key}_uni")
             max_tickers = st.slider("Max tickers to scan", 50, 600, 600, 25, key=f"{key}_max")
             grade_a_only = st.checkbox("Grade A only", value=False, key=f"{key}_ga")
+            include_tv_news = st.checkbox(
+                "TradingView news after scan",
+                value=True,
+                key=f"{key}_tv",
+                help="Fetches latest TradingView headlines for each Grade A/B pick.",
+            )
         with c2:
             min_cpr_a = st.slider("Min CPR % (Grade A)", 65.0, 90.0, 75.0, 1.0, key=f"{key}_cpra")
             min_vol_a = st.slider("Min Vol× (Grade A)", 1.2, 3.0, 1.8, 0.1, key=f"{key}_vola")
@@ -274,6 +336,12 @@ def render_btst_page() -> None:
         with st.spinner("Scanning close strength + volume…"):
             results, stats = scan_btst(universe, flt, market=market, progress_cb=_cb)
 
+        if include_tv_news and results:
+            tv_prog = st.progress(0.0, text="Fetching TradingView news…")
+            enrich_btst_results(results, market=market)
+            tv_prog.progress(1.0, text=f"TradingView news loaded for {len(results)} picks")
+            tv_prog.empty()
+
         prog.empty()
         status.empty()
         st.session_state[session_results] = results
@@ -290,8 +358,10 @@ def render_btst_page() -> None:
     stats = st.session_state.get(session_stats)
 
     if not results and not run:
-        when = "2:45–3:20 PM ET" if market == "US" else "2:45–3:20 PM IST"
-        st.info(f"Run a scan between **{when}** for best results. Uses today's daily bar.")
+        st.info(
+            f"Run a scan between **{timing.scan_cest}** "
+            f"({timing.scan_market}) for best results. Uses today's daily bar."
+        )
         return
 
     if stats:
@@ -331,9 +401,14 @@ def render_btst_page() -> None:
             "vs MA20 %": st.column_config.NumberColumn(format="%+.1f"),
             "Price": st.column_config.NumberColumn(format=price_fmt),
             "Stop": st.column_config.NumberColumn(format=price_fmt),
+            "TV sentiment": st.column_config.TextColumn("TV sentiment", width="small"),
+            "TV news": st.column_config.TextColumn("TV news", width="large"),
             "Morning exit": st.column_config.TextColumn(width="large"),
         },
-        caption="Grade **A/B** only — sorted by grade then score. Click a row for chart · **Yahoo / TV ↗** open research links.",
+        caption=(
+            "Grade **A/B** only — sorted by grade then score. "
+            "**TV news** = TradingView headlines · Click a row for chart · **Yahoo / TV ↗** open research links."
+        ),
         show_gate_legend=False,
     )
 
