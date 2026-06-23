@@ -73,6 +73,7 @@ def _import_navigation_pages():
         "page_value_growth",
         "page_multibagger_patterns",
         "page_fast_movers",
+        "page_btst_screener",
         "page_scan_history",
         "page_stocksight",
         "page_value_technical",
@@ -157,6 +158,7 @@ try:
     page_value_growth = _nav["page_value_growth"]
     page_multibagger_patterns = _nav["page_multibagger_patterns"]
     page_fast_movers = _nav["page_fast_movers"]
+    page_btst_screener = _nav["page_btst_screener"]
     page_scan_history = _nav["page_scan_history"]
     page_stocksight = _nav["page_stocksight"]
     page_value_technical = _nav["page_value_technical"]
@@ -256,6 +258,7 @@ NAV_PAGES = {
     ],
     "⚡ Intraday": [
         st.Page(page_nse_intraday_intel, title="NSE Intraday Intel", icon="🧠"),
+        st.Page(page_btst_screener, title="BTST Screener", icon="🌙"),
         st.Page(page_fast_movers, title="Fast Movers (live speed)", icon="⚡"),
         st.Page(page_gap_scanner, title="Gap Scanner (pre-market)", icon="🌅"),
         st.Page(page_intraday_screener, title="Intraday Screener (6 strategies)", icon="📡"),

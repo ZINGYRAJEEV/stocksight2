@@ -7,6 +7,7 @@ Educational analysis only — not investment advice.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, time, timezone
 from typing import Optional
@@ -16,7 +17,7 @@ IST = ZoneInfo("Asia/Kolkata")
 
 from buyback_announcements import _nse_quote_url, _screener_company_url
 from screener_buyback import ScreenerBuybackItem, _parse_age_minutes
-from screener_bulk_order import is_order_announcement
+from screener_bulk_order import is_order_announcement, is_exchange_clarification_filing
 
 NEWS_TYPES = (
     "ORDER_WIN",
@@ -117,6 +118,17 @@ class IntradayIntelRecord:
     order_value_cr: Optional[float] = None
     order_value_label: str = "—"
     published_at: str = "—"
+    tv_news: str = "—"
+    tv_headline_sentiment: str = "—"
+    tv_rating: str = "—"
+    tv_sentiment: str = "—"
+    tv_sentiment_note: str = "—"
+    pead_summary: str = "—"
+    pead_score: Optional[float] = None
+    pead_qoq_sales_pct: Optional[float] = None
+    pead_qoq_profit_pct: Optional[float] = None
+    pead_verdict: str = "—"
+    market_sentiment_note: str = "—"
 
 
 @dataclass
@@ -878,27 +890,31 @@ def build_intel_batch(
     enrich_prices: bool = True,
     sort_by: str = "newest",
 ) -> list[IntradayIntelRecord]:
-    """One intel card per company (newest matching filing in the feed)."""
+    """One intel card per company (newest actionable filing — skips exchange queries)."""
     news_map = news_by_slug or {}
-    by_slug: dict[str, ScreenerBuybackItem] = {}
-    slug_index: dict[str, int] = {}
+    grouped: dict[str, list[tuple[int, ScreenerBuybackItem]]] = defaultdict(list)
     for idx, item in enumerate(announcements):
         slug = (item.company_slug or "").strip().upper()
         if not slug:
             continue
-        if slug not in by_slug:
-            by_slug[slug] = item
-            slug_index[slug] = idx
-        else:
-            kept = _newer_announcement(
-                by_slug[slug],
-                slug_index[slug],
-                item,
-                idx,
-            )
-            if kept is item:
-                slug_index[slug] = idx
-            by_slug[slug] = kept
+        grouped[slug].append((idx, item))
+
+    by_slug: dict[str, ScreenerBuybackItem] = {}
+    slug_index: dict[str, int] = {}
+    for slug, pairs in grouped.items():
+        actionable = [
+            (idx, it)
+            for idx, it in pairs
+            if not is_exchange_clarification_filing(f"{it.title} {it.summary}")
+        ]
+        if not actionable:
+            continue
+        best_idx, best_item = max(
+            actionable,
+            key=lambda p: _announcement_recency_key(p[1], p[0]),
+        )
+        by_slug[slug] = best_item
+        slug_index[slug] = best_idx
 
     ranked_slugs = sorted(
         by_slug.keys(),

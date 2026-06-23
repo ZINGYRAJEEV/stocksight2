@@ -5,14 +5,32 @@ Fetches analyst consensus, ratings, and target prices from TradingView.
 Falls back to Yahoo Finance if TradingView data is unavailable.
 """
 
-import requests
+from datetime import datetime, timezone
+from typing import Any, Optional
+from zoneinfo import ZoneInfo
+
 import pandas as pd
-import numpy as np
-from typing import Optional, Any
-from datetime import datetime, timedelta
-import json
+import requests
 import warnings
+
 warnings.filterwarnings("ignore")
+
+IST = ZoneInfo("Asia/Kolkata")
+
+# NSE display tickers that differ on TradingView (e.g. KOEL → KIRLOSENG).
+NSE_TV_SYMBOL_ALIASES: dict[str, str] = {
+    "KOEL": "KIRLOSENG",
+}
+
+_BULLISH_NEWS_KW = (
+    "soar", "surge", "rally", "jump", "gain", "wins", "won", "beat", "record",
+    "strong", "upgrade", "breakout", "high", "bullish", "order", "contract",
+)
+_BEARISH_NEWS_KW = (
+    "fall", "drop", "slump", "plunge", "cut", "miss", "downgrade", "probe",
+    "fraud", "loss", "bearish", "weak", "decline", "selloff", "penalty",
+    "default", "resign",
+)
 
 # TradingView's unofficial endpoints and headers
 TRADINGVIEW_HEADERS = {
@@ -44,6 +62,154 @@ COLOR_MAPPING = {
 }
 
 
+def resolve_tradingview_symbol(symbol: str, market: str = "NSE") -> str:
+    """Map app ticker to TradingView `EXCHANGE:SYMBOL` (with NSE aliases)."""
+    clean = (symbol or "").strip().upper().replace(".NS", "").replace(".BO", "")
+    if market.upper() == "NSE":
+        clean = NSE_TV_SYMBOL_ALIASES.get(clean, clean)
+        return f"NSE:{clean}"
+    return clean
+
+
+def fetch_tradingview_news(
+    symbol: str,
+    *,
+    market: str = "NSE",
+    limit: int = 3,
+) -> list[dict[str, str]]:
+    """
+    Recent TradingView headlines for a symbol (unofficial headlines API).
+
+    Returns [{title, source, published, url}, ...] newest first.
+    """
+    if not symbol:
+        return []
+
+    tv_symbol = resolve_tradingview_symbol(symbol, market=market)
+    candidates = [tv_symbol]
+    clean = (symbol or "").strip().upper().replace(".NS", "").replace(".BO", "")
+    alt = NSE_TV_SYMBOL_ALIASES.get(clean)
+    if alt and f"NSE:{alt}" not in candidates:
+        candidates.append(f"NSE:{alt}")
+    if f"NSE:{clean}" not in candidates:
+        candidates.append(f"NSE:{clean}")
+
+    headers = {
+        **TRADINGVIEW_HEADERS,
+        "Referer": "https://www.tradingview.com/",
+        "Origin": "https://www.tradingview.com",
+    }
+
+    for sym in candidates:
+        try:
+            resp = requests.get(
+                "https://news-headlines.tradingview.com/headlines/",
+                params={"category": "stock", "lang": "en", "symbol": sym},
+                headers=headers,
+                timeout=12,
+            )
+            if resp.status_code != 200:
+                continue
+            payload = resp.json()
+            if not isinstance(payload, list) or not payload:
+                continue
+
+            out: list[dict[str, str]] = []
+            for item in payload[: max(1, limit)]:
+                title = str(item.get("title") or "").strip()
+                if not title:
+                    continue
+                pub = ""
+                ts = item.get("published")
+                if ts:
+                    try:
+                        pub = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(IST).strftime(
+                            "%d %b %H:%M"
+                        )
+                    except (TypeError, ValueError, OSError):
+                        pub = ""
+                out.append({
+                    "title": title,
+                    "source": str(item.get("source") or "TradingView").strip(),
+                    "published": pub,
+                    "url": str(item.get("link") or item.get("storyPath") or "").strip(),
+                })
+            if out:
+                return out
+        except Exception:
+            continue
+    return []
+
+
+def score_headline_sentiment(headlines: list[str]) -> tuple[str, str]:
+    """
+    Lightweight bullish / bearish / neutral tag from headline text.
+
+    Returns (label, note) e.g. ("Bullish", "+2 bullish · 0 bearish").
+    """
+    if not headlines:
+        return "—", "No headlines"
+
+    bull = bear = 0
+    for raw in headlines:
+        low = (raw or "").lower()
+        if any(k in low for k in _BULLISH_NEWS_KW):
+            bull += 1
+        if any(k in low for k in _BEARISH_NEWS_KW):
+            bear += 1
+
+    if bull > bear and bull > 0:
+        label = "Bullish"
+    elif bear > bull and bear > 0:
+        label = "Bearish"
+    elif bull == bear and bull > 0:
+        label = "Mixed"
+    else:
+        label = "Neutral"
+
+    note = f"+{bull} bullish · {bear} bearish" if (bull or bear) else "Neutral tone"
+    return label, note
+
+
+def combine_tv_sentiment(
+    headline_label: str,
+    technical: dict[str, Any],
+) -> tuple[str, str]:
+    """Merge headline tone with TradingView technical sentiment."""
+    tech_sent = str(technical.get("sentiment") or "—")
+    tech_score = technical.get("technical_score")
+
+    if headline_label == "—" and tech_sent == "—":
+        return "—", "—"
+
+    parts: list[str] = []
+    if headline_label and headline_label != "—":
+        parts.append(f"News {headline_label}")
+    if tech_sent and tech_sent != "—":
+        score_bit = f" ({tech_score:.0f})" if isinstance(tech_score, (int, float)) else ""
+        parts.append(f"TV tech {tech_sent}{score_bit}")
+
+    combined = " · ".join(parts) if parts else "—"
+
+    # Overall lean for table column
+    scores = {"Bullish": 1, "Mixed": 0, "Neutral": 0, "Bearish": -1, "—": 0}
+    h = scores.get(headline_label, 0)
+    t = scores.get(tech_sent, 0)
+    total = h + t
+    if total >= 2:
+        overall = "Bullish"
+    elif total <= -2:
+        overall = "Bearish"
+    elif total == 1:
+        overall = "Mildly bullish"
+    elif total == -1:
+        overall = "Mildly bearish"
+    else:
+        overall = "Neutral"
+
+    return overall, combined
+
+
 def fetch_tradeview_analyst_data(symbol: str, market: str = "NSE") -> dict[str, Any]:
     """
     Fetch analyst consensus and technical rating from TradingView.
@@ -70,14 +236,11 @@ def fetch_tradeview_analyst_data(symbol: str, market: str = "NSE") -> dict[str, 
         return empty
     
     try:
-        # Map NSE symbols to TradingView format
         if market == "NSE":
-            tv_symbol = f"NSE:{symbol}" if not symbol.startswith("NSE:") else symbol
+            tv_symbol = resolve_tradingview_symbol(symbol, market="NSE")
         else:
             tv_symbol = symbol if not symbol.startswith("NASDAQ:") and not symbol.startswith("NYSE:") else symbol
-        
-        # Attempt to fetch TradingView technical analysis
-        # Using TradingView's technical analysis endpoint
+
         result = _fetch_tradeview_technical_analysis(tv_symbol)
         if result:
             return result
@@ -156,11 +319,10 @@ def fetch_tradeview_sentiment(symbol: str, market: str = "NSE") -> dict[str, Any
     
     try:
         if market == "NSE":
-            tv_symbol = f"NSE:{symbol}" if not symbol.startswith("NSE:") else symbol
+            tv_symbol = resolve_tradingview_symbol(symbol, market="NSE")
         else:
             tv_symbol = symbol
-        
-        # Attempt to get technical analysis
+
         url = f"https://api.tradingview.com/symbols/{tv_symbol}/technical-analysis"
         response = requests.get(url, headers=TRADINGVIEW_HEADERS, timeout=5)
         

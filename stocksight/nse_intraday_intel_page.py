@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import streamlit as st
 
+from intel_market_enrichment import enrich_intel_records
 from screener_session_ui import render_screener_session_panel
 from nse_intraday_intel import (
     IntradayIntelRecord,
@@ -71,15 +72,30 @@ _SENTIMENT_EMOJI = {
 }
 
 
+_TV_SENTIMENT_EMOJI = {
+    "Bullish": "🟢",
+    "Mildly bullish": "🟡",
+    "Neutral": "⚪",
+    "Mixed": "🟣",
+    "Mildly bearish": "🟠",
+    "Bearish": "🔴",
+    "—": "⚪",
+}
+
+
 def _intel_summary_df(records: list[IntradayIntelRecord]) -> pd.DataFrame:
     rows: list[dict] = []
     for r in records:
         em = _SENTIMENT_EMOJI.get(r.intraday.sentiment, "⚪")
+        tv_em = _TV_SENTIMENT_EMOJI.get(r.tv_sentiment, "⚪")
         ctx = r.stock_context
         rows.append({
             "Ticker": r.ticker,
             "Order value": r.order_value_label,
             "Published": r.published_at,
+            "TV sentiment": f"{tv_em} {r.tv_sentiment}",
+            "PeAD": r.pead_summary,
+            "Market note": r.market_sentiment_note,
             "Company": r.name,
             "LTP ₹": ctx.price,
             "Prev close ₹": ctx.prev_close,
@@ -95,6 +111,7 @@ def _intel_summary_df(records: list[IntradayIntelRecord]) -> pd.DataFrame:
             "Suggestion": r.intraday.suggestion,
             "News": r.news[:120] + ("…" if len(r.news) > 120 else ""),
             "Latest news": r.latest_news[:100] + ("…" if len(r.latest_news) > 100 else ""),
+            "TV news": r.tv_news[:140] + ("…" if len(r.tv_news) > 140 else ""),
             "Screener": r.screener_url,
             "NSE": r.nse_url,
         })
@@ -155,6 +172,30 @@ def _render_company_detail(r: IntradayIntelRecord) -> None:
         st.markdown("**Latest company filing (Screener)**")
         st.write(r.latest_news)
 
+    if r.tv_news and r.tv_news != "—":
+        st.markdown("**TradingView news**")
+        tv_em = _TV_SENTIMENT_EMOJI.get(r.tv_sentiment, "⚪")
+        st.caption(
+            f"{tv_em} **TV sentiment:** {r.tv_sentiment} · "
+            f"Headlines: {r.tv_headline_sentiment} · **Rating:** {r.tv_rating}"
+        )
+        if r.tv_sentiment_note and r.tv_sentiment_note != "—":
+            st.caption(r.tv_sentiment_note)
+        for line in r.tv_news.split(" | "):
+            st.markdown(f"- {line}")
+
+    if r.pead_summary and r.pead_summary != "—":
+        st.markdown("**PeAD (earnings drift)**")
+        st.write(
+            f"**{r.pead_summary}**"
+            + (f" · Score **{r.pead_score:.0f}**" if r.pead_score is not None else "")
+        )
+        if r.pead_verdict and r.pead_verdict != "—":
+            st.caption(r.pead_verdict)
+
+    if r.market_sentiment_note and r.market_sentiment_note != "—":
+        st.info(f"**Combined sentiment note:** {r.market_sentiment_note}")
+
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("**Stock context**")
@@ -184,6 +225,125 @@ def _render_company_detail(r: IntradayIntelRecord) -> None:
     with l2:
         if r.nse_url:
             st.link_button("NSE quote", r.nse_url, use_container_width=True)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_market_enrichment(raw_records: list[dict]) -> list[dict]:
+    """Fetch TradingView news + PeAD for intel rows (cached 10 min)."""
+    from nse_intraday_intel import IntradayIntelRecord, IntradaySetup, StockContext
+
+    records: list[IntradayIntelRecord] = []
+    for d in raw_records:
+        sc = d["stock_context"]
+        ia = d["intraday"]
+        records.append(
+            IntradayIntelRecord(
+                ticker=d["ticker"],
+                name=d["name"],
+                sector=d["sector"],
+                news=d["news"],
+                news_type=d["news_type"],
+                news_date=d["news_date"],
+                latest_news=d["latest_news"],
+                order_value_cr=d.get("order_value_cr"),
+                order_value_label=d.get("order_value_label", "—"),
+                published_at=d.get("published_at", "—"),
+                screener_url=d.get("screener_url", ""),
+                nse_url=d.get("nse_url", ""),
+                stock_context=StockContext(
+                    approx_price=sc["approx_price"],
+                    trend=sc["trend"],
+                    note=sc["note"],
+                    week_high52=sc["week_high52"],
+                    week_low52=sc["week_low52"],
+                    price=sc.get("price"),
+                    prev_close=sc.get("prev_close"),
+                    gap_pct=sc.get("gap_pct"),
+                    drawdown_pct=sc.get("drawdown_pct"),
+                    ret_6m_pct=sc.get("ret_6m_pct"),
+                    pct_vs_ma20=sc.get("pct_vs_ma20"),
+                ),
+                intraday=IntradaySetup(
+                    sentiment=ia["sentiment"],
+                    strength=ia["strength"],
+                    bias=ia["bias"],
+                    entry=ia["entry"],
+                    target=ia["target"],
+                    stop=ia["stop"],
+                    rules=ia["rules"],
+                    risk=ia["risk"],
+                    risk_note=ia["risk_note"],
+                    indicator=ia["indicator"],
+                    suggestion=ia["suggestion"],
+                    react_by=ia.get("react_by", ""),
+                    exit_by=ia.get("exit_by", ""),
+                    react_windows=ia.get("react_windows", []),
+                ),
+            )
+        )
+
+    enrich_intel_records(records, delay_sec=0.1, max_workers=4)
+
+    def _ctx_dict(sc: StockContext) -> dict:
+        return {
+            "approx_price": sc.approx_price,
+            "trend": sc.trend,
+            "note": sc.note,
+            "week_high52": sc.week_high52,
+            "week_low52": sc.week_low52,
+            "price": sc.price,
+            "prev_close": sc.prev_close,
+            "gap_pct": sc.gap_pct,
+            "drawdown_pct": sc.drawdown_pct,
+            "ret_6m_pct": sc.ret_6m_pct,
+            "pct_vs_ma20": sc.pct_vs_ma20,
+        }
+
+    out: list[dict] = []
+    for r in records:
+        out.append({
+            "ticker": r.ticker,
+            "name": r.name,
+            "sector": r.sector,
+            "news": r.news,
+            "news_type": r.news_type,
+            "news_date": r.news_date,
+            "latest_news": r.latest_news,
+            "order_value_cr": r.order_value_cr,
+            "order_value_label": r.order_value_label,
+            "published_at": r.published_at,
+            "screener_url": r.screener_url,
+            "nse_url": r.nse_url,
+            "tv_news": r.tv_news,
+            "tv_headline_sentiment": r.tv_headline_sentiment,
+            "tv_rating": r.tv_rating,
+            "tv_sentiment": r.tv_sentiment,
+            "tv_sentiment_note": r.tv_sentiment_note,
+            "pead_summary": r.pead_summary,
+            "pead_score": r.pead_score,
+            "pead_qoq_sales_pct": r.pead_qoq_sales_pct,
+            "pead_qoq_profit_pct": r.pead_qoq_profit_pct,
+            "pead_verdict": r.pead_verdict,
+            "market_sentiment_note": r.market_sentiment_note,
+            "stock_context": _ctx_dict(r.stock_context),
+            "intraday": {
+                "sentiment": r.intraday.sentiment,
+                "strength": r.intraday.strength,
+                "bias": r.intraday.bias,
+                "entry": r.intraday.entry,
+                "target": r.intraday.target,
+                "stop": r.intraday.stop,
+                "rules": r.intraday.rules,
+                "risk": r.intraday.risk,
+                "risk_note": r.intraday.risk_note,
+                "indicator": r.intraday.indicator,
+                "suggestion": r.intraday.suggestion,
+                "react_by": r.intraday.react_by,
+                "exit_by": r.intraday.exit_by,
+                "react_windows": r.intraday.react_windows,
+            },
+        })
+    return out
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -274,6 +434,17 @@ def _cached_analysis(
             "published_at": r.published_at,
             "screener_url": r.screener_url,
             "nse_url": r.nse_url,
+            "tv_news": r.tv_news,
+            "tv_headline_sentiment": r.tv_headline_sentiment,
+            "tv_rating": r.tv_rating,
+            "tv_sentiment": r.tv_sentiment,
+            "tv_sentiment_note": r.tv_sentiment_note,
+            "pead_summary": r.pead_summary,
+            "pead_score": r.pead_score,
+            "pead_qoq_sales_pct": r.pead_qoq_sales_pct,
+            "pead_qoq_profit_pct": r.pead_qoq_profit_pct,
+            "pead_verdict": r.pead_verdict,
+            "market_sentiment_note": r.market_sentiment_note,
             "stock_context": {
                 "approx_price": r.stock_context.approx_price,
                 "trend": r.stock_context.trend,
@@ -283,6 +454,9 @@ def _cached_analysis(
                 "price": r.stock_context.price,
                 "prev_close": r.stock_context.prev_close,
                 "gap_pct": r.stock_context.gap_pct,
+                "drawdown_pct": r.stock_context.drawdown_pct,
+                "ret_6m_pct": r.stock_context.ret_6m_pct,
+                "pct_vs_ma20": r.stock_context.pct_vs_ma20,
             },
             "intraday": {
                 "sentiment": r.intraday.sentiment,
@@ -329,6 +503,17 @@ def _records_from_cache(raw: list[dict]) -> list[IntradayIntelRecord]:
                 published_at=d.get("published_at", "—"),
                 screener_url=d.get("screener_url", ""),
                 nse_url=d.get("nse_url", ""),
+                tv_news=d.get("tv_news", "—"),
+                tv_headline_sentiment=d.get("tv_headline_sentiment", "—"),
+                tv_rating=d.get("tv_rating", "—"),
+                tv_sentiment=d.get("tv_sentiment", "—"),
+                tv_sentiment_note=d.get("tv_sentiment_note", "—"),
+                pead_summary=d.get("pead_summary", "—"),
+                pead_score=d.get("pead_score"),
+                pead_qoq_sales_pct=d.get("pead_qoq_sales_pct"),
+                pead_qoq_profit_pct=d.get("pead_qoq_profit_pct"),
+                pead_verdict=d.get("pead_verdict", "—"),
+                market_sentiment_note=d.get("market_sentiment_note", "—"),
                 stock_context=StockContext(
                     approx_price=sc["approx_price"],
                     trend=sc["trend"],
@@ -338,6 +523,9 @@ def _records_from_cache(raw: list[dict]) -> list[IntradayIntelRecord]:
                     price=sc.get("price"),
                     prev_close=sc.get("prev_close"),
                     gap_pct=sc.get("gap_pct"),
+                    drawdown_pct=sc.get("drawdown_pct"),
+                    ret_6m_pct=sc.get("ret_6m_pct"),
+                    pct_vs_ma20=sc.get("pct_vs_ma20"),
                 ),
                 intraday=IntradaySetup(
                     sentiment=ia["sentiment"],
@@ -404,7 +592,8 @@ def render_nse_intraday_intel_page() -> None:
 2. Classifies each filing (order win, volume alert, legal, exchange query).
 3. Enriches with **price context** (52-week range, trend, volume ratio) via Yahoo Finance.
 4. Applies **intraday rules** (ORB, VWAP, volume confirmation, risk tier).
-5. Surfaces **indicators** and **suggestions** per ticker plus batch **market themes**.
+5. Optional **TradingView news** + **PeAD** (Screener QoQ earnings vs price drift) with sentiment notes.
+6. Surfaces **indicators** and **suggestions** per ticker plus batch **market themes**.
 
 Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
 """
@@ -431,6 +620,12 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
         )
     with c3:
         max_co = st.slider("Max companies", 5, 60, 40, key="nii_max")
+        include_tv_pead = st.checkbox(
+            "TradingView news + PeAD",
+            value=True,
+            key="nii_tv_pead",
+            help="Pull TradingView headlines/rating and Screener quarterly PeAD (QoQ jump vs price drift).",
+        )
     sort_by = st.radio(
         "Sort results by",
         ("newest", "strength"),
@@ -463,6 +658,7 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
             _cached_intel.clear()
             _cached_company_news.clear()
             _cached_analysis.clear()
+            _cached_market_enrichment.clear()
 
         if auto_refresh:
             st.caption(f"Auto-refresh **on** · every **{int(refresh_sec)}s** (manual refresh still clears cache)")
@@ -475,6 +671,10 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
             raw_records, themes, feed_meta = _cached_analysis(
                 order_query, strict, int(max_co), sort_by, include_press
             )
+
+        if include_tv_pead and raw_records:
+            with st.spinner("Fetching TradingView news and PeAD context…"):
+                raw_records = _cached_market_enrichment(raw_records)
 
         records = _records_from_cache(raw_records)
 
@@ -510,9 +710,10 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
                     f"per company** (capped at **{int(max_co)}**). Raise **Max companies** to include more."
                 )
             st.caption(
-                "**Order value** = ₹ Cr/L or **MW** for power orders · "
-                "**Published** = Screener time (IST for 15m/2h; date for calendar) · "
-                "Press-release feed **on** merges LODR / wins-order / MW searches."
+                "**Order value** = ₹ Cr/L or **MW** · **Published** = Screener time · "
+                "**TV sentiment** = TradingView headlines + technical rating · "
+                "**PeAD** = Screener QoQ sales/PAT vs price drift. "
+                "Exchange **clarification queries** (price/volume spikes) are excluded from results."
             )
             st.link_button("🔗 Bulk Order feed on Screener", SCREENER_ORDER_URL)
 
@@ -524,6 +725,9 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
                 column_config={
                     "Order value": st.column_config.TextColumn("Order value", width="small"),
                     "Published": st.column_config.TextColumn("Published", width="medium"),
+                    "TV sentiment": st.column_config.TextColumn("TV sentiment", width="small"),
+                    "PeAD": st.column_config.TextColumn("PeAD", width="medium"),
+                    "Market note": st.column_config.TextColumn("Market note", width="large"),
                     "LTP ₹": st.column_config.NumberColumn(format="₹%.2f"),
                     "Prev close ₹": st.column_config.NumberColumn(format="₹%.2f"),
                     "Gap %": st.column_config.NumberColumn(format="%+.2f"),
@@ -533,6 +737,7 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
                     "Suggestion": st.column_config.TextColumn("Suggestion", width="medium"),
                     "News": st.column_config.TextColumn("News", width="large"),
                     "Latest news": st.column_config.TextColumn("Latest news", width="large"),
+                    "TV news": st.column_config.TextColumn("TV news", width="large"),
                     "Screener": st.column_config.LinkColumn("Screener ↗"),
                     "NSE": st.column_config.LinkColumn("NSE ↗"),
                 },

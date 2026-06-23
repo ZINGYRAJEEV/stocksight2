@@ -143,6 +143,32 @@ def is_order_announcement(text: str) -> bool:
     return False
 
 
+def is_exchange_clarification_filing(text: str) -> bool:
+    """
+    NSE exchange queries on price/volume spikes — not actionable order catalysts.
+
+    Example: "Exchange has sought clarification from … with reference to significant
+    increase in price / volume / news item".
+    """
+    low = (text or "").lower()
+    if "sought clarification" in low or "exchange has sought" in low:
+        return True
+    if "clarification" in low and any(
+        k in low
+        for k in (
+            "price movement",
+            "significant increase",
+            "significant rise",
+            "unusual price",
+            "volume movement",
+            "news item",
+            "with reference to",
+        )
+    ):
+        return True
+    return False
+
+
 def _dedupe_announcement_items(items: list[ScreenerBuybackItem]) -> list[ScreenerBuybackItem]:
     seen: set[str] = set()
     out: list[ScreenerBuybackItem] = []
@@ -166,6 +192,7 @@ def fetch_merged_order_announcements(
     *,
     strict_filter: bool = False,
     include_press_release_feeds: bool = True,
+    exclude_exchange_clarifications: bool = True,
     limit_per_query: int = 45,
     max_items: int = 80,
 ) -> tuple[list[ScreenerBuybackItem], str]:
@@ -202,6 +229,11 @@ def fetch_merged_order_announcements(
                 statuses.append("error")
 
     merged = _dedupe_announcement_items(all_items)
+    if exclude_exchange_clarifications and merged:
+        merged = [
+            it for it in merged
+            if not is_exchange_clarification_filing(f"{it.title} {it.summary}")
+        ]
     if strict_filter and merged:
         filtered = [
             it for it in merged

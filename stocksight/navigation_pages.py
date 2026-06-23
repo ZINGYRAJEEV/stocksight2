@@ -279,6 +279,12 @@ def page_fast_movers() -> None:
     exec_stocksight_page("Fast Movers.py")
 
 
+def page_btst_screener() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("BTST Screener.py")
+
+
 def page_financially_free_swing() -> None:
     from financially_free_page import render_financially_free_page
 
@@ -368,6 +374,7 @@ __all__ = [
     "page_pre_investigation",
     "page_peter_lynch",
     "page_fast_movers",
+    "page_btst_screener",
     "page_financially_free_swing",
     "page_volume_led_growth",
     "page_crisis_value",
