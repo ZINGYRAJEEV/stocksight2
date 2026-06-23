@@ -1001,7 +1001,8 @@ def _render_diagnostic_panel(stats: IntradayScanStats, *, key_prefix: str) -> No
     if passed == 0 and stats.total_scanned > 0:
         st.warning(
             "**Tips to get results:** Vol ratio **1.0×** · RSI **40–80** · enable **🔍 Broad Movers** · "
-            "lower min price / avg volume · run during market hours · try **Nifty 50** first."
+            "lower min price / avg volume · run during market hours · try **Nifty 50** first. "
+            "Rows with **⛔ Skip** still appear — focus on **✅ Buy** / **👀 Watch** tiers."
         )
 
 
@@ -1824,9 +1825,9 @@ def _render_intraday_rating_gate_rules(*, expanded: bool = True) -> None:
             st.caption("Rating rules diagram not found — see text summary below.")
         st.markdown(
             """
-**Gate 1 — Volume & gap (hard)** · Vol **≥ 5×** AND Gap **≥ 2%** → else **Skip**
+**Gate 1 — Volume & gap** · Vol **≥ 5×** AND Gap **≥ 2%** → **⛔ Skip** tier (row still listed)
 
-**Gate 2 — Momentum (2 of 3)** · RSI **45–70** · Price **> VWAP** · Vol accel **≥ 1.5×**
+**Gate 2 — Momentum (2 of 3)** · RSI **45–70** · Price **> VWAP** · Vol accel **≥ 1.5×** → else **⛔ Skip** tier
 
 **Gate 3 — Context score** · Near 52W **+10** · News T1–2 **+10** · RSI **> 72 → −20**
 
@@ -1836,7 +1837,7 @@ def _render_intraday_rating_gate_rules(*, expanded: bool = True) -> None:
 | **👀 Watch** | Gates 1+2 pass · Gate 3 score **< 0** (wait for RSI to cool) |
 | **⛔ Skip** | Gate 1 fails or fewer than 2 in Gate 2 |
 
-*Focus on **Buy** first; **Watch** names can flip to Buy when RSI pulls back below 70.*
+*Gates set **Buy / Watch / Skip** on each match — they do **not** hide tickers from the scan table. Focus on **Buy** first.*
 """
         )
 
@@ -3534,16 +3535,22 @@ def render_gap_scanner_page() -> None:
     _render_market_schedule(market)
 
     with st.container(border=True):
-        c1, c2 = st.columns([1.2, 1.0])
+        c1, c2, c3 = st.columns([1.2, 1.0, 1.0])
         with c1:
             uni_label, raw_tickers = _universe_picker(key, market)
         with c2:
             min_gap = st.slider(
                 "Minimum |gap %|",
-                0.3, 5.0, 1.0, 0.1,
+                0.3, 5.0, 0.5, 0.1,
                 key=f"{key}_min_gap",
-                help="Filter out micro-gaps. Default 1% catches most actionable setups.",
+                help="Filter out micro-gaps. Default **0.5%** matches autopilot; raise to 1% on noisy days.",
             )
+        with c3:
+            if market == "NSE":
+                gap_data_source = _pick_breeze_data_source(f"{key}_gap")
+            else:
+                gap_data_source = "yahoo"
+                st.caption("Data: **Yahoo Finance** (US)")
     _news_confirmation_controls()
 
     run = st.button("▶  SCAN GAPS NOW", use_container_width=True, key=f"{key}_run")
@@ -3567,7 +3574,12 @@ def render_gap_scanner_page() -> None:
         def cb(i: int, t: int, s: str) -> None:
             prog.progress(int(i / max(t, 1) * 100), text=f"Scanning {s}… ({i}/{t})")
 
-        gaps = scan_gaps(raw_tickers, min_gap_abs_pct=float(min_gap), progress_cb=cb)
+        gaps = scan_gaps(
+            raw_tickers,
+            min_gap_abs_pct=float(min_gap),
+            data_source=gap_data_source,
+            progress_cb=cb,
+        )
         prog.empty()
         st.session_state[f"{key}_results"] = gaps
         st.session_state[f"{key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")

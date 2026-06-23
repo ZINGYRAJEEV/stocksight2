@@ -1380,8 +1380,8 @@ def _rating_from_gates(
     """
     Simplified Buy / Watch / Skip rating.
 
-    Gate 1 — vol ≥ 5× AND gap ≥ 2% (hard skip if fail).
-    Gate 2 — 2 of 3: RSI 45–70, above VWAP, vol accel ≥ 1.5× (hard skip if fail).
+    Gate 1 — vol ≥ 5× AND gap ≥ 2% (→ Skip tier if fail).
+    Gate 2 — 2 of 3: RSI 45–70, above VWAP, vol accel ≥ 1.5× (→ Skip tier if fail).
     Gate 3 — context score: 52W +10, News T1–2 +10, RSI>72 −20 (penalty only).
     """
     g1_ok, g1_detail = _gate1_pass(ctx)
@@ -1931,17 +1931,8 @@ def scan_intraday(
 
         early_probe = "EARLY" in strategies
         early_hit = _evaluate("EARLY", ctx, flt) if early_probe else None
-        # VOL_DUMP-only distribution rows skip long-side buy gates.
-        if not dump_hit:
-            g1_ok, _ = _gate1_pass(ctx)
-            g2_ok, _ = _gate2_pass(ctx)
-            if not g1_ok or not g2_ok:
-                stats.failed_hard_reject += 1
-                _notify_progress(
-                    progress_cb, i + 1, total, raw, stage="done",
-                    last_outcome="gate_skip", last_bar_source=bar_src, matched=stats.tickers_matched,
-                )
-                continue
+        # Buy/Watch/Skip gates are applied in _score_intraday_rules — not as scan blockers.
+        # VOL_DUMP distribution rows may still surface when long-side gates would fail.
 
         matched_notes: dict[str, str] = {}
         if early_hit:
