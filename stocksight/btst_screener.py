@@ -77,7 +77,7 @@ class BtstFilters:
     max_rsi: float = 78.0
     require_green_candle: bool = True
     grade_a_only: bool = False
-    max_tickers: int = 100
+    max_tickers: int = 600
     bar_delay_sec: float = 0.08
     data_source: str = "auto"  # auto | breeze | yahoo
 

@@ -32,6 +32,18 @@ _GRADE_STYLE = {
     "B": "background-color:#fef9c3;color:#854d0e;font-weight:600;",
 }
 
+_LINK_COLUMNS = ("Yahoo Finance", "Google Finance", "Moneycontrol", "TradingView", "MarketWatch")
+
+
+def _link_column_config() -> dict:
+    return {
+        "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
+        "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
+        "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="MC ↗"),
+        "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
+        "MarketWatch": st.column_config.LinkColumn("MarketWatch", display_text="MW ↗"),
+    }
+
 
 def _rules_panel() -> None:
     with st.expander("📖 BTST methodology & rules", expanded=True):
@@ -94,7 +106,16 @@ def _results_df(results: list) -> pd.DataFrame:
                 **{k: v for k, v in r.links.items()},
             }
         )
-    return pd.DataFrame(rows)
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    core = [
+        "Rank", "Grade", "Ticker", "Score", "CPR %", "Vol×", "Day %", "RSI", "vs MA20 %",
+        "Price", "Stop", "T1 %", "T2 %", "Entry", "Sector", "Morning exit", "Notes",
+    ]
+    link_cols = [c for c in _LINK_COLUMNS if c in df.columns]
+    tail = [c for c in df.columns if c not in core + link_cols + ["Raw"]]
+    return df[core + link_cols + tail + ["Raw"]]
 
 
 def _render_pick_card(r) -> None:
@@ -115,6 +136,12 @@ def _render_pick_card(r) -> None:
     st.info(f"**Tomorrow morning:** {r.morning_rule}")
     if r.pass_notes:
         st.caption(" · ".join(r.pass_notes))
+    if r.links:
+        lcols = st.columns(min(len(r.links), 4))
+        for i, (name, url) in enumerate(r.links.items()):
+            if url and i < len(lcols):
+                with lcols[i]:
+                    st.link_button(name, url, use_container_width=True)
 
 
 def render_btst_page() -> None:
@@ -161,7 +188,7 @@ def render_btst_page() -> None:
         c1, c2, c3 = st.columns([1.1, 1.0, 1.0])
         with c1:
             universe = st.selectbox("Universe", uni_opts, index=uni_opts.index(default_uni), key=f"{key}_uni")
-            max_tickers = st.slider("Max tickers to scan", 30, 200, 100, 10, key=f"{key}_max")
+            max_tickers = st.slider("Max tickers to scan", 50, 600, 600, 25, key=f"{key}_max")
             grade_a_only = st.checkbox("Grade A only", value=False, key=f"{key}_ga")
         with c2:
             min_cpr_a = st.slider("Min CPR % (Grade A)", 65.0, 90.0, 75.0, 1.0, key=f"{key}_cpra")
@@ -236,6 +263,7 @@ def render_btst_page() -> None:
         key_prefix=key,
         apply_stock_sight=False,
         column_config={
+            **_link_column_config(),
             **stock_sight_overlay_column_config(),
             "Grade": st.column_config.TextColumn("Grade", width="small"),
             "Score": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.0f"),
@@ -248,7 +276,7 @@ def render_btst_page() -> None:
             "Stop": st.column_config.NumberColumn(format="₹%.2f"),
             "Morning exit": st.column_config.TextColumn(width="large"),
         },
-        caption="Grade **A/B** only — sorted by grade then score. Click a row for chart.",
+        caption="Grade **A/B** only — sorted by grade then score. Click a row for chart · **Yahoo / TV ↗** open research links.",
         show_gate_legend=False,
     )
 
