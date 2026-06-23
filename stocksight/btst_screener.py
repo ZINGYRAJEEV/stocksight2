@@ -41,6 +41,7 @@ except ImportError:
     )
 
 IST = ZoneInfo("Asia/Kolkata")
+ET = ZoneInfo("America/New_York")
 
 META = {
     "id": "btst",
@@ -93,6 +94,7 @@ class BtstScanStats:
     grade_c: int = 0
     scan_elapsed_sec: float = 0.0
     data_source: str = "auto"
+    market: str = "NSE"
     bars_from_breeze: int = 0
 
 
@@ -124,7 +126,7 @@ class BtstResult:
 
 
 def ist_session_hint() -> tuple[str, str]:
-    """Return (phase_label, user_hint) for BTST timing."""
+    """Return (phase_label, user_hint) for NSE BTST timing."""
     now = datetime.now(tz=IST)
     t = now.hour * 60 + now.minute
     if t < 14 * 60 + 45:
@@ -132,10 +134,39 @@ def ist_session_hint() -> tuple[str, str]:
     if t < 15 * 60 + 20:
         return "BTST_WINDOW", "Ideal BTST scan window — close strength reflects today's tape."
     if t < 15 * 60 + 30:
-        return "ENTRY_WINDOW", "Entry window **3:25–3:28 PM** — confirm Grade A/B before buying."
+        return "ENTRY_WINDOW", "Entry window **3:25–3:28 PM IST** — confirm Grade A/B before buying."
     if t < 16 * 60:
         return "LATE", "Late session — only enter if CPR/volume still qualify; prefer CNC delivery."
-    return "POST_MARKET", "Market closed — review list for **tomorrow morning** exit plan (9:15–10:00 AM)."
+    return "POST_MARKET", "Market closed — review list for **tomorrow morning** exit plan (9:15–10:00 AM IST)."
+
+
+def us_session_hint() -> tuple[str, str]:
+    """Return (phase_label, user_hint) for US (NYSE / NASDAQ) BTST timing."""
+    now = datetime.now(tz=ET)
+    t = now.hour * 60 + now.minute
+    if t < 14 * 60 + 45:
+        return "PRE_SCAN", "Best run **2:45–3:30 PM ET** — today's bar may still be forming."
+    if t < 15 * 60 + 30:
+        return "BTST_WINDOW", "Ideal US BTST scan — close strength into the NYSE/NASDAQ close."
+    if t < 15 * 60 + 55:
+        return "ENTRY_WINDOW", "Entry window **3:50–3:58 PM ET** — confirm Grade A/B before the close."
+    if t < 16 * 60:
+        return "LATE", "Near the bell — only enter if CPR/volume still qualify."
+    return "POST_MARKET", "US session closed — exit plan for **next open 9:30–10:00 AM ET**."
+
+
+def btst_session_hint(market: str = "NSE") -> tuple[str, str]:
+    if (market or "NSE").upper() == "US":
+        return us_session_hint()
+    return ist_session_hint()
+
+
+def _is_us_ticker(raw: str) -> bool:
+    return not (raw or "").endswith((".NS", ".BO"))
+
+
+def _entry_window_for_ticker(raw: str) -> str:
+    return "3:50–3:58 PM ET" if _is_us_ticker(raw) else "3:25–3:28 PM IST"
 
 
 def _compute_cpr(high: float, low: float, close: float) -> float:
@@ -197,12 +228,18 @@ def _assign_grade(score: float, cpr: float, vol_ratio: float, flt: BtstFilters) 
     return "C"
 
 
-def _morning_rule(pct_change: float, cpr: float) -> str:
+def _morning_rule(pct_change: float, cpr: float, *, market: str = "NSE") -> str:
+    if (market or "NSE").upper() == "US":
+        exit_note = "**100% flat by 10:00 AM ET**"
+        open_note = "Gap-up ≥1.5%: book **50%** at the open (9:30 ET)"
+    else:
+        exit_note = "**100% flat by 10:00 AM IST**"
+        open_note = "Gap-up ≥1.5%: book **50%** at open"
     base = (
-        "Gap-up ≥1.5%: book **50%** at open · +0.5–1.5% gap: book **30–50%** in first 5 min · "
-        "Flat: hold only if breaks **9:15 high** by 9:30 else exit · "
-        "Gap-down: exit by **9:20** unless reclaims prev close · "
-        "**100% flat by 10:00 AM IST**"
+        f"{open_note} · +0.5–1.5% gap: book **30–50%** in first 5 min · "
+        "Flat: hold only if breaks **session open high** by 30 min else exit · "
+        "Gap-down: exit early unless reclaims prev close · "
+        f"{exit_note}"
     )
     if pct_change >= 4 and cpr >= 80:
         return f"Strong momentum day — {base}"
@@ -210,7 +247,7 @@ def _morning_rule(pct_change: float, cpr: float) -> str:
 
 
 def _fetch_daily_hist(raw: str, flt: BtstFilters) -> tuple[pd.DataFrame, str]:
-    if flt.data_source == "yahoo":
+    if _is_us_ticker(raw) or flt.data_source == "yahoo":
         return fetch_price_history(raw, "1d"), "yahoo"
 
     hist = fetch_price_history(raw, "1d")
@@ -229,7 +266,7 @@ def _fetch_daily_hist(raw: str, flt: BtstFilters) -> tuple[pd.DataFrame, str]:
     return hist, source
 
 
-def analyze_btst(raw: str, flt: BtstFilters) -> Optional[BtstResult]:
+def analyze_btst(raw: str, flt: BtstFilters, *, market: str = "NSE") -> Optional[BtstResult]:
     disp = raw.replace(".NS", "").replace(".BO", "")
     try:
         hist, _src = _fetch_daily_hist(raw, flt)
@@ -320,6 +357,7 @@ def analyze_btst(raw: str, flt: BtstFilters) -> Optional[BtstResult]:
 
         stop = round(min(day_low, price * 0.985), 2)
         sector, _ = get_sector_industry(yf.Ticker(raw))
+        mkt = "US" if _is_us_ticker(raw) else (market or "NSE").upper()
 
         return BtstResult(
             ticker=disp,
@@ -338,7 +376,8 @@ def analyze_btst(raw: str, flt: BtstFilters) -> Optional[BtstResult]:
             day_low=round(day_low, 2),
             day_high=round(day_high, 2),
             stop_price=stop,
-            morning_rule=_morning_rule(pct_change, cpr),
+            entry_window=_entry_window_for_ticker(raw),
+            morning_rule=_morning_rule(pct_change, cpr, market=mkt),
             pass_notes=notes,
             reject_reason=reject,
             links=get_stock_links(raw),
@@ -355,9 +394,11 @@ def scan_btst(
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
 ) -> tuple[list[BtstResult], BtstScanStats]:
     flt = flt or BtstFilters()
+    mkt = (market or "NSE").upper()
     t0 = time.time()
-    tickers = resolve_universe(universe, market=market)[: flt.max_tickers]
+    tickers = resolve_universe(universe, market=mkt)[: flt.max_tickers]
     stats = BtstScanStats(universe=universe, data_source=flt.data_source)
+    stats.market = mkt
     results: list[BtstResult] = []
     total = len(tickers)
 
@@ -365,7 +406,7 @@ def scan_btst(
         if progress_cb:
             progress_cb(i, total, raw.replace(".NS", "").replace(".BO", ""))
         stats.tickers_scanned += 1
-        r = analyze_btst(raw, flt)
+        r = analyze_btst(raw, flt, market=mkt)
         if r is None:
             stats.no_data += 1
         elif r.reject_reason:
@@ -397,12 +438,21 @@ def universe_options(market: str = "NSE") -> list[str]:
 
     mkt = (market or "NSE").upper()
     dct = INTRADAY_UNIVERSES_BY_MARKET.get(mkt, {})
-    preferred = (
-        "Nifty 100 (medium)",
-        "Nifty 500 (broad, slow)",
-        "Nifty 50 (fast)",
-        "Nifty Midcap 150",
-    )
+    if mkt == "US":
+        preferred = (
+            "S&P 500 (broad, slow)",
+            "Liquid US shortlist (~35)",
+        )
+    else:
+        preferred = (
+            "Nifty 100 (medium)",
+            "Nifty 500 (broad, slow)",
+            "Nifty 50 (fast)",
+            "Nifty Midcap 150",
+        )
+        all_key = next((k for k in dct if str(k).startswith("🌐 ALL")), None)
+        if all_key:
+            preferred = preferred + (all_key,)
     opts = list(dct.keys())
     ordered = [u for u in preferred if u in opts]
     ordered += [u for u in opts if u not in ordered]
