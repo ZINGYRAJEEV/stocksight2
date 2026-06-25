@@ -173,6 +173,11 @@ class BtstFilters:
     max_tickers: int = 600
     bar_delay_sec: float = 0.08
     data_source: str = "auto"  # auto | breeze | yahoo
+    scan_profile: str = "classic"  # classic | kapil
+    min_kapil_score: int = 2
+    min_intraday_gain: float = 1.5
+    max_intraday_gain: float = 8.0
+    max_gain_5d_pct: float = 10.0
 
 
 @dataclass
@@ -217,6 +222,12 @@ class BtstResult:
     tv_headline_sentiment: str = "—"
     tv_rating: str = "—"
     tv_sentiment_note: str = "—"
+    kapil_score: int = 0
+    kapil_signals: list[str] = field(default_factory=list)
+    intraday_gain_pct: float = 0.0
+    body_pct: float = 0.0
+    gain_5d_pct: float = 0.0
+    near_52w_high: bool = False
     pass_notes: list[str] = field(default_factory=list)
     reject_reason: str = ""
     links: dict = field(default_factory=dict)
@@ -429,10 +440,74 @@ def analyze_btst(raw: str, flt: BtstFilters, *, market: str = "NSE") -> Optional
             return None
         rsi = float(rsi)
 
+        intraday_gain = round((price / day_open - 1.0) * 100.0, 2) if day_open > 0 else 0.0
+        rng = max(day_high - day_low, 1e-9)
+        body_pct = round(abs(price - day_open) / rng * 100.0, 1)
+        gain_5d = (
+            round((price / float(closes.iloc[-6]) - 1.0) * 100.0, 2)
+            if len(closes) >= 6
+            else 0.0
+        )
+        high_52w = float(highs.iloc[-252:].max()) if len(highs) >= 20 else day_high
+        near_52w = price >= high_52w * 0.98
+
+        is_kapil = (flt.scan_profile or "classic").lower() == "kapil"
+        kapil_score = 0
+        kapil_signals: list[str] = []
+        if is_kapil:
+            try:
+                from btst_channel_analysis import kapil_grade, passes_kapil_filters, score_kapil_day1
+            except ImportError:
+                from .btst_channel_analysis import kapil_grade, passes_kapil_filters, score_kapil_day1
+            kapil_score, kapil_signals = score_kapil_day1(
+                vol_mult=vol_ratio,
+                intraday_gain_pct=intraday_gain,
+                pct_vs_prev_close=pct_change,
+                body_pct=body_pct,
+                rsi=rsi,
+                gain_5d_pct=gain_5d,
+                near_52w_high=near_52w,
+            )
+
         notes: list[str] = []
         reject = ""
 
-        if flt.require_green_candle and price <= day_open:
+        if is_kapil:
+            try:
+                from btst_channel_analysis import KapilDayMetrics, passes_kapil_filters, kapil_grade
+            except ImportError:
+                from .btst_channel_analysis import KapilDayMetrics, passes_kapil_filters, kapil_grade
+            km = KapilDayMetrics(
+                price=price,
+                prev_close=prev_close,
+                intraday_gain_pct=intraday_gain,
+                pct_vs_prev_close=pct_change,
+                vol_mult=vol_ratio,
+                rsi=rsi,
+                body_pct=body_pct,
+                gain_5d_pct=gain_5d,
+                near_52w_high=near_52w,
+                kapil_score=kapil_score,
+                kapil_signals=kapil_signals,
+            )
+            if price <= day_open:
+                reject = "Not a green candle (close ≤ open)"
+            elif price <= prev_close:
+                reject = "Close below prior day close"
+            elif not passes_kapil_filters(
+                km,
+                min_vol_mult=max(flt.min_vol_ratio_a, 2.0),
+                min_intraday_gain=flt.min_intraday_gain,
+                max_intraday_gain=flt.max_intraday_gain,
+                min_pct_vs_prev=flt.min_pct_change,
+                max_pct_vs_prev=flt.max_pct_change,
+                min_rsi=flt.min_rsi,
+                max_rsi=flt.max_rsi,
+                max_gain_5d=flt.max_gain_5d_pct,
+                min_kapil_score=flt.min_kapil_score,
+            ):
+                reject = f"Kapil filters not met (score {kapil_score}/8)"
+        elif flt.require_green_candle and price <= day_open:
             reject = "Not a green candle (close ≤ open)"
         elif price <= prev_close:
             reject = "Close below prior day close"
@@ -462,10 +537,22 @@ def analyze_btst(raw: str, flt: BtstFilters, *, market: str = "NSE") -> Optional
             above_ma50=above_ma50,
             rsi=rsi,
         )
-        grade = _assign_grade(score, cpr, vol_ratio, flt)
+        if is_kapil:
+            try:
+                from btst_channel_analysis import kapil_grade
+            except ImportError:
+                from .btst_channel_analysis import kapil_grade
+            grade = kapil_grade(kapil_score)
+            score = round(kapil_score * 12.5, 1)
+        else:
+            grade = _assign_grade(score, cpr, vol_ratio, flt)
 
         if not reject:
-            if grade == "A":
+            if is_kapil:
+                notes.append(f"Kapil score {kapil_score}/8 — " + ", ".join(kapil_signals[:4]))
+                if near_52w:
+                    notes.append("Near 52-week high")
+            elif grade == "A":
                 notes.append("Grade A — full size (within risk cap)")
             elif grade == "B":
                 notes.append("Grade B — half size recommended")
@@ -498,6 +585,12 @@ def analyze_btst(raw: str, flt: BtstFilters, *, market: str = "NSE") -> Optional
             stop_price=stop,
             entry_window=_entry_window_for_ticker(raw),
             morning_rule=_morning_rule(pct_change, cpr, market=mkt),
+            kapil_score=kapil_score,
+            kapil_signals=kapil_signals,
+            intraday_gain_pct=intraday_gain,
+            body_pct=body_pct,
+            gain_5d_pct=gain_5d,
+            near_52w_high=near_52w,
             pass_notes=notes,
             reject_reason=reject,
             links=get_stock_links(raw),
@@ -516,7 +609,14 @@ def scan_btst(
     flt = flt or BtstFilters()
     mkt = (market or "NSE").upper()
     t0 = time.time()
-    tickers = resolve_universe(universe, market=mkt)[: flt.max_tickers]
+    if universe == "Kapil-style shortlist (~40)":
+        try:
+            from btst_channel_analysis import KAPIL_STYLE_TICKERS
+        except ImportError:
+            from .btst_channel_analysis import KAPIL_STYLE_TICKERS
+        tickers = list(KAPIL_STYLE_TICKERS)[: flt.max_tickers]
+    else:
+        tickers = resolve_universe(universe, market=mkt)[: flt.max_tickers]
     stats = BtstScanStats(universe=universe, data_source=flt.data_source)
     stats.market = mkt
     results: list[BtstResult] = []
@@ -546,9 +646,12 @@ def scan_btst(
             time.sleep(flt.bar_delay_sec)
 
     grade_rank = {"A": 0, "B": 1, "C": 2}
-    results.sort(
-        key=lambda x: (grade_rank.get(x.grade, 9), -x.btst_score, -x.cpr_pct, -x.vol_ratio),
-    )
+    if (flt.scan_profile or "classic").lower() == "kapil":
+        results.sort(key=lambda x: (-x.kapil_score, -x.vol_ratio, -x.pct_vs_prev_close))
+    else:
+        results.sort(
+            key=lambda x: (grade_rank.get(x.grade, 9), -x.btst_score, -x.cpr_pct, -x.vol_ratio),
+        )
     stats.scan_elapsed_sec = round(time.time() - t0, 1)
     return results, stats
 
@@ -565,6 +668,7 @@ def universe_options(market: str = "NSE") -> list[str]:
         )
     else:
         preferred = (
+            "Kapil-style shortlist (~40)",
             "Nifty 100 (medium)",
             "Nifty 500 (broad, slow)",
             "Nifty 50 (fast)",
@@ -574,6 +678,8 @@ def universe_options(market: str = "NSE") -> list[str]:
         if all_key:
             preferred = preferred + (all_key,)
     opts = list(dct.keys())
+    if mkt == "NSE":
+        opts = ["Kapil-style shortlist (~40)"] + [u for u in opts if u != "Kapil-style shortlist (~40)"]
     ordered = [u for u in preferred if u in opts]
     ordered += [u for u in opts if u not in ordered]
     return ordered
