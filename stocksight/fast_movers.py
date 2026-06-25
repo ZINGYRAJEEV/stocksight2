@@ -56,7 +56,7 @@ class FastMoverFilters:
     min_speed_score: float = 30.0
     min_vol_ratio: float = 1.0
     direction: str = "any"  # any | up | down
-    max_tickers: int = 80
+    max_tickers: int = 555
     bar_delay_sec: float = 0.08
 
 

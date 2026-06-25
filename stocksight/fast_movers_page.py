@@ -180,7 +180,7 @@ def render_fast_movers_page() -> None:
             min_score = st.slider("Min speed score", 10, 80, 30, key=f"{key}_minsc")
             min_vol = st.slider("Min volume ratio", 0.5, 3.0, 1.0, 0.1, key=f"{key}_minvol")
         with c3:
-            max_n = st.slider("Max tickers", 20, 120, 60, key=f"{key}_maxn")
+            max_n = st.slider("Max tickers", 20, 555, 555, 25, key=f"{key}_maxn")
             auto_refresh = st.checkbox("Auto-refresh (90s)", value=False, key=f"{key}_auto")
             refresh_sec = 90
 
