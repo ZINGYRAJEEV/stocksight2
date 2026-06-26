@@ -74,6 +74,7 @@ def _import_navigation_pages():
         "page_multibagger_patterns",
         "page_fast_movers",
         "page_btst_screener",
+        "page_rsi_supertrend_audit",
         "page_scan_history",
         "page_stocksight",
         "page_value_technical",
@@ -159,6 +160,7 @@ try:
     page_multibagger_patterns = _nav["page_multibagger_patterns"]
     page_fast_movers = _nav["page_fast_movers"]
     page_btst_screener = _nav["page_btst_screener"]
+    page_rsi_supertrend_audit = _nav["page_rsi_supertrend_audit"]
     page_scan_history = _nav["page_scan_history"]
     page_stocksight = _nav["page_stocksight"]
     page_value_technical = _nav["page_value_technical"]
@@ -255,6 +257,7 @@ NAV_PAGES = {
         st.Page(page_intrabot, title="IntraBot Automation", icon="⚡"),
         st.Page(page_intraday_autopilot, title="Intraday Autopilot", icon="🛰️"),
         st.Page(page_paper_trading, title="Paper Trading", icon="📝"),
+        st.Page(page_rsi_supertrend_audit, title="RSI + Supertrend", icon="🔬"),
     ],
     "⚡ Intraday": [
         st.Page(page_nse_intraday_intel, title="NSE Intraday Intel", icon="🧠"),

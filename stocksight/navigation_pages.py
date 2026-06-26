@@ -285,6 +285,12 @@ def page_btst_screener() -> None:
     exec_stocksight_page("BTST Screener.py")
 
 
+def page_rsi_supertrend_audit() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("RSI Supertrend Audit.py")
+
+
 def page_financially_free_swing() -> None:
     from financially_free_page import render_financially_free_page
 
@@ -375,6 +381,7 @@ __all__ = [
     "page_peter_lynch",
     "page_fast_movers",
     "page_btst_screener",
+    "page_rsi_supertrend_audit",
     "page_financially_free_swing",
     "page_volume_led_growth",
     "page_crisis_value",

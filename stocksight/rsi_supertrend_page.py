@@ -1,0 +1,491 @@
+"""RSI + Supertrend — live scan (BTST / intraday) and backtest audit."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+import streamlit as st
+
+from btst_screener import btst_timing_schedule
+from intraday import MARKET_LABEL, MARKETS, market_session_window, session_window_now
+from rsi_supertrend_backtest import (
+    DEFAULT_TICKERS,
+    META,
+    STEP_MODES,
+    _build_config,
+    prepare_ohlcv,
+    results_comparison_df,
+    rsi_below_70_pct,
+    run_backtest,
+)
+from rsi_supertrend_screener import (
+    RsiStScanFilters,
+    _intraday_timing_rows,
+    btst_scan_recommended,
+    intraday_scan_hint,
+    scan_rsi_supertrend,
+    universe_options,
+)
+from scan_history_store import append_scan_record
+from ui_components import (
+    inject_css,
+    page_audience_note,
+    render_clickable_scan_table,
+    render_watchlist_panel,
+    safe_set_page_config,
+    stock_sight_overlay_column_config,
+)
+
+IST = ZoneInfo("Asia/Kolkata")
+CEST = ZoneInfo("Europe/Berlin")
+
+_GRADE_STYLE = {
+    "A": "background-color:#dcfce7;color:#166534;font-weight:700;",
+    "B": "background-color:#fef9c3;color:#854d0e;font-weight:600;",
+    "C": "background-color:#fee2e2;color:#991b1b;font-weight:600;",
+}
+
+_LINK_COLUMNS = ("Yahoo Finance", "Google Finance", "Moneycontrol", "TradingView", "MarketWatch")
+
+
+def _link_column_config() -> dict:
+    return {
+        "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
+        "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
+        "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="MC ↗"),
+        "TradingView": st.column_config.LinkColumn("TradingView", display_text="TV ↗"),
+        "MarketWatch": st.column_config.LinkColumn("MarketWatch", display_text="MW ↗"),
+    }
+
+
+def _results_df(results: list) -> pd.DataFrame:
+    rows = []
+    for i, r in enumerate(results, start=1):
+        rows.append(
+            {
+                "Rank": i,
+                "Grade": r.grade,
+                "Signal": r.signal_label,
+                "Ticker": r.ticker,
+                "Price": r.price,
+                "Day %": r.pct_vs_prev,
+                "RSI": r.rsi,
+                "ST": r.st_direction,
+                "Supertrend": r.supertrend,
+                "Vol×": r.vol_ratio,
+                "Bars": r.bar_type,
+                "Action": r.action[:100] + ("…" if len(r.action) > 100 else ""),
+                "Notes": r.notes,
+                "Sector": r.sector,
+                "Raw": r.raw_ticker,
+                **{k: v for k, v in r.links.items()},
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    core = [
+        "Rank", "Grade", "Signal", "Ticker", "Price", "Day %", "RSI", "ST",
+        "Supertrend", "Vol×", "Bars", "Action", "Notes", "Sector",
+    ]
+    link_cols = [c for c in _LINK_COLUMNS if c in df.columns]
+    return df[[c for c in core if c in df.columns] + link_cols + ["Raw"]]
+
+
+def _render_when_to_run(scan_mode: str, market: str) -> None:
+    """Prominent timing playbook — when users should run each mode."""
+    cest_lbl = datetime.now(tz=CEST).strftime("%Z")
+    flag = "🇺🇸 NYSE & NASDAQ" if market == "US" else "🇮🇳 NSE"
+
+    with st.container(border=True):
+        if scan_mode == "btst":
+            timing = btst_timing_schedule(market)
+            phase, hint, recommended = btst_scan_recommended(market)
+            st.markdown(f"#### 🌙 When to run **BTST** scan · {flag}")
+            st.caption(
+                f"Times in **Europe/Berlin** ({cest_lbl} in summer · CET in winter). "
+                "BTST uses **today's daily bar** — run near the close, not at 10 AM."
+            )
+            lines = [
+                "| Your time (CEST/CET) | Market time | What to do |",
+                "|----------------------|-------------|------------|",
+            ]
+            for cest, mkt, action in timing.schedule_rows:
+                action_st = action.replace("BTST scan", "RSI+ST BTST scan")
+                lines.append(f"| **{cest}** | {mkt} | {action_st} |")
+            lines.append(
+                f"| **{timing.exit_deadline_cest}** | {timing.exit_deadline_market} | "
+                "☀️ **Tomorrow:** exit on ST bearish / RSI &gt; 70 |"
+            )
+            st.markdown("\n".join(lines))
+        else:
+            phase, hint, recommended = intraday_scan_hint(market)
+            st.markdown(f"#### ⚡ When to run **Intraday** scan · {flag}")
+            st.caption(
+                f"Times in **Europe/Berlin** ({cest_lbl}). "
+                "Intraday uses **live session bars** — run while the market is open, not after close."
+            )
+            lines = [
+                "| Your time (CEST/CET) | Market time | Guidance |",
+                "|----------------------|-------------|----------|",
+            ]
+            for cest, mkt, action in _intraday_timing_rows(market):
+                lines.append(f"| **{cest}** | {mkt} | {action} |")
+            st.markdown("\n".join(lines))
+
+        now_line = session_window_now(market)
+        st.caption(now_line)
+
+        if phase in ("IDEAL", "BTST_WINDOW", "ENTRY_WINDOW"):
+            st.success(f"**Now:** {hint}")
+        elif phase in ("OK",):
+            st.info(f"**Now:** {hint}")
+        elif phase == "SWITCH_BTST":
+            st.warning(f"**Now:** {hint}")
+        elif phase in ("WAIT", "LATE", "PRE_SCAN"):
+            st.warning(f"**Now:** {hint}")
+        else:
+            st.caption(f"**Now:** {hint}")
+
+        if recommended:
+            st.markdown("🟢 **Recommended to run scan now**")
+        elif scan_mode == "intraday" and phase == "SWITCH_BTST":
+            st.markdown("🟠 **Use BTST mode instead** (select above)")
+        else:
+            st.markdown("🟠 **Not the ideal window** — you can still run, but signals may be stale or incomplete.")
+
+
+def _render_playbook(scan_mode: str) -> None:
+    with st.expander("📖 Grade legend & execution notes", expanded=False):
+        if scan_mode == "btst":
+            st.markdown(
+                """
+| Grade | Meaning |
+|-------|---------|
+| **A** | Fresh **buy** signal on today's daily bar |
+| **B** | **In trend** — hold overnight only if already in |
+| **C** | **Exit** signal — no new BTST longs |
+
+Plan entry near **close** (or next open). Exit **next morning** on ST bearish or RSI &gt; 70.
+"""
+            )
+        else:
+            st.markdown(
+                """
+| Grade | Meaning |
+|-------|---------|
+| **A** | Fresh **buy** on latest intraday bar |
+| **B** | **In trend** — trail Supertrend line |
+| **C** | **Exit** — flatten same day |
+
+**Do not hold overnight** from intraday mode — square off before session end.
+"""
+            )
+
+
+def _render_live_scan_tab(key: str) -> None:
+    session_results = f"{key}_live_results"
+    session_stats = f"{key}_live_stats"
+
+    m1, m2 = st.columns([1.0, 1.2])
+    with m1:
+        market = st.radio(
+            "Market",
+            MARKETS,
+            format_func=lambda m: MARKET_LABEL.get(m, m),
+            horizontal=True,
+            key=f"{key}_mkt",
+        )
+    with m2:
+        sess = market_session_window(market)
+        cest = datetime.now(tz=CEST).strftime("%H:%M %Z")
+        ist = datetime.now(tz=IST).strftime("%H:%M IST")
+        st.caption(f"Your time **{cest}** · India **{ist}** · Session: **{sess.get('window', '—')}**")
+
+    if market == "US":
+        st.caption("US mode uses **Yahoo Finance** daily / intraday data.")
+    else:
+        try:
+            from breeze_data import breeze_configured, breeze_status_message
+
+            if breeze_configured():
+                st.caption(f"OHLCV: **ICICI Breeze** · {breeze_status_message()}")
+            else:
+                st.caption("OHLCV: **Yahoo Finance** — connect Breeze in sidebar for NSE-aligned bars.")
+        except ImportError:
+            st.caption("OHLCV: **Yahoo Finance**")
+
+    scan_mode = st.radio(
+        "Scan mode",
+        ("btst", "intraday"),
+        format_func=lambda x: {
+            "btst": "🌙 BTST — daily EOD (buy today, manage exit tomorrow)",
+            "intraday": "⚡ Intraday — live session bars",
+        }[x],
+        horizontal=True,
+        key=f"{key}_mode",
+    )
+
+    _render_when_to_run(scan_mode, market)
+    _render_playbook(scan_mode)
+
+    uni_opts = universe_options(market)
+    default_uni = next(
+        (u for u in ("Nifty 50 (fast)", "Nifty 100 (medium)", "Nifty 500 (broad, slow)") if u in uni_opts),
+        uni_opts[0],
+    )
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([1.1, 1.0, 1.0])
+        with c1:
+            universe = st.selectbox(
+                "Universe",
+                uni_opts,
+                index=uni_opts.index(default_uni) if default_uni in uni_opts else 0,
+                key=f"{key}_uni",
+            )
+            profile = st.selectbox(
+                "Strategy profile",
+                ("honest_st", "rsi_combo"),
+                format_func=lambda p: {
+                    "honest_st": "Honest — pure Supertrend flips",
+                    "rsi_combo": "RSI + Supertrend (tutorial rules)",
+                }[p],
+                key=f"{key}_prof",
+            )
+            show = st.selectbox(
+                "Show",
+                ("actionable", "buy_only", "all"),
+                format_func=lambda s: {
+                    "actionable": "Buy + Hold + Exit (A/B/C)",
+                    "buy_only": "Fresh buy signals only (A)",
+                    "all": "All passes (incl. no setup)",
+                }[s],
+                key=f"{key}_show",
+            )
+        with c2:
+            max_tickers = st.slider("Max tickers", 25, 600, 200 if scan_mode == "btst" else 120, 25, key=f"{key}_max")
+            min_price = st.slider("Min price", 10.0, 500.0, 50.0, 10.0, key=f"{key}_minp")
+            max_price = st.slider("Max price", 500.0, 10000.0, 5000.0, 100.0, key=f"{key}_maxp")
+        with c3:
+            st_period = st.slider("ST ATR period", 7, 14, 10, key=f"{key}_stp")
+            st_mult = st.slider("ST multiplier", 2.0, 4.0, 3.0, 0.5, key=f"{key}_stm")
+            min_vol = st.slider("Min Vol× (20d)", 0.0, 3.0, 0.0, 0.1, key=f"{key}_vol")
+            data_src = "yahoo" if market == "US" else st.selectbox(
+                "OHLCV source",
+                ("auto", "breeze", "yahoo"),
+                format_func=lambda x: {"auto": "Auto", "breeze": "Breeze", "yahoo": "Yahoo"}[x],
+                key=f"{key}_ds",
+            )
+
+        if scan_mode == "btst":
+            c4, c5 = st.columns(2)
+            with c4:
+                green_only = st.checkbox("Green candle only", value=True, key=f"{key}_green")
+            with c5:
+                above_prev = st.checkbox("Close above prev close", value=True, key=f"{key}_prev")
+        else:
+            green_only = False
+            above_prev = False
+
+        run = st.button("▶ Run live scan", type="primary", key=f"{key}_scan")
+
+    if run:
+        flt = RsiStScanFilters(
+            mode=scan_mode,
+            market=market,
+            universe=universe,
+            data_source=data_src,
+            profile=profile,
+            max_tickers=int(max_tickers),
+            min_price=float(min_price),
+            max_price=float(max_price),
+            show=show,
+            st_period=int(st_period),
+            st_multiplier=float(st_mult),
+            btst_green_only=green_only,
+            btst_above_prev=above_prev,
+            min_vol_ratio=float(min_vol),
+        )
+        prog = st.progress(0.0, text="Starting scan…")
+
+        def _cb(i: int, total: int, sym: str) -> None:
+            prog.progress(i / max(total, 1), text=f"{sym} ({i}/{total})")
+
+        with st.spinner("Scanning latest bars…"):
+            results, stats = scan_rsi_supertrend(flt, progress_cb=_cb)
+        prog.empty()
+
+        st.session_state[session_results] = results
+        st.session_state[session_stats] = stats
+        st.session_state[f"{key}_scan_mode"] = scan_mode
+        append_scan_record(
+            "rsi_supertrend",
+            universe,
+            [r.raw_ticker for r in results if r.grade == "A"],
+            meta={"mode": scan_mode, "grade_a": stats.grade_a, "market": market},
+        )
+
+    results = st.session_state.get(session_results) or []
+    stats = st.session_state.get(session_stats)
+
+    if not results and not run:
+        if scan_mode == "btst":
+            timing = btst_timing_schedule(market)
+            hint = (
+                f"**BTST:** run between **{timing.scan_market}** "
+                f"(**{timing.scan_cest}** your time) after today's candle is nearly set."
+            )
+        else:
+            _, ihint, _ = intraday_scan_hint(market)
+            hint = f"**Intraday:** {ihint}"
+        st.info(f"Choose universe and click **Run live scan**. {hint}")
+        return
+
+    if stats:
+        st.success(
+            f"**{len(results)}** matches · scanned **{stats.tickers_scanned}** · "
+            f"Buy **{stats.grade_a}** · Hold **{stats.grade_b}** · Exit **{stats.grade_c}** · "
+            f"{stats.scan_elapsed_sec:.0f}s"
+        )
+
+    buys = [r for r in results if r.grade == "A"]
+    if scan_mode == "btst" and buys:
+        st.markdown("#### 🌙 Tonight's BTST candidates")
+        for r in buys[:8]:
+            st.markdown(f"- **{r.ticker}** · RSI {r.rsi} · ST {r.st_direction} · Day {r.pct_vs_prev:+.2f}%")
+
+    df = _results_df(results)
+    if df.empty:
+        st.warning("No names matched filters. Try **Buy + Hold + Exit**, relax Vol×, or widen universe.")
+        return
+
+    show_cols = [c for c in df.columns if c != "Raw"]
+    styler = df[show_cols].style.apply(
+        lambda col: [_GRADE_STYLE.get(str(v), "") for v in col],
+        subset=["Grade"],
+    )
+    sym = "$" if market == "US" else "₹"
+    render_clickable_scan_table(
+        df[show_cols],
+        styler=styler,
+        key_prefix=f"{key}_live",
+        market=market,
+        apply_stock_sight=False,
+        column_config={
+            **_link_column_config(),
+            **stock_sight_overlay_column_config(),
+            "Grade": st.column_config.TextColumn(width="small"),
+            "Signal": st.column_config.TextColumn(width="medium"),
+            "Price": st.column_config.NumberColumn(format=f"{sym}%.2f"),
+            "Day %": st.column_config.NumberColumn(format="%+.2f"),
+            "RSI": st.column_config.NumberColumn(format="%.1f"),
+            "Supertrend": st.column_config.NumberColumn(format=f"{sym}%.2f"),
+            "Vol×": st.column_config.NumberColumn(format="%.1f"),
+            "Action": st.column_config.TextColumn(width="large"),
+        },
+        caption=(
+            "**Grade A** = fresh buy · **B** = in trend · **C** = exit. "
+            "Click row for chart · links open research."
+        ),
+        show_gate_legend=False,
+    )
+
+
+def _render_audit_tab(key: str) -> None:
+    with st.expander("📖 Backtest methodology", expanded=False):
+        st.markdown(
+            """
+Compares **broken** tutorial backtests vs **structurally honest** fixes (next-open, costs, sizing, cooldown).
+Educational — not a trade recommendation.
+"""
+        )
+
+    c1, c2, c3 = st.columns([1.2, 1.0, 1.0])
+    with c1:
+        ticker = st.selectbox(
+            "Ticker",
+            DEFAULT_TICKERS,
+            format_func=lambda t: t.replace(".NS", ""),
+            key=f"{key}_bt_ticker",
+        )
+        custom = st.text_input("Custom symbol", placeholder="M&M.NS", key=f"{key}_bt_custom")
+        raw = (custom.strip() or ticker).upper()
+        if raw and not raw.endswith((".NS", ".BO")):
+            raw = f"{raw}.NS"
+    with c2:
+        years = st.slider("History (years)", 1.0, 5.0, 2.0, 0.5, key=f"{key}_yrs")
+    with c3:
+        capital = st.number_input("Capital (₹)", 10_000, 5_000_000, 100_000, 10_000, key=f"{key}_cap")
+
+    run = st.button("▶ Run stepwise audit", key=f"{key}_audit")
+
+    if not run:
+        st.caption("Single-stock walk-forward audit with 6 cumulative fix layers.")
+        return
+
+    with st.spinner(f"Backtesting {raw}…"):
+        df = prepare_ohlcv(raw, years=float(years))
+        if df is None or df.empty:
+            st.error(f"No data for **{raw}**.")
+            return
+        results = []
+        for mode_id, mode_label, _ in STEP_MODES:
+            lbl, cfg = _build_config(mode_id)
+            cfg.initial_capital = float(capital)
+            results.append(run_backtest(df, cfg, mode_id=mode_id, mode_label=lbl))
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Bars", len(df))
+    m2.metric("RSI < 70 %", f"{rsi_below_70_pct(df)}%")
+    m3.metric("Range", f"{df.index[0].date()} → {df.index[-1].date()}")
+
+    st.dataframe(
+        results_comparison_df(results),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    try:
+        import plotly.graph_objects as go
+
+        fig = go.Figure()
+        for r in results:
+            if r.equity_curve.empty:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=r.equity_curve["date"],
+                    y=r.equity_curve["equity"],
+                    name=r.mode_id,
+                )
+            )
+        fig.update_layout(title="Equity curves", height=360, paper_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, use_container_width=True)
+    except ImportError:
+        pass
+
+
+def render_rsi_supertrend_page() -> None:
+    safe_set_page_config(
+        page_title=f"{META['nav_title']} | StockSight",
+        page_icon=META["emoji"],
+        layout="wide",
+    )
+    inject_css()
+
+    key = "rsi_st"
+    st.markdown(f"### {META['emoji']} {META['title']}")
+    page_audience_note(META["audience"], META["purpose"])
+
+    render_watchlist_panel("rsi_st_wl")
+
+    tab_live, tab_audit = st.tabs(["📡 Live scan (BTST / Intraday)", "📊 Backtest audit"])
+
+    with tab_live:
+        _render_live_scan_tab(key)
+
+    with tab_audit:
+        _render_audit_tab(key)
