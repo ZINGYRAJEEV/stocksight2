@@ -235,6 +235,7 @@ def _render_live_scan_tab(key: str) -> None:
         key=f"{key}_mode",
     )
 
+    _render_enter_exit_explainer(compact=True)
     _render_when_to_run(scan_mode, market)
     _render_playbook(scan_mode)
 
@@ -398,8 +399,8 @@ def _render_live_scan_tab(key: str) -> None:
             "Action": st.column_config.TextColumn(width="large"),
         },
         caption=(
-            "**Grade A** = fresh buy · **B** = in trend · **C** = exit. "
-            "Click row for chart · links open research."
+            "**Grade A** = enter · **B** = hold · **C** = exit. "
+            "Backtest audit ranks *which stocks* fit historically — timing is always from this Live scan."
         ),
         show_gate_legend=False,
     )
@@ -447,15 +448,43 @@ def _interpret_score(score: float) -> tuple[str, str]:
     )
 
 
+def _render_enter_exit_explainer(*, compact: bool = False) -> None:
+    """Clarify backtest best pick vs live enter/exit timing."""
+    if compact:
+        st.info(
+            "**Enter / exit timing lives here (Live scan).** "
+            "**Grade A** = enter · **B** = hold · **C** = exit. "
+            "Backtest audit only picks *which stocks* fit historically — switch to **Backtest audit** for that."
+        )
+        return
+
+    with st.container(border=True):
+        st.markdown("#### ⏱️ Best pick vs when to enter / exit")
+        st.markdown(
+            """
+| Question | Where to look | Answer |
+|----------|---------------|--------|
+| **Which stock** suited this strategy in the past? | **Backtest audit** → Best pick / ranked table | Historical fit (e.g. SYRMA scored best in your universe over ~2y) |
+| **When to enter today?** | **Live scan** → **Grade A** | Fresh buy on latest bar (BTST near close, intraday while session open) |
+| **When to hold?** | **Live scan** → **Grade B** | Already in trend — trail Supertrend |
+| **When to exit?** | **Live scan** → **Grade C** | Flatten: BTST next morning if ST bearish or RSI &gt; 70; intraday before session end |
+
+**Best pick is NOT a buy/sell order for today.** It does not show entry price, exit price, or time of day.
+
+**Minimum checklist before trading:** (1) name ranks well in backtest → (2) **fixed** stepwise still positive → (3) **Grade A** on Live scan **right now**.
+"""
+        )
+
+
 def _render_audit_workflow() -> None:
     with st.expander("🧭 Recommended workflow (backtest → live)", expanded=False):
         st.markdown(
             """
 | Step | Tab | What you learn |
 |------|-----|----------------|
-| **1** | **Backtest audit** → Universe rank | Which names *historically* suited RSI+ST / Supertrend in your window |
-| **2** | **Backtest audit** → Deep-dive stepwise | Whether edge survives **honest** fixes (next-open, costs, sizing) — not just tutorial math |
-| **3** | **Live scan** | Whether the winner has a **Grade A** setup **today** (BTST or intraday) |
+| **1** | **Backtest audit** → Universe rank | **Which names** historically suited RSI+ST / Supertrend (not entry timing) |
+| **2** | **Backtest audit** → Deep-dive stepwise | Whether edge survives **honest** fixes (next-open, costs, sizing) |
+| **3** | **Live scan** | **When to enter (A), hold (B), exit (C)** on the winner **today** |
 
 **Rule of thumb:** Only consider a trade when **step 1 + step 3** agree. Step 2 tells you if the backtest is trustworthy.
 
@@ -483,10 +512,15 @@ The table sorts by **Score** — a blend of Sharpe, return, drawdown, and win ra
 | **Max DD %** | Worst peak-to-trough equity drop — closer to **0** is smoother |
 | **Trades** | Must be **≥ min trades** to qualify; too few = noisy / disqualified |
 
-### Best pick card
-- **Best pick** = top score in *this* scan — **not** automatic buy advice.
-- If **Return** or **Score** is negative, you are picking the **least weak** name, not a confirmed winner.
-- Always cross-check on **Live scan**: look for **Grade A** (fresh buy) on the same profile you trust from stepwise audit.
+### Best pick card — what it is **not**
+- **Not** “enter SYRMA now” or “exit at ₹X”.
+- **Not** tonight's timing — it replays **past** daily bars with backtest rules.
+- **Not** reliable with **few trades** (e.g. 2 trades → 100% win rate is anecdotal).
+
+### Best pick card — what it **is**
+- **Which name** to research first in this universe.
+- How return / Sharpe / drawdown looked **if** you had followed the strategy historically.
+- A filter before you open **Live scan** for **Grade A** (actual entry signal).
 
 ### Backtest profile (dropdown)
 | Profile | Use when |
@@ -545,6 +579,19 @@ def _render_best_pick_reading(best, stats, years: float, capital: float, sym: st
     label, detail = _interpret_score(best.score)
     sharpe_note = _interpret_sharpe(best.sharpe)
     ret_note = _interpret_return(best.total_return_pct)
+    ticker = best.display_ticker
+
+    st.markdown(
+        f"**This card = historical stock selection only.** "
+        f"For **when to enter/exit {ticker} today**, use **Live scan** (Grade A / B / C) — not this backtest."
+    )
+
+    if best.num_trades < 5:
+        st.warning(
+            f"Only **{best.num_trades} trades** in ~{years:.0f}y — stats like "
+            f"**{best.win_rate_pct:.0f}% win rate** are **not statistically meaningful**. "
+            "Prefer names with **5+ trades** or run **Deep-dive stepwise** before trusting this pick."
+        )
 
     if best.score >= 0:
         st.success(f"**{label}** — {detail}")
@@ -567,10 +614,21 @@ def _render_best_pick_reading(best, stats, years: float, capital: float, sym: st
             f"{'Mild drawdown' if best.max_drawdown_pct > -10 else 'Deep drawdown — size carefully'}"
         )
 
-    st.markdown(
-        f"**Next:** Open **Live scan** → same market → filter **{best.display_ticker}** "
-        f"or run **Deep-dive stepwise** below to see if **broken → fixed** still holds for this name."
-    )
+    with st.expander(f"⏱️ When to enter / exit **{ticker}** (use Live scan)", expanded=True):
+        st.markdown(
+            f"""
+| Action | Where | Rule |
+|--------|-------|------|
+| **Enter** | **Live scan** tab | **Grade A** on **{ticker}** — fresh Supertrend buy (+ RSI rules if using rsi_combo) |
+| **Hold** | **Live scan** tab | **Grade B** — in trend; trail the Supertrend line |
+| **Exit BTST** | **Live scan** tab | **Grade C**, or next session: ST bearish flip or RSI &gt; 70 |
+| **Exit intraday** | **Live scan** tab | **Grade C** or square off before session end — no overnight |
+
+1. **Deep-dive stepwise** below → confirm **fixed** mode was positive for **{ticker}**  
+2. **Live scan** → same market → run scan → find **{ticker}** with **Grade A**  
+3. Only then consider entry — backtest best pick alone is **not** sufficient.
+"""
+        )
 
 
 def _render_stepwise_results(key: str, raw: str, years: float, capital: float) -> None:
@@ -648,12 +706,13 @@ def _render_universe_audit(key: str) -> None:
 
     st.markdown(
         "Rank every name in a universe on the **honest backtest** profile, then surface the "
-        "**best pick** by composite score (Sharpe, return, drawdown, win rate)."
+        "**best historical fit** by composite score (Sharpe, return, drawdown, win rate)."
     )
     st.caption(
-        "Educational ranking only — past backtest ≠ future performance. "
-        "Requires ≥ min trades to qualify."
+        "**Best pick = which stock to research — not when to enter or exit today.** "
+        "Use the **Live scan** tab for Grade A/B/C timing."
     )
+    _render_enter_exit_explainer()
     _render_universe_reading_guide()
 
     market = st.radio(
@@ -744,7 +803,8 @@ def _render_universe_audit(key: str) -> None:
     best = rows[0]
     sym = "₹" if (stats and stats.market != "US") else "$"
     with st.container(border=True):
-        st.markdown(f"#### 🏆 Best pick — **{best.display_ticker}**")
+        st.markdown(f"#### 🏆 Best pick (historical) — **{best.display_ticker}**")
+        st.caption("Ranks past performance in this universe — **not** a live entry/exit signal.")
         b1, b2, b3, b4, b5, b6 = st.columns(6)
         b1.metric("Score", f"{best.score:.2f}")
         b2.metric("Return", f"{best.total_return_pct:+.1f}%")
@@ -830,7 +890,7 @@ def _render_audit_tab(key: str) -> None:
         "Audit view",
         ("universe", "single"),
         format_func=lambda x: {
-            "universe": "🌐 Universe rank & best pick",
+            "universe": "🌐 Universe rank (which stock) — not entry timing",
             "single": "🔬 Single-stock stepwise audit",
         }[x],
         horizontal=True,
