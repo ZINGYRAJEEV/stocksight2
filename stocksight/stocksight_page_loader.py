@@ -81,6 +81,8 @@ def exec_stocksight_page(filename: str) -> None:
         "rsi_supertrend_backtest",
         "rsi_supertrend_page",
         "rsi_supertrend_screener",
+        "insider_trading",
+        "insider_trading_page",
         "crisis_value",
         "crisis_value_page",
         "pe_history",

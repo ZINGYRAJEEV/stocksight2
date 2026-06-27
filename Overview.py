@@ -75,6 +75,7 @@ def _import_navigation_pages():
         "page_fast_movers",
         "page_btst_screener",
         "page_rsi_supertrend_audit",
+        "page_insider_trading",
         "page_scan_history",
         "page_stocksight",
         "page_value_technical",
@@ -161,6 +162,7 @@ try:
     page_fast_movers = _nav["page_fast_movers"]
     page_btst_screener = _nav["page_btst_screener"]
     page_rsi_supertrend_audit = _nav["page_rsi_supertrend_audit"]
+    page_insider_trading = _nav["page_insider_trading"]
     page_scan_history = _nav["page_scan_history"]
     page_stocksight = _nav["page_stocksight"]
     page_value_technical = _nav["page_value_technical"]
@@ -281,6 +283,7 @@ NAV_PAGES = {
     ],
     "📰 News & Sentiment": [
         st.Page(page_news_scanner, title="News Scanner + Rulebook", icon="📰"),
+        st.Page(page_insider_trading, title="Insider Trading (SEC Form 4)", icon="🕵️"),
     ],
 }
 

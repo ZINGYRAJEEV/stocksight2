@@ -291,6 +291,12 @@ def page_rsi_supertrend_audit() -> None:
     exec_stocksight_page("RSI Supertrend Audit.py")
 
 
+def page_insider_trading() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("Insider Trading.py")
+
+
 def page_financially_free_swing() -> None:
     from financially_free_page import render_financially_free_page
 
@@ -382,6 +388,7 @@ __all__ = [
     "page_fast_movers",
     "page_btst_screener",
     "page_rsi_supertrend_audit",
+    "page_insider_trading",
     "page_financially_free_swing",
     "page_volume_led_growth",
     "page_crisis_value",

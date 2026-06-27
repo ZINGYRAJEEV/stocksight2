@@ -23,6 +23,7 @@ stocksight/.intrabot_state.json
 logs/
 output/
 stocksight/.scan_history.jsonl
+stocksight/.sec_company_tickers.json
 
 # IDE / OS
 .vscode/

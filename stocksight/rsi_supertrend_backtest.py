@@ -7,8 +7,9 @@ Not investment advice.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 import pandas as pd
@@ -600,3 +601,144 @@ def config_for_profile(profile: str, **kwargs: Any) -> BacktestConfig:
         if hasattr(cfg, k):
             setattr(cfg, k, v)
     return cfg
+
+
+ProgressCb = Callable[[int, int, str], None]
+
+UNIVERSE_AUDIT_MODES: list[tuple[str, str]] = [
+    ("fixed", "Fixed — honest Supertrend (recommended)"),
+    ("step_cooldown", "RSI + ST — all honesty fixes (no pure-ST switch)"),
+    ("step_execution", "RSI + ST — next-open execution only"),
+    ("broken", "Broken tutorial (for contrast only)"),
+]
+
+
+@dataclass
+class UniverseBacktestRow:
+    raw_ticker: str
+    display_ticker: str
+    total_return_pct: float
+    win_rate_pct: float
+    max_drawdown_pct: float
+    sharpe: float
+    num_trades: int
+    score: float
+    data_bars: int = 0
+    rank: int = 0
+
+
+@dataclass
+class UniverseBacktestStats:
+    universe: str
+    market: str
+    mode_id: str
+    mode_label: str
+    tickers_scanned: int
+    tickers_ranked: int
+    no_data: int
+    scan_elapsed_sec: float = 0.0
+
+
+def _display_ticker(raw: str) -> str:
+    s = str(raw or "").strip().upper()
+    for suffix in (".NS", ".BO"):
+        if s.endswith(suffix):
+            return s[: -len(suffix)]
+    return s
+
+
+def compute_backtest_score(result: BacktestResult, *, min_trades: int = 3) -> float:
+    """Composite rank score — higher is better; -inf when too few trades."""
+    if result.num_trades < min_trades:
+        return float("-inf")
+    sharpe = float(result.sharpe or 0.0)
+    ret = float(result.total_return_pct or 0.0)
+    dd = abs(float(result.max_drawdown_pct or 0.0))
+    win = float(result.win_rate_pct or 0.0)
+    return sharpe * 2.0 + ret / 40.0 - dd / 30.0 + (win / 200.0)
+
+
+def scan_universe_backtest(
+    tickers: list[str],
+    *,
+    years: float = 2.0,
+    capital: float = 100_000.0,
+    mode_id: str = "fixed",
+    min_trades: int = 3,
+    progress_cb: Optional[ProgressCb] = None,
+) -> tuple[list[UniverseBacktestRow], UniverseBacktestStats]:
+    """Run one honest backtest mode across a ticker list; return ranked rows."""
+    t0 = time.perf_counter()
+    mode_label, _ = _build_config(mode_id)
+    rows: list[UniverseBacktestRow] = []
+    no_data = 0
+    total = len(tickers)
+
+    for i, raw in enumerate(tickers):
+        sym = str(raw or "").strip()
+        if not sym:
+            continue
+        if progress_cb:
+            progress_cb(i + 1, total, _display_ticker(sym))
+
+        df = prepare_ohlcv(sym, years=float(years))
+        if df is None or df.empty:
+            no_data += 1
+            continue
+
+        _, cfg = _build_config(mode_id)
+        cfg.initial_capital = float(capital)
+        result = run_backtest(df, cfg, mode_id=mode_id, mode_label=mode_label)
+        score = compute_backtest_score(result, min_trades=int(min_trades))
+        rows.append(
+            UniverseBacktestRow(
+                raw_ticker=sym,
+                display_ticker=_display_ticker(sym),
+                total_return_pct=result.total_return_pct,
+                win_rate_pct=result.win_rate_pct,
+                max_drawdown_pct=result.max_drawdown_pct,
+                sharpe=result.sharpe,
+                num_trades=result.num_trades,
+                score=score,
+                data_bars=len(df),
+            )
+        )
+
+    ranked = [r for r in rows if r.score > float("-inf")]
+    ranked.sort(key=lambda r: (r.score, r.sharpe, r.total_return_pct), reverse=True)
+    for rank, row in enumerate(ranked, start=1):
+        row.rank = rank
+
+    stats = UniverseBacktestStats(
+        universe="",
+        market="",
+        mode_id=mode_id,
+        mode_label=mode_label,
+        tickers_scanned=total,
+        tickers_ranked=len(ranked),
+        no_data=no_data,
+        scan_elapsed_sec=time.perf_counter() - t0,
+    )
+    return ranked, stats
+
+
+def universe_backtest_df(rows: list[UniverseBacktestRow]) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(
+        [
+            {
+                "Rank": r.rank,
+                "Ticker": r.display_ticker,
+                "Score": round(r.score, 3) if r.score > float("-inf") else None,
+                "Return %": r.total_return_pct,
+                "Sharpe": r.sharpe,
+                "Win %": r.win_rate_pct,
+                "Max DD %": r.max_drawdown_pct,
+                "Trades": r.num_trades,
+                "Bars": r.data_bars,
+                "Raw": r.raw_ticker,
+            }
+            for r in rows
+        ]
+    )
