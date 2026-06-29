@@ -15,9 +15,21 @@ import numpy as np
 import pandas as pd
 
 try:
-    from screener import fetch_price_history, hist_series
+    from screener import (
+        benchmark_ticker_for,
+        compute_volume_ratio,
+        fetch_price_history,
+        get_sector_industry,
+        hist_series,
+    )
 except ImportError:
-    from .screener import fetch_price_history, hist_series
+    from .screener import (
+        benchmark_ticker_for,
+        compute_volume_ratio,
+        fetch_price_history,
+        get_sector_industry,
+        hist_series,
+    )
 
 META = {
     "id": "rsi_supertrend_audit",
@@ -88,6 +100,9 @@ class BacktestResult:
     num_trades: int
     trades: list[TradeRecord] = field(default_factory=list)
     equity_curve: pd.DataFrame = field(default_factory=pd.DataFrame)
+    data_last_date: str = ""
+    open_at_end: bool = False
+    open_entry_date: str = ""
 
 
 # Cumulative step presets (each adds fixes on top of the prior step).
@@ -207,22 +222,90 @@ def _build_config(mode_id: str) -> tuple[str, BacktestConfig]:
     return label, cfg
 
 
-def prepare_ohlcv(raw_ticker: str, years: float = 2.0) -> Optional[pd.DataFrame]:
-    hist = fetch_price_history(raw_ticker, "1d")
-    if hist is None or hist.empty:
-        return None
-    df = hist.copy()
-    df.columns = [str(c).title() for c in df.columns]
-    for col in ("Open", "High", "Low", "Close", "Volume"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    df = df.dropna(subset=["Open", "High", "Low", "Close"])
-    if df.empty:
+def prepare_ohlcv(
+    raw_ticker: str,
+    years: float = 2.0,
+    *,
+    data_source: str = "auto",
+) -> Optional[pd.DataFrame]:
+    df = fetch_backtest_ohlcv(raw_ticker, years=years, data_source=data_source)
+    if df is None or df.empty:
         return None
     min_bars = int(years * 252)
     if len(df) > min_bars:
         df = df.iloc[-min_bars:]
     return df
+
+
+def fetch_backtest_ohlcv(
+    raw_ticker: str,
+    *,
+    years: float = 2.0,
+    data_source: str = "auto",
+) -> Optional[pd.DataFrame]:
+    """
+    Daily OHLCV for backtests — supports multi-year windows.
+
+    ``data_source``: ``auto`` | ``yahoo`` | ``breeze``
+    (Screener.in / TradingView do not expose bulk OHLCV APIs — use Yahoo or Breeze.)
+    """
+    raw = (raw_ticker or "").strip()
+    if not raw:
+        return None
+    years_f = max(1.0, min(float(years), 10.0))
+    lookback_days = int(years_f * 365) + 45
+    src = (data_source or "auto").strip().lower()
+
+    def _yahoo_hist() -> pd.DataFrame:
+        try:
+            import yfinance as yf
+            from datetime import datetime, timedelta
+
+            end = datetime.today()
+            start = end - timedelta(days=lookback_days)
+            stk = yf.Ticker(raw)
+            hist = stk.history(
+                start=start.strftime("%Y-%m-%d"),
+                end=end.strftime("%Y-%m-%d"),
+                interval="1d",
+                auto_adjust=True,
+            )
+            if hist is None or hist.empty:
+                period = f"{min(int(years_f) + 1, 10)}y"
+                hist = stk.history(period=period, interval="1d", auto_adjust=True)
+            return hist if hist is not None else pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
+
+    def _breeze_hist() -> pd.DataFrame:
+        if not raw.upper().endswith((".NS", ".BO")):
+            return pd.DataFrame()
+        try:
+            from breeze_data import breeze_configured, fetch_breeze_price_history
+
+            if not breeze_configured():
+                return pd.DataFrame()
+            bdf = fetch_breeze_price_history(raw, "1d", lookback_days=lookback_days)
+            return bdf if bdf is not None else pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
+
+    hist = pd.DataFrame()
+    if src == "yahoo":
+        hist = _yahoo_hist()
+    elif src == "breeze":
+        hist = _breeze_hist()
+        if hist.empty:
+            hist = _yahoo_hist()
+    else:
+        if raw.upper().endswith((".NS", ".BO")):
+            hist = _breeze_hist()
+        if hist.empty:
+            hist = _yahoo_hist()
+
+    if hist is None or hist.empty:
+        return None
+    return normalize_ohlcv(hist)
 
 
 def _entry_signal(
@@ -427,6 +510,9 @@ def run_backtest(df: pd.DataFrame, cfg: BacktestConfig, *, mode_id: str = "", mo
     wins = sum(1 for t in trades if t.pnl_pct > 0)
     win_rate = (wins / len(trades) * 100.0) if trades else 0.0
 
+    data_last_date = str(dates[min(last_i, len(dates) - 1)].date())
+    open_entry_date = str(dates[entry_idx].date()) if in_position and entry_idx >= 0 else ""
+
     return BacktestResult(
         mode_id=mode_id,
         mode_label=mode_label,
@@ -439,6 +525,9 @@ def run_backtest(df: pd.DataFrame, cfg: BacktestConfig, *, mode_id: str = "", mo
         num_trades=len(trades),
         trades=trades,
         equity_curve=eq_df,
+        data_last_date=data_last_date,
+        open_at_end=in_position,
+        open_entry_date=open_entry_date,
     )
 
 
@@ -603,10 +692,43 @@ def config_for_profile(profile: str, **kwargs: Any) -> BacktestConfig:
     return cfg
 
 
-ProgressCb = Callable[[int, int, str], None]
+BACKTEST_DATA_SOURCES: list[tuple[str, str]] = [
+    ("auto", "Auto — Breeze (NSE) if connected, else Yahoo"),
+    ("breeze", "ICICI Breeze — NSE/BSE daily OHLCV (best for India)"),
+    ("yahoo", "Yahoo Finance — global fallback"),
+]
+
+
+def backtest_data_source_note(data_source: str, market: str = "NSE") -> str:
+    src = (data_source or "auto").lower()
+    mkt = (market or "NSE").upper()
+    lines = []
+    if src in ("auto", "breeze") and mkt == "NSE":
+        try:
+            from breeze_data import breeze_configured, breeze_status_message
+
+            if breeze_configured():
+                lines.append(f"OHLCV: **ICICI Breeze** · {breeze_status_message()}")
+            else:
+                lines.append(
+                    "OHLCV: **Yahoo** (Breeze not configured — add `[breeze]` in `.streamlit/secrets.toml`)"
+                )
+        except ImportError:
+            lines.append("OHLCV: **Yahoo** (`breeze-connect` not installed)")
+    else:
+        lines.append("OHLCV: **Yahoo Finance**")
+    lines.append(
+        "**Screener.in** = fundamentals (P&L, ratios) — not price history. "
+        "**TradingView** = charts/sentiment links — no bulk OHLCV API in StockSight."
+    )
+    return " · ".join(lines)
 
 UNIVERSE_AUDIT_MODES: list[tuple[str, str]] = [
-    ("fixed", "Fixed — honest Supertrend (recommended)"),
+    (
+        "universe_rank",
+        "Universe rank — honest fills + faster ST (7/2.5) · recommended",
+    ),
+    ("fixed", "Fixed — honest Supertrend (few trades, strict)"),
     ("step_cooldown", "RSI + ST — all honesty fixes (no pure-ST switch)"),
     ("step_execution", "RSI + ST — next-open execution only"),
     ("broken", "Broken tutorial (for contrast only)"),
@@ -625,6 +747,23 @@ class UniverseBacktestRow:
     score: float
     data_bars: int = 0
     rank: int = 0
+    sector: str = ""
+    last_entry: str = ""
+    last_exit: str = ""
+    data_through: str = ""
+    position_status: str = ""
+    open_entry: str = ""
+    trade_summary: str = ""
+    vol_ratio: float = float("nan")
+    avg_overnight_gap_pct: float = float("nan")
+    alpha_pct: float = float("nan")
+    benchmark: str = ""
+    wf_train_return_pct: float = float("nan")
+    wf_test_return_pct: float = float("nan")
+    position_pct: float = 1.0
+    portfolio_max_dd_pct: float = float("nan")
+    confidence: float = 0.0
+    score_detail: str = ""
 
 
 @dataclass
@@ -636,6 +775,9 @@ class UniverseBacktestStats:
     tickers_scanned: int
     tickers_ranked: int
     no_data: int
+    duplicates_removed: int = 0
+    disqualified_low_trades: int = 0
+    data_source: str = "auto"
     scan_elapsed_sec: float = 0.0
 
 
@@ -647,15 +789,214 @@ def _display_ticker(raw: str) -> str:
     return s
 
 
-def compute_backtest_score(result: BacktestResult, *, min_trades: int = 3) -> float:
-    """Composite rank score — higher is better; -inf when too few trades."""
-    if result.num_trades < min_trades:
-        return float("-inf")
+def dedupe_raw_tickers(tickers: list[str]) -> tuple[list[str], int]:
+    """Keep first occurrence per display symbol (fixes Nifty500+SmallMid overlap)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    dupes = 0
+    for raw in tickers:
+        sym = str(raw or "").strip()
+        if not sym:
+            continue
+        key = _display_ticker(sym)
+        if key in seen:
+            dupes += 1
+            continue
+        seen.add(key)
+        out.append(sym)
+    return out, dupes
+
+
+def _trade_summary(trades: list[TradeRecord], *, max_show: int = 3) -> str:
+    if not trades:
+        return ""
+    parts = [f"{t.entry_date}→{t.exit_date}" for t in trades[-max_show:]]
+    suffix = f" (+{len(trades) - max_show} more)" if len(trades) > max_show else ""
+    return "; ".join(parts) + suffix
+
+
+def _avg_overnight_gap_pct(df: pd.DataFrame, trades: list[TradeRecord]) -> float:
+    """BTST-style overnight gap: next-day open vs entry-day close."""
+    if not trades or df is None or df.empty:
+        return float("nan")
+    closes = hist_series(df, "Close").astype(float)
+    opens = hist_series(df, "Open").astype(float)
+    dates = pd.to_datetime(df.index)
+    date_to_idx = {str(d.date()): i for i, d in enumerate(dates)}
+    gaps: list[float] = []
+    for t in trades:
+        ei = date_to_idx.get(t.entry_date)
+        if ei is None or ei + 1 >= len(closes):
+            continue
+        c = float(closes.iloc[ei])
+        o_next = float(opens.iloc[ei + 1])
+        if c > 0:
+            gaps.append((o_next / c - 1.0) * 100.0)
+    if not gaps:
+        return float("nan")
+    return round(float(np.mean(gaps)), 2)
+
+
+def _benchmark_alpha_pct(df: pd.DataFrame, raw_ticker: str) -> tuple[float, str]:
+    """Excess return vs Nifty/SPY over the same calendar window as ``df``."""
+    if df is None or len(df) < 2:
+        return float("nan"), ""
+    bench_sym = benchmark_ticker_for(raw_ticker)
+    try:
+        bench_hist = fetch_price_history(bench_sym, "1d")
+        if bench_hist is None or bench_hist.empty:
+            return float("nan"), bench_sym
+        bench = bench_hist.copy()
+        bench.columns = [str(c).title() for c in bench.columns]
+        left = hist_series(df, "Close").astype(float).to_frame("Close")
+        right = hist_series(bench, "Close").astype(float).to_frame("Bench")
+        joined = left.join(right, how="inner").dropna()
+        if len(joined) < 2:
+            return float("nan"), bench_sym
+        s0, s1 = float(joined["Close"].iloc[0]), float(joined["Close"].iloc[-1])
+        b0, b1 = float(joined["Bench"].iloc[0]), float(joined["Bench"].iloc[-1])
+        if s0 <= 0 or b0 <= 0:
+            return float("nan"), bench_sym
+        stock_ret = (s1 / s0 - 1.0) * 100.0
+        bench_ret = (b1 / b0 - 1.0) * 100.0
+        return round(stock_ret - bench_ret, 2), bench_sym
+    except Exception:
+        return float("nan"), bench_sym
+
+
+def _walk_forward_trade_returns(
+    df: pd.DataFrame,
+    trades: list[TradeRecord],
+    *,
+    initial_capital: float,
+    train_frac: float = 0.7,
+) -> tuple[float, float]:
+    """Train/test PnL contribution % from trades split by entry date (no lookahead in ranking)."""
+    if df is None or len(df) < 80 or not trades:
+        return float("nan"), float("nan")
+    split = int(len(df) * train_frac)
+    if split < 50 or (len(df) - split) < 20:
+        return float("nan"), float("nan")
+    split_date = str(pd.to_datetime(df.index[split]).date())
+    train_pnl = sum(t.pnl_inr for t in trades if t.entry_date < split_date)
+    test_pnl = sum(t.pnl_inr for t in trades if t.entry_date >= split_date)
+    cap = float(initial_capital) if initial_capital > 0 else 1.0
+    return round(train_pnl / cap * 100.0, 2), round(test_pnl / cap * 100.0, 2)
+
+
+def _fetch_sector(raw: str) -> str:
+    try:
+        import yfinance as yf
+
+        sector, _ = get_sector_industry(yf.Ticker(raw))
+        return sector or ""
+    except Exception:
+        return ""
+
+
+def _latest_vol_ratio(df: pd.DataFrame) -> float:
+    if df is None or "Volume" not in df.columns:
+        return float("nan")
+    vols = hist_series(df, "Volume")
+    if vols is None or len(vols) < 22:
+        return float("nan")
+    try:
+        return float(compute_volume_ratio(vols, window=20))
+    except Exception:
+        return float("nan")
+
+
+def compute_backtest_score(
+    result: BacktestResult,
+    *,
+    min_trades: int = 5,
+) -> tuple[float, float, str]:
+    """
+    Composite rank score — higher is better; -inf when too few trades.
+
+  Returns (score, confidence 0–1, human-readable breakdown).
+    """
+    n = int(result.num_trades or 0)
+    if n < min_trades:
+        return float("-inf"), 0.0, f"Disqualified: {n} trades < min {min_trades}"
+
     sharpe = float(result.sharpe or 0.0)
     ret = float(result.total_return_pct or 0.0)
     dd = abs(float(result.max_drawdown_pct or 0.0))
     win = float(result.win_rate_pct or 0.0)
-    return sharpe * 2.0 + ret / 40.0 - dd / 30.0 + (win / 200.0)
+
+    # Confidence ramps from 0 at min_trades to 1 at 10+ trades.
+    conf_denom = max(10 - min_trades, 1)
+    confidence = min(1.0, max(0.0, (n - min_trades) / conf_denom))
+    win_term = (win / 100.0) * 0.2 * confidence  # down-weight win% on small samples
+    sharpe_term = sharpe * 3.5
+    ret_term = ret / 60.0
+    dd_term = dd / 25.0
+    raw = sharpe_term + ret_term - dd_term + win_term
+    score = raw * (0.45 + 0.55 * confidence)
+
+    detail = (
+        f"3.5×Sharpe({sharpe_term:+.2f}) + ret/60({ret_term:+.2f}) "
+        f"− |DD|/25({dd_term:.2f}) + win×conf({win_term:+.2f}) "
+        f"× sample({0.45 + 0.55 * confidence:.2f})"
+    )
+    return score, confidence, detail
+
+
+SCORE_FORMULA_HELP = """
+**Score** (higher = better within this universe):
+`score = (3.5×Sharpe + return/60 − |max DD|/25 + win%×0.2×confidence) × sample_factor`
+
+- **Sharpe** dominates (risk-adjusted edge).
+- **Win %** is scaled by **confidence** — nearly ignored below ~5 trades.
+- **sample_factor** = `0.45 + 0.55×confidence`, where confidence ramps from 0 at min trades → 1 at 10+ trades.
+- Tickers below **min trades** are excluded from ranking (not shown in table).
+"""
+
+
+def _apply_relaxed_config(cfg: BacktestConfig) -> BacktestConfig:
+    """More frequent signals for larger sample sizes (educational)."""
+    cfg.cooldown_days = 0
+    cfg.rsi_entry_max = 78.0
+    cfg.rsi_oversold = 35.0
+    return cfg
+
+
+def build_universe_scan_config(*, relaxed: bool = False) -> tuple[str, BacktestConfig]:
+    """
+    Ranking preset: honest next-open + costs, RSI+ST, faster Supertrend (more round-trips).
+    Pure ST / 10% sizing / 3-day cooldown profiles often yield <3 trades per name on daily bars.
+    """
+    cfg = BacktestConfig(
+        next_bar_execution=True,
+        commission_pct=0.001,
+        slippage_pct=0.0005,
+        position_pct=0.25,
+        cooldown_days=0,
+        use_rsi=True,
+        st_period=7,
+        st_multiplier=2.5,
+    )
+    if relaxed:
+        _apply_relaxed_config(cfg)
+    label = "Universe rank — honest fills, ST 7/2.5, 25% size"
+    if relaxed:
+        label += " · relaxed RSI"
+    return label, cfg
+
+
+def _config_for_scan(
+    mode_id: str,
+    *,
+    relaxed_signals: bool,
+) -> tuple[str, BacktestConfig]:
+    if mode_id == "universe_rank":
+        return build_universe_scan_config(relaxed=relaxed_signals)
+    mode_label, cfg = _build_config(mode_id)
+    if relaxed_signals:
+        _apply_relaxed_config(cfg)
+        mode_label = f"{mode_label} · relaxed entries"
+    return mode_label, cfg
 
 
 def scan_universe_backtest(
@@ -664,15 +1005,19 @@ def scan_universe_backtest(
     years: float = 2.0,
     capital: float = 100_000.0,
     mode_id: str = "fixed",
-    min_trades: int = 3,
+    min_trades: int = 2,
+    relaxed_signals: bool = True,
+    data_source: str = "auto",
     progress_cb: Optional[ProgressCb] = None,
 ) -> tuple[list[UniverseBacktestRow], UniverseBacktestStats]:
     """Run one honest backtest mode across a ticker list; return ranked rows."""
     t0 = time.perf_counter()
-    mode_label, _ = _build_config(mode_id)
+    tickers, dupes_removed = dedupe_raw_tickers(tickers)
     rows: list[UniverseBacktestRow] = []
     no_data = 0
+    disqualified = 0
     total = len(tickers)
+    mode_label_base = ""
 
     for i, raw in enumerate(tickers):
         sym = str(raw or "").strip()
@@ -681,15 +1026,32 @@ def scan_universe_backtest(
         if progress_cb:
             progress_cb(i + 1, total, _display_ticker(sym))
 
-        df = prepare_ohlcv(sym, years=float(years))
+        df = prepare_ohlcv(sym, years=float(years), data_source=data_source)
         if df is None or df.empty:
             no_data += 1
             continue
 
-        _, cfg = _build_config(mode_id)
+        mode_label, cfg = _config_for_scan(mode_id, relaxed_signals=relaxed_signals)
+        mode_label_base = mode_label
         cfg.initial_capital = float(capital)
         result = run_backtest(df, cfg, mode_id=mode_id, mode_label=mode_label)
-        score = compute_backtest_score(result, min_trades=int(min_trades))
+        score, confidence, score_detail = compute_backtest_score(result, min_trades=int(min_trades))
+        if score <= float("-inf"):
+            disqualified += 1
+            continue
+
+        alpha, bench = _benchmark_alpha_pct(df, sym)
+        wf_train, wf_test = _walk_forward_trade_returns(
+            df, result.trades, initial_capital=cfg.initial_capital,
+        )
+        trades = result.trades
+        last = trades[-1] if trades else None
+        pos_status = "Flat"
+        if result.open_at_end and result.open_entry_date:
+            pos_status = f"Open since {result.open_entry_date}"
+        pos_pct = float(cfg.position_pct or 1.0)
+        port_dd = float(result.max_drawdown_pct or 0.0)  # already on sized equity curve
+
         rows.append(
             UniverseBacktestRow(
                 raw_ticker=sym,
@@ -701,11 +1063,35 @@ def scan_universe_backtest(
                 num_trades=result.num_trades,
                 score=score,
                 data_bars=len(df),
+                sector=_fetch_sector(sym),
+                last_entry=last.entry_date if last else "",
+                last_exit=last.exit_date if last else "",
+                data_through=result.data_last_date,
+                position_status=pos_status,
+                open_entry=result.open_entry_date if result.open_at_end else "",
+                trade_summary=_trade_summary(trades),
+                vol_ratio=_latest_vol_ratio(df),
+                avg_overnight_gap_pct=_avg_overnight_gap_pct(df, trades),
+                alpha_pct=alpha,
+                benchmark=bench,
+                wf_train_return_pct=wf_train,
+                wf_test_return_pct=wf_test,
+                position_pct=pos_pct,
+                portfolio_max_dd_pct=port_dd,
+                confidence=confidence,
+                score_detail=score_detail,
             )
         )
 
-    ranked = [r for r in rows if r.score > float("-inf")]
-    ranked.sort(key=lambda r: (r.score, r.sharpe, r.total_return_pct), reverse=True)
+    # Safety dedupe by display ticker — keep higher score.
+    by_ticker: dict[str, UniverseBacktestRow] = {}
+    for row in rows:
+        prev = by_ticker.get(row.display_ticker)
+        if prev is None or row.score > prev.score:
+            by_ticker[row.display_ticker] = row
+    rows = list(by_ticker.values())
+
+    ranked = sorted(rows, key=lambda r: (r.score, r.sharpe, r.total_return_pct), reverse=True)
     for rank, row in enumerate(ranked, start=1):
         row.rank = rank
 
@@ -713,10 +1099,13 @@ def scan_universe_backtest(
         universe="",
         market="",
         mode_id=mode_id,
-        mode_label=mode_label,
+        mode_label=mode_label_base or mode_id,
         tickers_scanned=total,
         tickers_ranked=len(ranked),
         no_data=no_data,
+        duplicates_removed=dupes_removed,
+        disqualified_low_trades=disqualified,
+        data_source=data_source,
         scan_elapsed_sec=time.perf_counter() - t0,
     )
     return ranked, stats
@@ -730,12 +1119,26 @@ def universe_backtest_df(rows: list[UniverseBacktestRow]) -> pd.DataFrame:
             {
                 "Rank": r.rank,
                 "Ticker": r.display_ticker,
-                "Score": round(r.score, 3) if r.score > float("-inf") else None,
+                "Score": round(r.score, 3),
+                "Conf.": round(r.confidence, 2),
                 "Return %": r.total_return_pct,
+                "Alpha %": r.alpha_pct,
                 "Sharpe": r.sharpe,
                 "Win %": r.win_rate_pct,
                 "Max DD %": r.max_drawdown_pct,
+                "Pos %": round(r.position_pct * 100.0, 0),
                 "Trades": r.num_trades,
+                "WF train %": r.wf_train_return_pct,
+                "WF test %": r.wf_test_return_pct,
+                "Avg gap %": r.avg_overnight_gap_pct,
+                "Vol×": r.vol_ratio,
+                "Sector": r.sector,
+                "Data through": r.data_through,
+                "Position": r.position_status,
+                "Last closed entry": r.last_entry,
+                "Last closed exit": r.last_exit,
+                "Open entry": r.open_entry or "—",
+                "Trade dates": r.trade_summary,
                 "Bars": r.data_bars,
                 "Raw": r.raw_ticker,
             }

@@ -187,6 +187,7 @@ class RsiStScanFilters:
     btst_above_prev: bool = True
     min_vol_ratio: float = 0.0
     bar_delay_sec: float = 0.06
+    ticker_override: Optional[list[str]] = None
 
 
 @dataclass
@@ -406,9 +407,18 @@ def scan_rsi_supertrend(
     *,
     progress_cb: Optional[ProgressCb] = None,
 ) -> tuple[list[RsiStScanResult], RsiStScanStats]:
-    tickers = resolve_universe(flt.universe, market=flt.market)[: flt.max_tickers]
+    tickers = (
+        list(flt.ticker_override)[: flt.max_tickers]
+        if flt.ticker_override
+        else resolve_universe(flt.universe, market=flt.market)[: flt.max_tickers]
+    )
+    uni_label = (
+        f"Historic shortlist ({len(tickers)})"
+        if flt.ticker_override
+        else flt.universe
+    )
     stats = RsiStScanStats(
-        universe=flt.universe,
+        universe=uni_label,
         mode=flt.mode,
         market=flt.market,
         data_source=flt.data_source,

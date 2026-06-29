@@ -223,9 +223,11 @@ def _interval_for_breeze(interval_key: str) -> str:
     return {"1d": "1day", "1h": "30minute", "15m": "5minute"}.get(interval_key, "1day")
 
 
-def _date_range_ist(interval_key: str) -> tuple[str, str]:
+def _date_range_ist(interval_key: str, *, lookback_days: Optional[int] = None) -> tuple[str, str]:
     now = datetime.now(tz=_IST)
-    if interval_key == "1d":
+    if lookback_days is not None and lookback_days > 0:
+        start = now - timedelta(days=int(lookback_days))
+    elif interval_key == "1d":
         start = now - timedelta(days=180)
     elif interval_key == "1h":
         start = now - timedelta(days=30)
@@ -293,10 +295,17 @@ def _response_to_ohlc_df(payload: Any) -> pd.DataFrame:
     return df[["Open", "High", "Low", "Close", "Volume"]].dropna(how="all")
 
 
-def fetch_breeze_price_history(raw_ticker: str, interval_key: str = "1d") -> pd.DataFrame:
+def fetch_breeze_price_history(
+    raw_ticker: str,
+    interval_key: str = "1d",
+    *,
+    lookback_days: Optional[int] = None,
+) -> pd.DataFrame:
     """
     Historical OHLCV for NSE/BSE symbols via ICICI Breeze.
     Returns empty DataFrame if unavailable (caller should fall back to yfinance).
+
+    ``lookback_days`` overrides the default 180-day daily window (e.g. 1095 for ~3y backtests).
     """
     parsed = _parse_breeze_symbol(raw_ticker)
     if parsed is None:
@@ -306,7 +315,7 @@ def fetch_breeze_price_history(raw_ticker: str, interval_key: str = "1d") -> pd.
     if client is None:
         return pd.DataFrame()
     stock_code = _resolve_stock_code(client, exch_code, stock_code)
-    from_date, to_date = _date_range_ist(interval_key)
+    from_date, to_date = _date_range_ist(interval_key, lookback_days=lookback_days)
     try:
         payload = client.get_historical_data_v2(
             interval=_interval_for_breeze(interval_key),
