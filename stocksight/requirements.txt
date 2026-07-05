@@ -6,3 +6,5 @@ fastapi>=0.110.0
 uvicorn>=0.27.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.0
+# Google sign-in for screener.in (also run: playwright install chromium)
+playwright>=1.40.0

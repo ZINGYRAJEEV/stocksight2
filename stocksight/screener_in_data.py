@@ -9,12 +9,18 @@ from __future__ import annotations
 import html as html_lib
 import re
 import time
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 try:
     from .valuation_model import _parse_screener_number
 except ImportError:
     from valuation_model import _parse_screener_number
+
+_MONTH_MAP = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
 
 
 def _clean_cell(text: str) -> str:
@@ -146,6 +152,101 @@ def fetch_screener_quarterly_qoq(display_ticker: str, *, html: str = "") -> dict
         "latest_profit_cr": round(float(p0), 1) if p0 is not None else None,
         "source": "Screener.in quarterly (consolidated, Rs Cr)",
     }
+
+
+def parse_quarter_label_date(label: str) -> Optional[date]:
+    """Convert Screener quarter header like 'Jun 2025' to quarter-end date."""
+    if not label:
+        return None
+    m = re.search(r"([A-Za-z]{3,9})\s*(20\d{2})", label.strip())
+    if not m:
+        return None
+    mon = _MONTH_MAP.get(m.group(1).lower()[:3])
+    if not mon:
+        return None
+    year = int(m.group(2))
+    if mon == 12:
+        return date(year, 12, 31)
+    nxt = date(year, mon + 1, 1)
+    return nxt - timedelta(days=1)
+
+
+def estimate_results_announcement_date(quarter_end: date, *, lag_days: int = 45) -> date:
+    """Proxy announcement date when exact filing date is unknown."""
+    return quarter_end + timedelta(days=lag_days)
+
+
+def fetch_screener_quarterly_series(display_ticker: str, *, html: str = "") -> list[dict]:
+    """
+    Quarterly Sales+ / Net Profit+ series from Screener #quarters (oldest → newest).
+
+    Each item: {label, sales_cr, profit_cr, quarter_end, est_announce_date}.
+    """
+    page = html or fetch_screener_company_html(display_ticker)
+    if not page:
+        return []
+
+    headers, data = _parse_section_table(page, "quarters")
+    if not headers:
+        return []
+
+    sales = _row_values(data, "sales+", "sales +", "revenue")
+    profit = _row_values(data, "net profit", "pat", "profit after tax")
+    if not sales or not profit:
+        return []
+
+    out: list[dict] = []
+    for hdr, s, p in zip(headers, sales, profit):
+        if not hdr or (s is None and p is None):
+            continue
+        q_end = parse_quarter_label_date(hdr)
+        out.append({
+            "label": hdr,
+            "sales_cr": s,
+            "profit_cr": p,
+            "quarter_end": q_end,
+            "est_announce_date": estimate_results_announcement_date(q_end) if q_end else None,
+        })
+    return out
+
+
+def fetch_screener_results_latest(*, max_rows: int = 200) -> list[dict]:
+    """
+    Recent quarterly result reporters from Screener.in /results/latest/.
+
+    Returns [{symbol, company, slug, url}, ...].
+    """
+    try:
+        from screener_buyback import SCREENER_BASE, _http_get
+    except ImportError:
+        return []
+
+    html = _http_get(f"{SCREENER_BASE}/results/latest/") or ""
+    if not html:
+        return []
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for m in re.finditer(
+        r'href="(/company/([^/]+)/[^"]*)"[^>]*>\s*([^<]+?)\s*</a>',
+        html,
+        re.I,
+    ):
+        slug = m.group(2).strip().lower()
+        if slug in seen:
+            continue
+        seen.add(slug)
+        company = _clean_cell(m.group(3))
+        symbol = slug.upper()
+        out.append({
+            "symbol": symbol,
+            "company": company,
+            "slug": slug,
+            "url": f"{SCREENER_BASE}{m.group(1)}",
+        })
+        if len(out) >= max_rows:
+            break
+    return out
 
 
 def _parse_ratio_block(html: str, label: str) -> Optional[float]:

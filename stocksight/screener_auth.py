@@ -22,10 +22,13 @@ from typing import Optional
 
 SCREENER_BASE = "https://www.screener.in"
 SCREENER_LOGIN_URL = f"{SCREENER_BASE}/login/"
+SCREENER_GOOGLE_LOGIN_URL = f"{SCREENER_BASE}/login/google/"
 SCREENER_TEST_URL = f"{SCREENER_BASE}/full-text-search/?q=order&type=announcements"
 _USER_AGENT = (
-    "Mozilla/5.0 (compatible; StockSight/1.0; +https://github.com/ZINGYRAJEEV/stocksight2)"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
+_LOGIN_UA = _USER_AGENT
 _TIMEOUT = 20
 _SESSION_VALID_CACHE_TTL_SEC = 180.0
 _session_valid_cache: dict[str, tuple[float, bool]] = {}
@@ -147,7 +150,7 @@ def login_screener(email: str, password: str) -> dict[str, str]:
 
     jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    opener.addheaders = [("User-Agent", _USER_AGENT)]
+    opener.addheaders = [("User-Agent", _LOGIN_UA)]
 
     with opener.open(SCREENER_LOGIN_URL, timeout=_TIMEOUT) as resp:
         html = resp.read().decode("utf-8", "replace")
@@ -190,45 +193,116 @@ def login_screener(email: str, password: str) -> dict[str, str]:
     cookies = _cookie_dict_from_jar(jar)
     if not cookies.get("sessionid"):
         raise RuntimeError(
-            "Screener login did not return sessionid — verify email/password or 2FA status."
+            "Screener login did not return sessionid. "
+            "Use email/password login (not Google-only). Check credentials or disable 2FA."
         )
     return cookies
 
 
-def patch_secrets_toml(cookies: dict[str, str], *, path: Optional[Path] = None) -> Path:
-    """Update sessionid/csrftoken in secrets.toml (preserves comments and other keys)."""
+def _toml_quote(val: str) -> str:
+    return '"' + val.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _set_toml_key(text: str, key: str, val: str) -> str:
+    """Insert or replace one key under [screener] (or append section)."""
+    val = (val or "").strip()
+    if not val:
+        return text
+    line = f"{key} = {_toml_quote(val)}"
+    pat = re.compile(rf"^\s*{re.escape(key)}\s*=\s*.+$", re.MULTILINE)
+    if pat.search(text):
+        return pat.sub(line, text, count=1)
+    if "[screener]" in text:
+        return re.sub(r"(\[screener\]\s*\n)", rf"\1{line}\n", text, count=1)
+    return text.rstrip() + f"\n\n[screener]\n{line}\n"
+
+
+def patch_secrets_toml(
+    cookies: dict[str, str],
+    *,
+    path: Optional[Path] = None,
+    email: Optional[str] = None,
+    password: Optional[str] = None,
+) -> Path:
+    """Update [screener] keys in secrets.toml (preserves comments and other sections)."""
     target = path or find_secrets_toml()
     if not target or not target.is_file():
         raise FileNotFoundError(
-            "No .streamlit/secrets.toml found — create one with [screener] email/password first."
+            "No .streamlit/secrets.toml found — create one with a [screener] section first."
         )
 
     text = target.read_text(encoding="utf-8")
     if "[screener]" not in text:
         text = text.rstrip() + "\n\n[screener]\n"
 
+    if email is not None and email.strip():
+        text = _set_toml_key(text, "email", email.strip())
+    if password is not None and password.strip():
+        text = _set_toml_key(text, "password", password)
+
     for key in ("sessionid", "csrftoken"):
         val = (cookies.get(key) or "").strip()
-        if not val:
-            continue
-        pat = re.compile(
-            rf'^(\s*{re.escape(key)}\s*=\s*")[^"]*(")',
-            re.MULTILINE,
-        )
-        if pat.search(text):
-            text = pat.sub(rf"\1{val}\2", text, count=1)
-        elif "[screener]" in text:
-            text = re.sub(
-                r"(\[screener\]\s*\n)",
-                rf'\1{key} = "{val}"\n',
-                text,
-                count=1,
-            )
-        else:
-            text += f'{key} = "{val}"\n'
+        if val:
+            text = _set_toml_key(text, key, val)
 
     target.write_text(text, encoding="utf-8")
     return target
+
+
+def save_screener_credentials_and_refresh(
+    email: str,
+    password: str,
+    *,
+    force: bool = True,
+) -> ScreenerAuthResult:
+    """Save email/password to secrets.toml, login, and write fresh cookies."""
+    email = (email or "").strip()
+    password = password or ""
+    if not email or not password:
+        return ScreenerAuthResult(
+            ok=False,
+            refreshed=False,
+            message="Email and password are required.",
+            cookies={},
+        )
+    try:
+        patch_secrets_toml({}, email=email, password=password)
+    except FileNotFoundError as exc:
+        return ScreenerAuthResult(ok=False, refreshed=False, message=str(exc), cookies={})
+
+    try:
+        new_cookies = login_screener(email, password)
+    except RuntimeError as exc:
+        return ScreenerAuthResult(ok=False, refreshed=False, message=str(exc), cookies={})
+
+    if not is_screener_session_valid(new_cookies):
+        return ScreenerAuthResult(
+            ok=False,
+            refreshed=False,
+            message=(
+                "Login returned cookies but full-text check failed — "
+                "wrong password, Google-only account, or Screener blocked the request."
+            ),
+            cookies=new_cookies,
+        )
+
+    try:
+        saved = str(patch_secrets_toml(new_cookies, email=email, password=password))
+    except FileNotFoundError as exc:
+        return ScreenerAuthResult(
+            ok=True,
+            refreshed=True,
+            message=f"Logged in but could not save cookies: {exc}",
+            cookies=new_cookies,
+        )
+
+    _session_valid_cache.clear()
+    return ScreenerAuthResult(
+        ok=True,
+        refreshed=True,
+        message=f"Screener auto-login configured. Cookies saved to {saved}.",
+        cookies=new_cookies,
+    )
 
 
 def ensure_screener_session(
@@ -266,14 +340,19 @@ def ensure_screener_session(
                 refreshed=False,
                 message=(
                     "Screener session expired or invalid. Add email + password under "
-                    "[screener] in .streamlit/secrets.toml to enable auto-refresh."
+                    "[screener] in .streamlit/secrets.toml, or use Login with Google "
+                    "in the app to capture fresh cookies."
                 ),
                 cookies=cookies,
             )
         return ScreenerAuthResult(
             ok=False,
             refreshed=False,
-            message="Screener email/password not configured.",
+            message=(
+                "Auto-refresh needs Screener **email + password** in secrets.toml "
+                "(not just sessionid/csrftoken). Use **Login with Google** or "
+                "**Configure auto-login** below."
+            ),
             cookies=cookies,
         )
 

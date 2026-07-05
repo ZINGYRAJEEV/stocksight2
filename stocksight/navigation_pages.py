@@ -321,6 +321,12 @@ def page_earnings_surprise() -> None:
     render_earnings_surprise_page()
 
 
+def page_pead_screener() -> None:
+    from pead_page import render_pead_page
+
+    render_pead_page()
+
+
 def page_value_growth() -> None:
     from value_growth_page import render_value_growth_page
 
@@ -394,6 +400,7 @@ __all__ = [
     "page_crisis_value",
     "page_valuation_rulebook",
     "page_earnings_surprise",
+    "page_pead_screener",
     "page_value_growth",
     "page_multibagger_patterns",
 ]

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import streamlit as st
 
-from screener_auth import ensure_screener_session, is_screener_session_valid, load_screener_block
+from screener_auth import (
+    ensure_screener_session,
+    is_screener_session_valid,
+    load_screener_block,
+    save_screener_credentials_and_refresh,
+)
+from screener_browser_login import playwright_available, save_screener_google_browser_login
 from screener_buyback import set_screener_cookie_override
 
 
@@ -14,17 +20,17 @@ def _setup_markdown(*, extra_links: str = "") -> str:
 
 ```toml
 [screener]
-email = "your@email.com"
-password = "your-screener-password"
 sessionid = "auto-updated"
 csrftoken = "auto-updated"
 ```
 
-**Auto-refresh (recommended)** — add `email` + `password`; use **Refresh session** below when cookies expire.
+**Google sign-in (recommended)** — click **Login with Google (Screener)** below. A browser opens on the same OAuth URL Screener uses; finish sign-in there and cookies are saved automatically.
 
-**Manual cookies** — DevTools → Application → Cookies → `www.screener.in` → copy `sessionid` and `csrftoken`.
+**Email/password auto-refresh** — add `email` + `password` under `[screener]` for silent refresh without opening a browser.
 
-Or run: `python scripts/refresh_screener_session.py`
+**Manual cookies** — paste `sessionid` + `csrftoken` from DevTools until they expire.
+
+Or run: `python scripts/refresh_screener_session.py` (email/password) or `python scripts/screener_google_login.py` (Google)
 """
     if extra_links.strip():
         return base + "\n" + extra_links.strip()
@@ -67,8 +73,19 @@ def render_screener_session_panel(
     has_auto = bool(block.get("email") and block.get("password"))
     valid = is_screener_session_valid(cookies) if has_login else False
 
-    if has_login and valid:
+    if has_login and valid and has_auto:
         st.success(success_message)
+    elif has_login and valid:
+        st.warning(
+            "Session is **valid** but uses **manual cookies only** — they will expire. "
+            "Use **Login with Google** or **Configure auto-login** so **Refresh session** "
+            "works without DevTools."
+        )
+    elif has_login and not has_auto:
+        st.warning(
+            "Only **manual cookies** are set — they expire. Use **Login with Google** "
+            "or add **email + password** for auto-refresh."
+        )
     elif has_login:
         st.warning(
             "Screener session **expired or invalid** — click **Refresh session** "
@@ -101,21 +118,90 @@ def render_screener_session_panel(
             st.toast("Screener session expired or missing.", icon="⚠️")
 
     if refresh or force:
-        with st.spinner("Refreshing Screener.in session…"):
-            result = ensure_screener_session(force=force, save=True)
-        if result.ok:
-            set_screener_cookie_override(result.cookies)
-            clear_screener_feed_caches()
-            st.toast(result.message, icon="✅")
-            st.rerun()
+        if not has_auto:
+            st.error(
+                "Cannot refresh automatically — use **Login with Google (Screener)** "
+                "or add **email + password** in the expander below."
+            )
         else:
-            st.error(result.message)
+            with st.spinner("Refreshing Screener.in session…"):
+                result = ensure_screener_session(force=force, save=True)
+            if result.ok:
+                set_screener_cookie_override(result.cookies)
+                clear_screener_feed_caches()
+                st.toast(result.message, icon="✅")
+                st.rerun()
+            else:
+                st.error(result.message)
 
-    show_setup = expand_setup_when_invalid and (not has_login or not valid)
+    google_col, _ = st.columns([1, 2])
+    with google_col:
+        google_login = st.button(
+            "🔐 Login with Google (Screener)",
+            key=f"{key_prefix}_google_login",
+            use_container_width=True,
+            help="Opens a browser on screener.in/login/google/ — same as Screener's Google button.",
+        )
+    if google_login:
+        if not playwright_available():
+            st.error(
+                "Playwright is not installed. Run in your terminal:\n\n"
+                "```\n"
+                "pip install playwright\n"
+                "playwright install chromium\n"
+                "```"
+            )
+        else:
+            with st.spinner(
+                "Browser opening — sign in with Google in the Chromium window. "
+                "This page updates when cookies are captured (up to 5 min)…"
+            ):
+                try:
+                    cookies, msg = save_screener_google_browser_login(timeout_sec=300)
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                else:
+                    set_screener_cookie_override(cookies)
+                    clear_screener_feed_caches()
+                    st.success(msg)
+                    st.rerun()
+
+    show_setup = expand_setup_when_invalid and (not has_login or not valid or not has_auto)
     with st.expander(
-        "🔐 Screener.in login setup",
-        expanded=show_setup and not has_login,
+        "🔐 Login with Google or email/password",
+        expanded=show_setup and not has_auto,
     ):
         st.markdown(_setup_markdown(extra_links=extra_setup_links))
+        st.caption(
+            "Google users: use the button above. Email/password users: form below "
+            "(same credentials as screener.in email sign-in)."
+        )
+        with st.form(f"{key_prefix}_auto_login_form"):
+            email_in = st.text_input(
+                "Screener email",
+                value=block.get("email", ""),
+                placeholder="you@email.com",
+            )
+            pass_in = st.text_input(
+                "Screener password",
+                type="password",
+                placeholder="Your screener.in password",
+                help="Saved to gitignored secrets.toml on this machine only.",
+            )
+            submitted = st.form_submit_button("💾 Save & refresh session", type="primary")
+        if submitted:
+            with st.spinner("Logging in to Screener.in…"):
+                result = save_screener_credentials_and_refresh(email_in, pass_in)
+            if result.ok:
+                set_screener_cookie_override(result.cookies)
+                clear_screener_feed_caches()
+                st.success(result.message)
+                st.rerun()
+            else:
+                st.error(result.message)
+
+    if has_auto and not show_setup:
+        with st.expander("🔐 Screener.in login setup", expanded=False):
+            st.markdown(_setup_markdown(extra_links=extra_setup_links))
 
     return valid
