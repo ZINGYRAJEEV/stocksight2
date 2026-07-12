@@ -8,14 +8,38 @@ from screener_auth import (
     ensure_screener_session,
     is_screener_session_valid,
     load_screener_block,
+    patch_secrets_toml,
     save_screener_credentials_and_refresh,
 )
-from screener_browser_login import playwright_available, save_screener_google_browser_login
+from screener_browser_login import (
+    google_browser_login_supported,
+    is_streamlit_cloud,
+    save_screener_google_browser_login,
+)
 from screener_buyback import set_screener_cookie_override
 
 
 def _setup_markdown(*, extra_links: str = "") -> str:
-    base = """
+    cloud = is_streamlit_cloud()
+    if cloud:
+        base = """
+**Streamlit Cloud** — Google browser login is **not available** here (no local Chromium).
+
+**Option A (recommended for Google accounts)**
+1. On your PC run StockSight locally → **Login with Google**, *or* `python scripts/screener_google_login.py`
+2. Copy `sessionid` + `csrftoken` from local `.streamlit/secrets.toml`
+3. Paste into **Cloud → ⋮ → Settings → Secrets** under `[screener]`, *or* use **Paste cookies** below
+
+**Option B** — if Screener has email/password login, add those under `[screener]` in Cloud Secrets and use **Save & refresh**.
+
+```toml
+[screener]
+sessionid = "paste-here"
+csrftoken = "paste-here"
+```
+"""
+    else:
+        base = """
 **Setup** — add to `.streamlit/secrets.toml` (gitignored):
 
 ```toml
@@ -72,28 +96,42 @@ def render_screener_session_panel(
     has_login = bool(cookies.get("sessionid"))
     has_auto = bool(block.get("email") and block.get("password"))
     valid = is_screener_session_valid(cookies) if has_login else False
+    google_ok, google_reason = google_browser_login_supported()
+    on_cloud = is_streamlit_cloud()
 
     if has_login and valid and has_auto:
         st.success(success_message)
     elif has_login and valid:
         st.warning(
             "Session is **valid** but uses **manual cookies only** — they will expire. "
-            "Use **Login with Google** or **Configure auto-login** so **Refresh session** "
-            "works without DevTools."
+            + (
+                "On Cloud, refresh by pasting new cookies into **Secrets** or **Paste cookies** below."
+                if on_cloud
+                else "Use **Login with Google** or email/password so refresh works without DevTools."
+            )
         )
     elif has_login and not has_auto:
         st.warning(
-            "Only **manual cookies** are set — they expire. Use **Login with Google** "
-            "or add **email + password** for auto-refresh."
+            "Only **manual cookies** are set — they expire. "
+            + (
+                "Paste fresh cookies or add email/password in Cloud Secrets."
+                if on_cloud
+                else "Use **Login with Google** or add **email + password** for auto-refresh."
+            )
         )
     elif has_login:
         st.warning(
-            "Screener session **expired or invalid** — click **Refresh session** "
-            "(requires email + password in secrets.toml)."
+            "Screener session **expired or invalid** — "
+            + (
+                "paste fresh cookies (Cloud) or use email/password refresh."
+                if on_cloud
+                else "click **Refresh session** (needs email + password) or **Login with Google**."
+            )
         )
     else:
         st.info(
-            "Screener login not configured — add `[screener]` to `.streamlit/secrets.toml`."
+            "Screener login not configured — add `[screener]` to secrets "
+            + ("(Cloud → Settings → Secrets)." if on_cloud else "`.streamlit/secrets.toml`.")
         )
 
     b1, b2, b3, b4 = st.columns([1, 1, 1, 2])
@@ -120,8 +158,12 @@ def render_screener_session_panel(
     if refresh or force:
         if not has_auto:
             st.error(
-                "Cannot refresh automatically — use **Login with Google (Screener)** "
-                "or add **email + password** in the expander below."
+                "Cannot refresh automatically — "
+                + (
+                    "use **Paste cookies** below or add email/password in Cloud Secrets."
+                    if on_cloud
+                    else "use **Login with Google** or add **email + password** below."
+                )
             )
         else:
             with st.spinner("Refreshing Screener.in session…"):
@@ -134,23 +176,25 @@ def render_screener_session_panel(
             else:
                 st.error(result.message)
 
-    google_col, _ = st.columns([1, 2])
+    google_col, paste_col = st.columns([1, 1])
     with google_col:
         google_login = st.button(
             "🔐 Login with Google (Screener)",
             key=f"{key_prefix}_google_login",
             use_container_width=True,
-            help="Opens a browser on screener.in/login/google/ — same as Screener's Google button.",
+            disabled=not google_ok,
+            help=(
+                "Local only — opens Chromium for Screener Google OAuth."
+                if google_ok
+                else "Not available on Streamlit Cloud / without Chromium."
+            ),
         )
+    with paste_col:
+        st.caption("Cloud / Google-only → use **Paste cookies** in the expander.")
+
     if google_login:
-        if not playwright_available():
-            st.error(
-                "Playwright is not installed. Run in your terminal:\n\n"
-                "```\n"
-                "pip install playwright\n"
-                "playwright install chromium\n"
-                "```"
-            )
+        if not google_ok:
+            st.error(google_reason)
         else:
             with st.spinner(
                 "Browser opening — sign in with Google in the Chromium window. "
@@ -172,9 +216,50 @@ def render_screener_session_panel(
         expanded=show_setup and not has_auto,
     ):
         st.markdown(_setup_markdown(extra_links=extra_setup_links))
+        if not google_ok:
+            st.info(google_reason)
+
+        st.markdown("#### Paste cookies (works on Cloud)")
+        with st.form(f"{key_prefix}_paste_cookies_form"):
+            sid_in = st.text_input(
+                "sessionid",
+                value=block.get("sessionid", ""),
+                placeholder="from DevTools or local secrets.toml",
+            )
+            csrf_in = st.text_input(
+                "csrftoken",
+                value=block.get("csrftoken", ""),
+                placeholder="from DevTools or local secrets.toml",
+            )
+            paste_submit = st.form_submit_button("✅ Apply cookies", type="primary")
+        if paste_submit:
+            pasted = {
+                "sessionid": (sid_in or "").strip(),
+                "csrftoken": (csrf_in or "").strip(),
+            }
+            if not pasted["sessionid"]:
+                st.error("sessionid is required.")
+            elif not is_screener_session_valid(pasted):
+                st.error(
+                    "Those cookies failed Screener full-text check — they may be expired. "
+                    "Log in on screener.in again and copy fresh values."
+                )
+            else:
+                set_screener_cookie_override(pasted)
+                clear_screener_feed_caches()
+                try:
+                    path = patch_secrets_toml(pasted)
+                    st.success(f"Cookies valid — applied and saved to `{path}`.")
+                except Exception:
+                    st.success(
+                        "Cookies valid — applied for **this session**. "
+                        "On Streamlit Cloud, also paste them into **App Settings → Secrets** "
+                        "so they survive restarts."
+                    )
+                st.rerun()
+
         st.caption(
-            "Google users: use the button above. Email/password users: form below "
-            "(same credentials as screener.in email sign-in)."
+            "Google users on Cloud: paste cookies above. Email/password users: form below."
         )
         with st.form(f"{key_prefix}_auto_login_form"):
             email_in = st.text_input(

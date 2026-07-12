@@ -1,0 +1,7 @@
+# Google AdSense ads.txt — host this file at https://YOUR-DOMAIN/ads.txt
+# Replace PUBLISHER_ID with your numeric ID only (digits after ca-pub-).
+# Example: if publisher_id is ca-pub-1234567890123456, use:
+# google.com, pub-1234567890123456, DIRECT, f08c47fec0942fa0
+#
+# Full guide: https://support.google.com/adsense/answer/7532444
+google.com, pub-PUBLISHER_ID, DIRECT, f08c47fec0942fa0

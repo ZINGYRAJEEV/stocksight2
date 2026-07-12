@@ -4,11 +4,15 @@ Browser-based Screener.in login (Google OAuth).
 Opens the same redirect as screener.in's "Sign in with Google" button,
 waits for you to finish in the browser, then reads sessionid + csrftoken.
 
+**Local only** — Streamlit Cloud cannot open a browser on your machine, so Google
+login must be done on a desktop, then paste cookies into Cloud secrets.
+
 Requires: pip install playwright && playwright install chromium
 """
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Optional
 
@@ -21,6 +25,66 @@ def playwright_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def is_streamlit_cloud() -> bool:
+    """True when running on Streamlit Community Cloud (or similar remote host)."""
+    return bool(
+        os.environ.get("STREAMLIT_SHARING_MODE")
+        or os.environ.get("STREAMLIT_SERVER_HEADLESS") == "true"
+        and (
+            os.environ.get("HOSTNAME", "").endswith(".streamlit.app")
+            or "streamlit" in os.environ.get("HOME", "").lower()
+            or os.path.exists("/home/appuser")
+        )
+        or os.environ.get("USER", "") == "appuser"
+        or os.path.isdir("/home/appuser")
+    )
+
+
+def chromium_installed() -> bool:
+    if not playwright_available():
+        return False
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            path = p.chromium.executable_path
+            return bool(path and os.path.isfile(path))
+    except Exception:
+        return False
+
+
+def google_browser_login_supported() -> tuple[bool, str]:
+    """
+    Whether interactive Google login can work in this environment.
+
+    Returns (ok, reason_if_not).
+    """
+    if is_streamlit_cloud():
+        return False, (
+            "**Login with Google** only works on your **local PC** — Streamlit Cloud "
+            "cannot open Chromium on your screen.\n\n"
+            "**On Cloud, do this instead:**\n"
+            "1. On your PC: `python scripts/screener_google_login.py` (or run StockSight locally "
+            "and click Login with Google)\n"
+            "2. Copy `sessionid` + `csrftoken` from local `.streamlit/secrets.toml`\n"
+            "3. Paste them into **Streamlit Cloud → App settings → Secrets** under `[screener]`, "
+            "or use **Paste cookies** below (works for this session)\n\n"
+            "Or use Screener **email + password** in Cloud secrets if your account has password login."
+        )
+    if not playwright_available():
+        return False, (
+            "Playwright is not installed. On your PC run:\n"
+            "```\npip install playwright\nplaywright install chromium\n```"
+        )
+    if not chromium_installed():
+        return False, (
+            "Playwright is installed but **Chromium** is missing. On your PC run:\n"
+            "```\nplaywright install chromium\n```\n\n"
+            "This cannot be fixed on Streamlit Cloud — use **Paste cookies** or Cloud Secrets."
+        )
+    return True, ""
 
 
 def _playwright_install_hint() -> str:
@@ -42,8 +106,9 @@ def login_screener_via_google_browser(
     Complete sign-in in the browser. Returns ``sessionid`` and ``csrftoken``
     when Screener sets them. Raises ``RuntimeError`` on timeout or missing deps.
     """
-    if not playwright_available():
-        raise RuntimeError(_playwright_install_hint())
+    ok, reason = google_browser_login_supported()
+    if not ok:
+        raise RuntimeError(reason)
 
     try:
         from playwright.sync_api import sync_playwright
@@ -60,8 +125,12 @@ def login_screener_via_google_browser(
             msg = str(exc).lower()
             if "executable doesn't exist" in msg or "browser" in msg:
                 raise RuntimeError(
-                    f"Chromium not installed for Playwright. Run:\n"
-                    f"  playwright install chromium\n\nOriginal: {exc}"
+                    "Chromium not installed for Playwright.\n\n"
+                    "On your **local PC** run:\n"
+                    "  playwright install chromium\n\n"
+                    "On **Streamlit Cloud** this button cannot work — use **Paste cookies** "
+                    "or put sessionid/csrftoken in Cloud Secrets.\n\n"
+                    f"Original: {exc}"
                 ) from exc
             raise
 
@@ -111,5 +180,12 @@ def save_screener_google_browser_login(
             "try again or check your account."
         )
 
-    saved = str(patch_secrets_toml(cookies))
-    return cookies, f"Screener Google login OK. Cookies saved to {saved}."
+    try:
+        saved = str(patch_secrets_toml(cookies))
+        return cookies, f"Screener Google login OK. Cookies saved to {saved}."
+    except FileNotFoundError:
+        return (
+            cookies,
+            "Screener Google login OK (in-memory only — could not write secrets.toml). "
+            "On Streamlit Cloud, paste these into App Secrets for persistence.",
+        )

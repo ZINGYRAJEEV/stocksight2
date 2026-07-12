@@ -190,6 +190,18 @@ except ImportError:
     from ui_components import inject_app_chrome  # type: ignore[no-redef]
 
 try:
+    from stocksight.adsense import render_adsense_footer, render_adsense_sidebar
+except ImportError:
+    try:
+        from adsense import render_adsense_footer, render_adsense_sidebar  # type: ignore[no-redef]
+    except ImportError:
+        def render_adsense_footer() -> None:  # type: ignore[misc]
+            return None
+
+        def render_adsense_sidebar() -> None:  # type: ignore[misc]
+            return None
+
+try:
     st.set_page_config(
         page_title="StockSight",
         page_icon="📈",
@@ -338,5 +350,14 @@ with st.sidebar:
         "**Buy / Hold / Avoid** is the final decision layer—use it after you have candidates. "
         "Expand the sidebar (**«**) if the menu is truncated."
     )
+    try:
+        render_adsense_sidebar()
+    except Exception:
+        pass
 
 pg.run()
+
+try:
+    render_adsense_footer()
+except Exception:
+    pass
