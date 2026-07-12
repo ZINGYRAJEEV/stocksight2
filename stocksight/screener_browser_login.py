@@ -171,7 +171,7 @@ def save_screener_google_browser_login(
 
     Returns (cookies, message). Raises ``RuntimeError`` on failure.
     """
-    from screener_auth import is_screener_session_valid, patch_secrets_toml
+    from screener_auth import is_screener_session_valid, try_patch_secrets_toml
 
     cookies = login_screener_via_google_browser(timeout_sec=timeout_sec)
     if validate and not is_screener_session_valid(cookies):
@@ -180,12 +180,11 @@ def save_screener_google_browser_login(
             "try again or check your account."
         )
 
-    try:
-        saved = str(patch_secrets_toml(cookies))
+    saved = try_patch_secrets_toml(cookies)
+    if saved:
         return cookies, f"Screener Google login OK. Cookies saved to {saved}."
-    except FileNotFoundError:
-        return (
-            cookies,
-            "Screener Google login OK (in-memory only — could not write secrets.toml). "
-            "On Streamlit Cloud, paste these into App Secrets for persistence.",
-        )
+    return (
+        cookies,
+        "Screener Google login OK (in-memory only — could not write secrets.toml). "
+        "On Streamlit Cloud, paste sessionid/csrftoken into App Secrets for persistence.",
+    )

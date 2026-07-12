@@ -231,7 +231,13 @@ def patch_secrets_toml(
             "No .streamlit/secrets.toml found — create one with a [screener] section first."
         )
 
-    text = target.read_text(encoding="utf-8")
+    try:
+        text = target.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise PermissionError(
+            f"Cannot read secrets file `{target}`: {exc}"
+        ) from exc
+
     if "[screener]" not in text:
         text = text.rstrip() + "\n\n[screener]\n"
 
@@ -245,8 +251,29 @@ def patch_secrets_toml(
         if val:
             text = _set_toml_key(text, key, val)
 
-    target.write_text(text, encoding="utf-8")
+    try:
+        target.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        raise PermissionError(
+            "Cannot write secrets.toml (normal on Streamlit Cloud — secrets are read-only). "
+            "Set `[screener]` in Cloud → Settings → Secrets, or use Paste cookies for this session. "
+            f"({exc})"
+        ) from exc
     return target
+
+
+def try_patch_secrets_toml(
+    cookies: dict[str, str],
+    *,
+    path: Optional[Path] = None,
+    email: Optional[str] = None,
+    password: Optional[str] = None,
+) -> Optional[Path]:
+    """Like ``patch_secrets_toml`` but returns None when the file is missing or read-only."""
+    try:
+        return patch_secrets_toml(cookies, path=path, email=email, password=password)
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
 
 
 def save_screener_credentials_and_refresh(
@@ -255,7 +282,7 @@ def save_screener_credentials_and_refresh(
     *,
     force: bool = True,
 ) -> ScreenerAuthResult:
-    """Save email/password to secrets.toml, login, and write fresh cookies."""
+    """Save email/password to secrets.toml when writable, login, and write fresh cookies."""
     email = (email or "").strip()
     password = password or ""
     if not email or not password:
@@ -265,10 +292,9 @@ def save_screener_credentials_and_refresh(
             message="Email and password are required.",
             cookies={},
         )
-    try:
-        patch_secrets_toml({}, email=email, password=password)
-    except FileNotFoundError as exc:
-        return ScreenerAuthResult(ok=False, refreshed=False, message=str(exc), cookies={})
+
+    # Best-effort persist (fails silently on Streamlit Cloud read-only filesystem).
+    try_patch_secrets_toml({}, email=email, password=password)
 
     try:
         new_cookies = login_screener(email, password)
@@ -286,21 +312,20 @@ def save_screener_credentials_and_refresh(
             cookies=new_cookies,
         )
 
-    try:
-        saved = str(patch_secrets_toml(new_cookies, email=email, password=password))
-    except FileNotFoundError as exc:
-        return ScreenerAuthResult(
-            ok=True,
-            refreshed=True,
-            message=f"Logged in but could not save cookies: {exc}",
-            cookies=new_cookies,
-        )
-
+    saved = try_patch_secrets_toml(new_cookies, email=email, password=password)
     _session_valid_cache.clear()
+    if saved:
+        msg = f"Screener auto-login configured. Cookies saved to {saved}."
+    else:
+        msg = (
+            "Logged in for **this session**. Could not write secrets.toml "
+            "(expected on Streamlit Cloud). Add email/password + session cookies under "
+            "`[screener]` in **Cloud → Settings → Secrets** so they survive restarts."
+        )
     return ScreenerAuthResult(
         ok=True,
         refreshed=True,
-        message=f"Screener auto-login configured. Cookies saved to {saved}.",
+        message=msg,
         cookies=new_cookies,
     )
 
@@ -340,8 +365,7 @@ def ensure_screener_session(
                 refreshed=False,
                 message=(
                     "Screener session expired or invalid. Add email + password under "
-                    "[screener] in .streamlit/secrets.toml, or use Login with Google "
-                    "in the app to capture fresh cookies."
+                    "[screener] in secrets, or paste fresh cookies."
                 ),
                 cookies=cookies,
             )
@@ -349,8 +373,8 @@ def ensure_screener_session(
             ok=False,
             refreshed=False,
             message=(
-                "Auto-refresh needs Screener **email + password** in secrets.toml "
-                "(not just sessionid/csrftoken). Use **Login with Google** or "
+                "Auto-refresh needs Screener **email + password** in secrets "
+                "(not just sessionid/csrftoken). Use **Paste cookies** or "
                 "**Configure auto-login** below."
             ),
             cookies=cookies,
@@ -376,19 +400,15 @@ def ensure_screener_session(
 
     saved_to = ""
     if save:
-        try:
-            saved_to = str(patch_secrets_toml(new_cookies, path=secrets_path))
-        except FileNotFoundError as exc:
-            return ScreenerAuthResult(
-                ok=True,
-                refreshed=True,
-                message=f"Refreshed in memory only: {exc}",
-                cookies=new_cookies,
-            )
+        saved = try_patch_secrets_toml(new_cookies, path=secrets_path)
+        if saved:
+            saved_to = str(saved)
 
     msg = "Screener session refreshed."
     if saved_to:
         msg += f" Updated {saved_to}."
+    else:
+        msg += " (in-memory only — secrets.toml not writable; update Cloud Secrets for persistence)."
     return ScreenerAuthResult(
         ok=True,
         refreshed=True,
