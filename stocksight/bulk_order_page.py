@@ -202,13 +202,6 @@ def render_bulk_order_page() -> None:
 """
         )
 
-    tab_ann, tab_bulk, tab_block, tab_news = st.tabs([
-        "📋 Order announcements",
-        "📊 Bulk deals",
-        "🧱 Block deals",
-        "📰 Company latest news",
-    ])
-
     c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
     with c1:
         preset = st.selectbox(
@@ -255,6 +248,15 @@ def render_bulk_order_page() -> None:
 
         if auto_refresh:
             st.caption(f"Auto-refresh **on** · every **{int(refresh_sec)}s**")
+
+        # Tabs must be created inside the fragment — widgets cannot write to
+        # containers defined outside @st.fragment.
+        tab_ann, tab_bulk, tab_block, tab_news = st.tabs([
+            "📋 Order announcements",
+            "📊 Bulk deals",
+            "🧱 Block deals",
+            "📰 Company latest news",
+        ])
 
         with st.spinner("Fetching from Screener.in…"):
             data = _cached_intel(
