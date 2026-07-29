@@ -30,7 +30,7 @@ _USER_AGENT = (
 )
 _LOGIN_UA = _USER_AGENT
 _TIMEOUT = 20
-_SESSION_VALID_CACHE_TTL_SEC = 180.0
+_SESSION_VALID_CACHE_TTL_SEC = 900.0
 _session_valid_cache: dict[str, tuple[float, bool]] = {}
 
 _AUTH_FAIL_MARKERS = (
@@ -95,8 +95,18 @@ def load_screener_block() -> dict[str, str]:
     return out
 
 
-def is_screener_session_valid(cookies: Optional[dict[str, str]] = None) -> bool:
-    """Return True if cookies unlock Screener full-text search (logged-in feed)."""
+def is_screener_session_valid(
+    cookies: Optional[dict[str, str]] = None,
+    *,
+    force: bool = False,
+    soft: bool = False,
+) -> bool:
+    """
+    Return True if cookies unlock Screener full-text search (logged-in feed).
+
+    ``soft=True`` — for UI status only: skip network when no recent probe; assume
+    configured cookies are valid until **Check session** / ``force=True``.
+    """
     creds = cookies or {}
     sid = (creds.get("sessionid") or "").strip()
     if not sid:
@@ -105,8 +115,13 @@ def is_screener_session_valid(cookies: Optional[dict[str, str]] = None) -> bool:
     cache_key = sid[:16]
     now = time.time()
     hit = _session_valid_cache.get(cache_key)
-    if hit and (now - hit[0]) < _SESSION_VALID_CACHE_TTL_SEC:
+    if hit and (now - hit[0]) < _SESSION_VALID_CACHE_TTL_SEC and not force:
         return hit[1]
+    if soft and not force:
+        # Optimistic UI — avoid Screener HTTP on every page paint / navigation.
+        if hit is not None:
+            return hit[1]
+        return True
 
     try:
         headers = {

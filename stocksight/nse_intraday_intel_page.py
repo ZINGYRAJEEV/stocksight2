@@ -619,12 +619,12 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
             "(e.g. KOEL HyperNext 192 MW).",
         )
     with c3:
-        max_co = st.slider("Max companies", 5, 60, 40, key="nii_max")
+        max_co = st.slider("Max companies", 5, 60, 20, key="nii_max")
         include_tv_pead = st.checkbox(
             "TradingView news + PeAD",
-            value=True,
+            value=False,
             key="nii_tv_pead",
-            help="Pull TradingView headlines/rating and Screener quarterly PeAD (QoQ jump vs price drift).",
+            help="Pull TradingView headlines/rating and Screener quarterly PeAD (QoQ jump vs price drift). Slow — leave off until needed.",
         )
     sort_by = st.radio(
         "Sort results by",
@@ -768,9 +768,7 @@ Use with the **Intraday Screener** and **Gap Scanner** for tape confirmation.
             if not st.session_state.get("nii_auto_refresh"):
                 return
             _live_intel_body()
-    else:
-        @st.fragment
-        def _live_intel() -> None:
-            _live_intel_body()
 
-    _live_intel()
+        _live_intel()
+    else:
+        _live_intel_body()

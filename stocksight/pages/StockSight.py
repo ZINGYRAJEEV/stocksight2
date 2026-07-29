@@ -165,8 +165,8 @@ session_mgr.initialize()
 # User preferences
 enable_analysis_framework = st.sidebar.checkbox(
     "Enable 7-Category Analysis (Beta)",
-    value=True,
-    help="Adds Valuation, Profitability, Growth, Financial Health, Cash Flow, Management, Relative Strength scores"
+    value=False,
+    help="Adds Valuation, Profitability, Growth, Financial Health scores. Off by default (faster).",
 )
 
 col_h1, col_h2 = st.columns([3, 1])

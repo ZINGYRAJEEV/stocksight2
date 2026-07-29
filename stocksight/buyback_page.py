@@ -173,7 +173,7 @@ def _cached_groww_buybacks() -> list:
     return fetch_groww_buybacks()
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def _cached_buyback_announcements(max_age_days: int, enrich_prices: bool) -> list[dict]:
     anns = fetch_buyback_announcements(
         max_age_days=max_age_days,
@@ -276,7 +276,7 @@ def _render_live_announcements(groww_items: list | None = None) -> None:
     with c2:
         new_only = st.checkbox("New only", value=False, key="bb_ann_new_only")
     with c3:
-        enrich = st.checkbox("Load CMP", value=True, key="bb_ann_enrich")
+        enrich = st.checkbox("Load CMP", value=False, key="bb_ann_enrich")
     with c4:
         max_days = st.selectbox("Window", [7, 14, 30, 45], index=2, key="bb_ann_days")
 
@@ -385,12 +385,10 @@ def _render_live_announcements(groww_items: list | None = None) -> None:
             if not st.session_state.get("bb_ann_auto_refresh"):
                 return
             _live_feed_body()
-    else:
-        @st.fragment
-        def _live_feed() -> None:
-            _live_feed_body()
 
-    _live_feed()
+        _live_feed()
+    else:
+        _live_feed_body()
 
 
 def _render_screener_table(analyses: list, groww_items: list | None = None) -> None:

@@ -110,8 +110,12 @@ def set_screener_cookie_override(cookies: dict[str, str]) -> None:
         pass
 
 
-def get_screener_credentials(*, auto_refresh: bool = True) -> dict[str, str]:
-    """sessionid + csrftoken from env or Streamlit secrets (optional)."""
+def get_screener_credentials(*, auto_refresh: bool = False) -> dict[str, str]:
+    """sessionid + csrftoken from env or Streamlit secrets (optional).
+
+    ``auto_refresh`` defaults to False so page paints / feed fetches do not
+    trigger Screener login HTTP. Pass True from Refresh buttons if needed.
+    """
     out: dict[str, str] = {}
     try:
         import streamlit as st
@@ -191,7 +195,7 @@ def get_screener_credentials(*, auto_refresh: bool = True) -> dict[str, str]:
 
 
 def screener_login_configured() -> bool:
-    creds = get_screener_credentials()
+    creds = get_screener_credentials(auto_refresh=False)
     return bool(creds.get("sessionid"))
 
 

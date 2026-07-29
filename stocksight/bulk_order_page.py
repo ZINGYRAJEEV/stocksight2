@@ -150,7 +150,7 @@ def _cached_company_news(symbols: tuple[str, ...]) -> list[dict]:
     )
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def _cached_intel(
     order_query: str,
     strict_filter: bool,
@@ -404,9 +404,7 @@ def render_bulk_order_page() -> None:
             if not st.session_state.get("bo_auto_refresh"):
                 return
             _live_panel_body()
-    else:
-        @st.fragment
-        def _live_panel() -> None:
-            _live_panel_body()
 
-    _live_panel()
+        _live_panel()
+    else:
+        _live_panel_body()

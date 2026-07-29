@@ -95,7 +95,7 @@ def render_screener_session_panel(
     cookies = {k: block[k] for k in ("sessionid", "csrftoken") if block.get(k)}
     has_login = bool(cookies.get("sessionid"))
     has_auto = bool(block.get("email") and block.get("password"))
-    valid = is_screener_session_valid(cookies) if has_login else False
+    valid = is_screener_session_valid(cookies, soft=True) if has_login else False
     google_ok, google_reason = google_browser_login_supported()
     on_cloud = is_streamlit_cloud()
 
@@ -150,7 +150,7 @@ def render_screener_session_panel(
     if check:
         live = load_screener_block()
         live_cookies = {k: live[k] for k in ("sessionid", "csrftoken") if live.get(k)}
-        if is_screener_session_valid(live_cookies):
+        if is_screener_session_valid(live_cookies, force=True):
             st.toast("Screener session is valid.", icon="✅")
         else:
             st.toast("Screener session expired or missing.", icon="⚠️")

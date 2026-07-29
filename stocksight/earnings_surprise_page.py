@@ -87,8 +87,8 @@ def render_earnings_surprise_page() -> None:
 
     enable_analysis = st.sidebar.checkbox(
         "Enable 7-Category Analysis (Beta)",
-        value=True,
-        help="Adds Valuation, Profitability, Growth, Financial Health scores",
+        value=False,
+        help="Adds Valuation, Profitability, Growth, Financial Health scores. Off by default (faster).",
     )
 
     key = "esur"

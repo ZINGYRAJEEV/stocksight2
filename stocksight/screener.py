@@ -634,7 +634,18 @@ def fetch_price_history(ticker: str, interval_key: str = "1d") -> pd.DataFrame:
 
     NSE/BSE (.NS / .BO): uses ICICI Breeze when [breeze] secrets/env are set,
     otherwise Yahoo Finance via yfinance.
+
+    Results are cached ~5 minutes when Streamlit is available.
     """
+    try:
+        import streamlit as st
+
+        return _cached_fetch_price_history(str(ticker), str(interval_key))
+    except Exception:
+        return _fetch_price_history_uncached(ticker, interval_key)
+
+
+def _fetch_price_history_uncached(ticker: str, interval_key: str = "1d") -> pd.DataFrame:
     empty = pd.DataFrame()
     if ticker.endswith(".NS") or ticker.endswith(".BO"):
         try:
@@ -666,6 +677,17 @@ def fetch_price_history(ticker: str, interval_key: str = "1d") -> pd.DataFrame:
         return df if df is not None and not df.empty else empty
     except Exception:
         return empty
+
+
+try:
+    import streamlit as st
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _cached_fetch_price_history(ticker: str, interval_key: str) -> pd.DataFrame:
+        return _fetch_price_history_uncached(ticker, interval_key)
+except Exception:  # pragma: no cover — CLI / tests without Streamlit
+    def _cached_fetch_price_history(ticker: str, interval_key: str) -> pd.DataFrame:
+        return _fetch_price_history_uncached(ticker, interval_key)
 
 
 def min_bars_for_screen(interval_key: str) -> int:

@@ -250,51 +250,14 @@ def _decision_for_signal_result(r: SignalResult) -> tuple[str, float, str]:
 # Page-level CSS (call once per page)
 # ─────────────────────────────────────────────
 
-APP_CHROME_CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
-
-/* Sidebar nav — dark panel, light text (do not use html/body/[class*="css"] globals). */
-section[data-testid="stSidebar"],
-[data-testid="stSidebar"] {
-    background-color: #0d1f18 !important;
-    border-right: 1px solid #1a3b31 !important;
-    color: #e8f7ef !important;
-}
-[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-    background-color: #0d1f18 !important;
-    color: #e8f7ef !important;
-}
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] span,
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] a,
-[data-testid="stSidebarNav"] a,
-[data-testid="stSidebarNav"] span,
-[data-testid="stSidebarNavLink"],
-[data-testid="stSidebarNavLink"] span {
-    color: #e8f7ef !important;
-}
-[data-testid="stSidebarNavLink"][aria-current="page"],
-[data-testid="stSidebarNavLink"][aria-current="page"] span {
-    color: #25d366 !important;
-    font-weight: 600 !important;
-}
-[data-testid="stSidebar"] .stCaption,
-[data-testid="stSidebar"] small {
-    color: #a3d8b8 !important;
-}
-[data-testid="stSidebar"] hr {
-    border-color: #1a3b31 !important;
-}
-[data-testid="stSidebar"] button[kind="header"] {
-    color: #e8f7ef !important;
-}
-</style>
-"""
+try:
+    from .app_chrome import APP_CHROME_CSS, inject_app_chrome
+except ImportError:
+    from app_chrome import APP_CHROME_CSS, inject_app_chrome  # type: ignore
 
 BASE_CSS = """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap');
 :root {
     color-scheme: light;
     --app-bg: #f8fafc;
@@ -369,14 +332,12 @@ motion.div[data-baseweb="popover"] [role="option"]:hover {
 """
 
 
-def inject_app_chrome():
-    """Sidebar + nav styling — call once from Overview.py so every page has a readable menu."""
-    st.markdown(APP_CHROME_CSS, unsafe_allow_html=True)
-
-
 def inject_css():
     inject_app_chrome()
+    if st.session_state.get("_base_css_injected"):
+        return
     st.markdown(BASE_CSS, unsafe_allow_html=True)
+    st.session_state["_base_css_injected"] = True
 
 
 @st.cache_data(ttl=180)

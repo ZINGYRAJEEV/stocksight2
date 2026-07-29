@@ -185,9 +185,9 @@ except ImportError:
     from app import render_overview  # type: ignore[no-redef]
 
 try:
-    from stocksight.ui_components import inject_app_chrome
+    from stocksight.app_chrome import inject_app_chrome
 except ImportError:
-    from ui_components import inject_app_chrome  # type: ignore[no-redef]
+    from app_chrome import inject_app_chrome  # type: ignore[no-redef]
 
 try:
     from stocksight.adsense import render_adsense_footer, render_adsense_sidebar

@@ -92,8 +92,8 @@ class PEADFilters:
     min_volume_spike_ratio: float = 1.25
     recent_reporters_only: bool = False
     relaxed_scan: bool = False
-    info_delay_sec: float = 0.12
-    screener_delay_sec: float = 0.22
+    info_delay_sec: float = 0.05
+    screener_delay_sec: float = 0.12
 
 
 @dataclass
