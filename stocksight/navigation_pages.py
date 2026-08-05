@@ -339,6 +339,12 @@ def page_below_median_pe() -> None:
     render_below_median_pe_page()
 
 
+def page_investment_course() -> None:
+    from investment_course_page import render_investment_course_page
+
+    render_investment_course_page()
+
+
 def page_value_growth() -> None:
     from value_growth_page import render_value_growth_page
 
@@ -415,6 +421,7 @@ __all__ = [
     "page_pead_screener",
     "page_bonds_treasury",
     "page_below_median_pe",
+    "page_investment_course",
     "page_value_growth",
     "page_multibagger_patterns",
 ]

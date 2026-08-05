@@ -73,6 +73,7 @@ def _import_navigation_pages():
         "page_pead_screener",
         "page_bonds_treasury",
         "page_below_median_pe",
+        "page_investment_course",
         "page_value_growth",
         "page_multibagger_patterns",
         "page_fast_movers",
@@ -163,6 +164,7 @@ try:
     page_pead_screener = _nav["page_pead_screener"]
     page_bonds_treasury = _nav["page_bonds_treasury"]
     page_below_median_pe = _nav["page_below_median_pe"]
+    page_investment_course = _nav["page_investment_course"]
     page_value_growth = _nav["page_value_growth"]
     page_multibagger_patterns = _nav["page_multibagger_patterns"]
     page_fast_movers = _nav["page_fast_movers"]
@@ -272,6 +274,7 @@ NAV_PAGES = {
         st.Page(page_multibagger_patterns, title="Multi-Bagger Patterns", icon="🚀"),
         st.Page(page_value_growth, title="Value Growth (P/E · EPS)", icon="📐"),
         st.Page(page_below_median_pe, title="Healthy Below Median PE", icon="📉"),
+        st.Page(page_investment_course, title="Investment Course (Lynch Categories)", icon="📘"),
     ],
     "🤖 Algo Strategy": [
         st.Page(page_algo_strategy_hub, title="Algo Strategy Hub", icon="🤖"),
