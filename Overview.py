@@ -266,12 +266,12 @@ NAV_PAGES = {
         st.Page(page_earnings_surprise, title="Earnings Surprise", icon="💎"),
         st.Page(page_pead_screener, title="PEAD Screener", icon="📈"),
         st.Page(page_bonds_treasury, title="Bonds & Treasury", icon="🏛️"),
-        st.Page(page_below_median_pe, title="Below Median PE", icon="📉"),
         st.Page(page_crisis_value, title="Crisis Value (Steady Earnings)", icon="🏦"),
     ],
     "📚 My Learning": [
         st.Page(page_multibagger_patterns, title="Multi-Bagger Patterns", icon="🚀"),
         st.Page(page_value_growth, title="Value Growth (P/E · EPS)", icon="📐"),
+        st.Page(page_below_median_pe, title="Healthy Below Median PE", icon="📉"),
     ],
     "🤖 Algo Strategy": [
         st.Page(page_algo_strategy_hub, title="Algo Strategy Hub", icon="🤖"),
