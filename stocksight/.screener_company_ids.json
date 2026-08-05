@@ -23,5 +23,830 @@
     "id": 903,
     "name": "Elecon Engineering Company Ltd",
     "slug": "ELECON"
+  },
+  "SBIN": {
+    "id": 3188,
+    "name": "State Bank of India",
+    "slug": "SBIN"
+  },
+  "HDFCBANK": {
+    "id": 1298,
+    "name": "HDFC Bank Ltd",
+    "slug": "HDFCBANK"
+  },
+  "BHARTIARTL": {
+    "id": 467,
+    "name": "Bharti Airtel Ltd",
+    "slug": "BHARTIARTL"
+  },
+  "TITAN": {
+    "id": 3437,
+    "name": "Titan Company Ltd",
+    "slug": "TITAN"
+  },
+  "ICICIBANK": {
+    "id": 1384,
+    "name": "ICICI Bank Ltd",
+    "slug": "ICICIBANK"
+  },
+  "TATACONSUM": {
+    "id": 3367,
+    "name": "Tata Consumer Products Ltd",
+    "slug": "TATACONSUM"
+  },
+  "RELIANCE": {
+    "id": 2726,
+    "name": "Reliance Industries Ltd",
+    "slug": "RELIANCE"
+  },
+  "AXISBANK": {
+    "id": 348,
+    "name": "Axis Bank Ltd",
+    "slug": "AXISBANK"
+  },
+  "INFY": {
+    "id": 1489,
+    "name": "Infosys Ltd",
+    "slug": "INFY"
+  },
+  "MARUTI": {
+    "id": 2023,
+    "name": "Maruti Suzuki India Ltd",
+    "slug": "MARUTI"
+  },
+  "ETERNAL": {
+    "id": 1274894,
+    "name": "Eternal Ltd",
+    "slug": "ETERNAL"
+  },
+  "KOTAKBANK": {
+    "id": 1818,
+    "name": "Kotak Mahindra Bank Ltd",
+    "slug": "KOTAKBANK"
+  },
+  "LT": {
+    "id": 1870,
+    "name": "Larsen & Toubro Ltd",
+    "slug": "LT"
+  },
+  "INDIGO": {
+    "id": 1273121,
+    "name": "Interglobe Aviation Ltd",
+    "slug": "INDIGO"
+  },
+  "M&M": {
+    "id": 1973,
+    "name": "Mahindra & Mahindra Ltd",
+    "slug": "M&M"
+  },
+  "ADANIPORTS": {
+    "id": 57,
+    "name": "Adani Ports & Special Economic Zone Ltd",
+    "slug": "ADANIPORTS"
+  },
+  "SHRIRAMFIN": {
+    "id": 3046,
+    "name": "Shriram Finance Ltd",
+    "slug": "SHRIRAMFIN"
+  },
+  "BAJFINANCE": {
+    "id": 372,
+    "name": "Bajaj Finance Ltd",
+    "slug": "BAJFINANCE"
+  },
+  "SUNPHARMA": {
+    "id": 3245,
+    "name": "Sun Pharmaceutical Industries Ltd",
+    "slug": "SUNPHARMA"
+  },
+  "TCS": {
+    "id": 3365,
+    "name": "Tata Consultancy Services Ltd",
+    "slug": "TCS"
+  },
+  "ITC": {
+    "id": 1552,
+    "name": "ITC Ltd",
+    "slug": "ITC"
+  },
+  "JIOFIN": {
+    "id": 1284422,
+    "name": "Jio Financial Services Ltd",
+    "slug": "JIOFIN"
+  },
+  "HINDUNILVR": {
+    "id": 1350,
+    "name": "Hindustan Unilever Ltd",
+    "slug": "HINDUNILVR"
+  },
+  "NTPC": {
+    "id": 2303,
+    "name": "NTPC Ltd",
+    "slug": "NTPC"
+  },
+  "HINDALCO": {
+    "id": 1328,
+    "name": "Hindalco Industries Ltd",
+    "slug": "HINDALCO"
+  },
+  "APOLLOHOSP": {
+    "id": 218,
+    "name": "Apollo Hospitals Enterprise Ltd",
+    "slug": "APOLLOHOSP"
+  },
+  "TATASTEEL": {
+    "id": 3373,
+    "name": "Tata Steel Ltd",
+    "slug": "TATASTEEL"
+  },
+  "BEL": {
+    "id": 456,
+    "name": "Bharat Electronics Ltd",
+    "slug": "BEL"
+  },
+  "ASIANPAINT": {
+    "id": 295,
+    "name": "Asian Paints Ltd",
+    "slug": "ASIANPAINT"
+  },
+  "ADANIENT": {
+    "id": 56,
+    "name": "Adani Enterprises Ltd",
+    "slug": "ADANIENT"
+  },
+  "MAXHEALTH": {
+    "id": 1274774,
+    "name": "Max Healthcare Institute Ltd",
+    "slug": "MAXHEALTH"
+  },
+  "HCLTECH": {
+    "id": 1297,
+    "name": "HCL Technologies Ltd",
+    "slug": "HCLTECH"
+  },
+  "COALINDIA": {
+    "id": 681,
+    "name": "Coal India Ltd",
+    "slug": "COALINDIA"
+  },
+  "BAJAJ-AUTO": {
+    "id": 369,
+    "name": "Bajaj Auto Ltd",
+    "slug": "BAJAJ-AUTO"
+  },
+  "POWERGRID": {
+    "id": 2523,
+    "name": "Power Grid Corporation of India Ltd",
+    "slug": "POWERGRID"
+  },
+  "ULTRACEMCO": {
+    "id": 3525,
+    "name": "UltraTech Cement Ltd",
+    "slug": "ULTRACEMCO"
+  },
+  "HDFCLIFE": {
+    "id": 1274197,
+    "name": "HDFC Life Insurance Company Ltd",
+    "slug": "HDFCLIFE"
+  },
+  "EICHERMOT": {
+    "id": 888,
+    "name": "Eicher Motors Ltd",
+    "slug": "EICHERMOT"
+  },
+  "NESTLEIND": {
+    "id": 2236,
+    "name": "Nestle India Ltd",
+    "slug": "NESTLEIND"
+  },
+  "TECHM": {
+    "id": 100068,
+    "name": "Tech Mahindra Ltd",
+    "slug": "TECHM"
+  },
+  "ONGC": {
+    "id": 2320,
+    "name": "Oil & Natural Gas Corpn Ltd",
+    "slug": "ONGC"
+  },
+  "DRREDDY": {
+    "id": 852,
+    "name": "Dr Reddys Laboratories Ltd",
+    "slug": "DRREDDY"
+  },
+  "CIPLA": {
+    "id": 661,
+    "name": "Cipla Ltd",
+    "slug": "CIPLA"
+  },
+  "TRENT": {
+    "id": 3467,
+    "name": "Trent Ltd",
+    "slug": "TRENT"
+  },
+  "WIPRO": {
+    "id": 3763,
+    "name": "Wipro Ltd",
+    "slug": "WIPRO"
+  },
+  "GRASIM": {
+    "id": 1198,
+    "name": "Grasim Industries Ltd",
+    "slug": "GRASIM"
+  },
+  "TMPV": {
+    "id": 3370,
+    "name": "Tata Motors Passenger Vehicles Ltd",
+    "slug": "TMPV"
+  },
+  "JSWSTEEL": {
+    "id": 1657,
+    "name": "JSW Steel Ltd",
+    "slug": "JSWSTEEL"
+  },
+  "SBILIFE": {
+    "id": 1274150,
+    "name": "SBI Life Insurance Company Ltd",
+    "slug": "SBILIFE"
+  },
+  "BAJAJFINSV": {
+    "id": 373,
+    "name": "Bajaj Finserv Ltd",
+    "slug": "BAJAJFINSV"
+  },
+  "IDEA": {
+    "id": 1388,
+    "name": "Vodafone Idea Ltd",
+    "slug": "IDEA"
+  },
+  "MCX": {
+    "id": 2156,
+    "name": "Multi Commodity Exchange of India Ltd",
+    "slug": "MCX"
+  },
+  "BSE": {
+    "id": 1273635,
+    "name": "BSE Ltd",
+    "slug": "BSE"
+  },
+  "HFCL": {
+    "id": 1319,
+    "name": "HFCL Ltd",
+    "slug": "HFCL"
+  },
+  "ABB": {
+    "id": 27,
+    "name": "ABB India Ltd",
+    "slug": "ABB"
+  },
+  "AFFLE": {
+    "id": 1274684,
+    "name": "Affle 3i Ltd",
+    "slug": "AFFLE"
+  },
+  "ATHERENERG": {
+    "id": 1285444,
+    "name": "Ather Energy Ltd",
+    "slug": "ATHERENERG"
+  },
+  "SCI": {
+    "id": 2984,
+    "name": "Shipping Corporation of India Ltd",
+    "slug": "SCI"
+  },
+  "KALYANKJIL": {
+    "id": 1274850,
+    "name": "Kalyan Jewellers India Ltd",
+    "slug": "KALYANKJIL"
+  },
+  "JBMA": {
+    "id": 1604,
+    "name": "JBM Auto Ltd",
+    "slug": "JBMA"
+  },
+  "HSCL": {
+    "id": 1320,
+    "name": "Himadri Speciality Chemical Ltd",
+    "slug": "HSCL"
+  },
+  "CANBK": {
+    "id": 579,
+    "name": "Canara Bank",
+    "slug": "CANBK"
+  },
+  "MAPMYINDIA": {
+    "id": 1275122,
+    "name": "C.E. Info Systems Ltd",
+    "slug": "MAPMYINDIA"
+  },
+  "COFORGE": {
+    "id": 2262,
+    "name": "Coforge Ltd",
+    "slug": "COFORGE"
+  },
+  "VEDL": {
+    "id": 2943,
+    "name": "Vedanta Ltd",
+    "slug": "VEDL"
+  },
+  "HYUNDAI": {
+    "id": 1285116,
+    "name": "Hyundai Motor India Ltd",
+    "slug": "HYUNDAI"
+  },
+  "GROWW": {
+    "id": 1285755,
+    "name": "Billionbrains Garage Ventures Ltd",
+    "slug": "GROWW"
+  },
+  "LUPIN": {
+    "id": 1924,
+    "name": "Lupin Ltd",
+    "slug": "LUPIN"
+  },
+  "BHEL": {
+    "id": 460,
+    "name": "Bharat Heavy Electricals Ltd",
+    "slug": "BHEL"
+  },
+  "BANKBARODA": {
+    "id": 395,
+    "name": "Bank of Baroda",
+    "slug": "BANKBARODA"
+  },
+  "ADANIPOWER": {
+    "id": 58,
+    "name": "Adani Power Ltd",
+    "slug": "ADANIPOWER"
+  },
+  "DIXON": {
+    "id": 1274137,
+    "name": "Dixon Technologies (India) Ltd",
+    "slug": "DIXON"
+  },
+  "SWIGGY": {
+    "id": 1285142,
+    "name": "Swiggy Ltd",
+    "slug": "SWIGGY"
+  },
+  "SAIL": {
+    "id": 3192,
+    "name": "Steel Authority of India Ltd",
+    "slug": "SAIL"
+  },
+  "ADANIENSOL": {
+    "id": 1272969,
+    "name": "Adani Energy Solutions Ltd",
+    "slug": "ADANIENSOL"
+  },
+  "CRAFTSMAN": {
+    "id": 1274849,
+    "name": "Craftsman Automation Ltd",
+    "slug": "CRAFTSMAN"
+  },
+  "HAL": {
+    "id": 1274307,
+    "name": "Hindustan Aeronautics Ltd",
+    "slug": "HAL"
+  },
+  "ADANIGREEN": {
+    "id": 1274366,
+    "name": "Adani Green Energy Ltd",
+    "slug": "ADANIGREEN"
+  },
+  "NETWEB": {
+    "id": 1284419,
+    "name": "Netweb Technologies India Ltd",
+    "slug": "NETWEB"
+  },
+  "KAYNES": {
+    "id": 1275358,
+    "name": "Kaynes Technology India Ltd",
+    "slug": "KAYNES"
+  },
+  "UPL": {
+    "id": 3554,
+    "name": "UPL Ltd",
+    "slug": "UPL"
+  },
+  "BIOCON": {
+    "id": 487,
+    "name": "Biocon Ltd",
+    "slug": "BIOCON"
+  },
+  "MEESHO": {
+    "id": 1285799,
+    "name": "Meesho Ltd",
+    "slug": "MEESHO"
+  },
+  "NIVABUPA": {
+    "id": 1285147,
+    "name": "Niva Bupa Health Insurance Company Ltd",
+    "slug": "NIVABUPA"
+  },
+  "BANKINDIA": {
+    "id": 396,
+    "name": "Bank of India",
+    "slug": "BANKINDIA"
+  },
+  "YESBANK": {
+    "id": 3783,
+    "name": "Yes Bank Ltd",
+    "slug": "YESBANK"
+  },
+  "OLAELEC": {
+    "id": 1284881,
+    "name": "Ola Electric Mobility Ltd",
+    "slug": "OLAELEC"
+  },
+  "GRSE": {
+    "id": 1274573,
+    "name": "Garden Reach Shipbuilders & Engineers Ltd",
+    "slug": "GRSE"
+  },
+  "POWERINDIA": {
+    "id": 1274744,
+    "name": "Hitachi Energy India Ltd",
+    "slug": "POWERINDIA"
+  },
+  "CGPOWER": {
+    "id": 739,
+    "name": "CG Power & Industrial Solutions Ltd",
+    "slug": "CGPOWER"
+  },
+  "MAZDOCK": {
+    "id": 1274794,
+    "name": "Mazagon Dock Shipbuilders Ltd",
+    "slug": "MAZDOCK"
+  },
+  "URBANCO": {
+    "id": 1285641,
+    "name": "Urban Company Ltd",
+    "slug": "URBANCO"
+  },
+  "SONACOMS": {
+    "id": 1274879,
+    "name": "Sona BLW Precision Forgings Ltd",
+    "slug": "SONACOMS"
+  },
+  "LAURUSLABS": {
+    "id": 1273603,
+    "name": "Laurus Labs Ltd",
+    "slug": "LAURUSLABS"
+  },
+  "SUZLON": {
+    "id": 3305,
+    "name": "Suzlon Energy Ltd",
+    "slug": "SUZLON"
+  },
+  "HDFCAMC": {
+    "id": 1274395,
+    "name": "HDFC Asset Management Company Ltd",
+    "slug": "HDFCAMC"
+  },
+  "SIEMENS": {
+    "id": 3061,
+    "name": "Siemens Ltd",
+    "slug": "SIEMENS"
+  },
+  "LENSKART": {
+    "id": 1285752,
+    "name": "Lenskart Solutions Ltd",
+    "slug": "LENSKART"
+  },
+  "INDUSTOWER": {
+    "id": 244384,
+    "name": "Indus Towers Ltd",
+    "slug": "INDUSTOWER"
+  },
+  "HINDCOPPER": {
+    "id": 1338,
+    "name": "Hindustan Copper Ltd",
+    "slug": "HINDCOPPER"
+  },
+  "THERMAX": {
+    "id": 3412,
+    "name": "Thermax Ltd",
+    "slug": "THERMAX"
+  },
+  "WOCKPHARMA": {
+    "id": 3767,
+    "name": "Wockhardt Ltd",
+    "slug": "WOCKPHARMA"
+  },
+  "FEDERALBNK": {
+    "id": 1002,
+    "name": "Federal Bank Ltd",
+    "slug": "FEDERALBNK"
+  },
+  "OLECTRA": {
+    "id": 1178,
+    "name": "Olectra Greentech Ltd",
+    "slug": "OLECTRA"
+  },
+  "WAAREEENER": {
+    "id": 1285121,
+    "name": "Waaree Energies Ltd",
+    "slug": "WAAREEENER"
+  },
+  "TEJASNET": {
+    "id": 1274086,
+    "name": "Tejas Networks Ltd",
+    "slug": "TEJASNET"
+  },
+  "CDSL": {
+    "id": 1274088,
+    "name": "Central Depository Services (India) Ltd",
+    "slug": "CDSL"
+  },
+  "TMCV": {
+    "id": 1285768,
+    "name": "Tata Motors Ltd",
+    "slug": "TMCV"
+  },
+  "GALLANTT": {
+    "id": 1082,
+    "name": "Gallantt Ispat Ltd.",
+    "slug": "GALLANTT"
+  },
+  "DATAPATTNS": {
+    "id": 1275127,
+    "name": "Data Patterns (India) Ltd",
+    "slug": "DATAPATTNS"
+  },
+  "AMBER": {
+    "id": 1274257,
+    "name": "Amber Enterprises India Ltd",
+    "slug": "AMBER"
+  },
+  "CHOLAFIN": {
+    "id": 648,
+    "name": "Cholamandalam Investment & Finance Company Ltd",
+    "slug": "CHOLAFIN"
+  },
+  "DALBHARAT": {
+    "id": 1274605,
+    "name": "Dalmia Bharat Ltd",
+    "slug": "DALBHARAT"
+  },
+  "KIMS": {
+    "id": 1274885,
+    "name": "Krishna Institute of Medical Sciences Ltd",
+    "slug": "KIMS"
+  },
+  "BHARATFORG": {
+    "id": 458,
+    "name": "Bharat Forge Ltd",
+    "slug": "BHARATFORG"
+  },
+  "GODREJCP": {
+    "id": 1164,
+    "name": "Godrej Consumer Products Ltd",
+    "slug": "GODREJCP"
+  },
+  "EMMVEE": {
+    "id": 1285761,
+    "name": "Emmvee Photovoltaic Power Ltd",
+    "slug": "EMMVEE"
+  },
+  "PPLPHARMA": {
+    "id": 1275345,
+    "name": "Piramal Pharma Ltd",
+    "slug": "PPLPHARMA"
+  },
+  "JSWENERGY": {
+    "id": 1655,
+    "name": "JSW Energy Ltd",
+    "slug": "JSWENERGY"
+  },
+  "TORNTPHARM": {
+    "id": 3445,
+    "name": "Torrent Pharmaceuticals Ltd",
+    "slug": "TORNTPHARM"
+  },
+  "ASHOKLEY": {
+    "id": 281,
+    "name": "Ashok Leyland Ltd",
+    "slug": "ASHOKLEY"
+  },
+  "VIJAYA": {
+    "id": 1274919,
+    "name": "Vijaya Diagnostic Centre Ltd",
+    "slug": "VIJAYA"
+  },
+  "CUMMINSIND": {
+    "id": 744,
+    "name": "Cummins India Ltd",
+    "slug": "CUMMINSIND"
+  },
+  "PVRINOX": {
+    "id": 2604,
+    "name": "PVR Inox Ltd",
+    "slug": "PVRINOX"
+  },
+  "FORTIS": {
+    "id": 1040,
+    "name": "Fortis Healthcare Ltd",
+    "slug": "FORTIS"
+  },
+  "SYNGENE": {
+    "id": 1272977,
+    "name": "Syngene International Ltd",
+    "slug": "SYNGENE"
+  },
+  "NATIONALUM": {
+    "id": 2203,
+    "name": "National Aluminium Company Ltd",
+    "slug": "NATIONALUM"
+  },
+  "HINDZINC": {
+    "id": 1351,
+    "name": "Hindustan Zinc Ltd",
+    "slug": "HINDZINC"
+  },
+  "SHYAMMETL": {
+    "id": 1274880,
+    "name": "Shyam Metalics & Energy Ltd",
+    "slug": "SHYAMMETL"
+  },
+  "POLYCAB": {
+    "id": 1274653,
+    "name": "Polycab India Ltd",
+    "slug": "POLYCAB"
+  },
+  "FSL": {
+    "id": 1029,
+    "name": "Firstsource Solutions Ltd",
+    "slug": "FSL"
+  },
+  "BANDHANBNK": {
+    "id": 1274308,
+    "name": "Bandhan Bank Ltd",
+    "slug": "BANDHANBNK"
+  },
+  "MARICO": {
+    "id": 2014,
+    "name": "Marico Ltd",
+    "slug": "MARICO"
+  },
+  "KEI": {
+    "id": 1744,
+    "name": "KEI Industries Ltd",
+    "slug": "KEI"
+  },
+  "PFC": {
+    "id": 2522,
+    "name": "Power Finance Corporation Ltd",
+    "slug": "PFC"
+  },
+  "PNB": {
+    "id": 2600,
+    "name": "Punjab National Bank",
+    "slug": "PNB"
+  },
+  "JAINREC": {
+    "id": 1285688,
+    "name": "Jain Resource Recycling Ltd",
+    "slug": "JAINREC"
+  },
+  "GSPL": {
+    "id": 1255,
+    "name": "Gujarat State Petronet Ltd",
+    "slug": "GSPL"
+  },
+  "COCHINSHIP": {
+    "id": 1274120,
+    "name": "Cochin Shipyard Ltd",
+    "slug": "COCHINSHIP"
+  },
+  "SOLARINDS": {
+    "id": 3115,
+    "name": "Solar Industries India Ltd",
+    "slug": "SOLARINDS"
+  },
+  "ANANTRAJ": {
+    "id": 183,
+    "name": "Anant Raj Ltd",
+    "slug": "ANANTRAJ"
+  },
+  "PAYTM": {
+    "id": 1275094,
+    "name": "One 97 Communications Ltd",
+    "slug": "PAYTM"
+  },
+  "FORCEMOT": {
+    "id": 1039,
+    "name": "Force Motors Ltd",
+    "slug": "FORCEMOT"
+  },
+  "LICHSGFIN": {
+    "id": 1888,
+    "name": "LIC Housing Finance Ltd",
+    "slug": "LICHSGFIN"
+  },
+  "CREDITACC": {
+    "id": 1274399,
+    "name": "CreditAccess Grameen Ltd",
+    "slug": "CREDITACC"
+  },
+  "HINDPETRO": {
+    "id": 1348,
+    "name": "Hindustan Petroleum Corporation Ltd",
+    "slug": "HINDPETRO"
+  },
+  "NBCC": {
+    "id": 2204,
+    "name": "NBCC (India) Ltd",
+    "slug": "NBCC"
+  },
+  "GMDCLTD": {
+    "id": 1242,
+    "name": "Gujarat Mineral Development Corporation Ltd",
+    "slug": "GMDCLTD"
+  },
+  "GLENMARK": {
+    "id": 1144,
+    "name": "Glenmark Pharmaceuticals Ltd",
+    "slug": "GLENMARK"
+  },
+  "TVSMOTOR": {
+    "id": 3502,
+    "name": "TVS Motor Company Ltd",
+    "slug": "TVSMOTOR"
+  },
+  "SYRMA": {
+    "id": 1275268,
+    "name": "Syrma SGS Technology Ltd",
+    "slug": "SYRMA"
+  },
+  "CARTRADE": {
+    "id": 1274909,
+    "name": "Cartrade Tech Ltd",
+    "slug": "CARTRADE"
+  },
+  "MAHABANK": {
+    "id": 397,
+    "name": "Bank of Maharashtra",
+    "slug": "MAHABANK"
+  },
+  "TATAPOWER": {
+    "id": 3371,
+    "name": "Tata Power Company Ltd",
+    "slug": "TATAPOWER"
+  },
+  "TIPSMUSIC": {
+    "id": 3429,
+    "name": "Tips Music Ltd",
+    "slug": "TIPSMUSIC"
+  },
+  "GRAVITA": {
+    "id": 1202,
+    "name": "Gravita India Ltd",
+    "slug": "GRAVITA"
+  },
+  "ICICIAMC": {
+    "id": 1285819,
+    "name": "ICICI Prudential Asset Management Co Ltd",
+    "slug": "ICICIAMC"
+  },
+  "ESABINDIA": {
+    "id": 953,
+    "name": "Esab India Ltd",
+    "slug": "ESABINDIA"
+  },
+  "INGERRAND": {
+    "id": 1495,
+    "name": "Ingersoll-Rand (India) Ltd",
+    "slug": "INGERRAND"
+  },
+  "ANANDRATHI": {
+    "id": 1275117,
+    "name": "Anand Rathi Wealth Ltd",
+    "slug": "ANANDRATHI"
+  },
+  "TENNIND": {
+    "id": 1285764,
+    "name": "Tenneco Clean Air India Ltd",
+    "slug": "TENNIND"
+  },
+  "VIVIDHA": {
+    "id": 3682,
+    "name": "Visagar Polytex Ltd",
+    "slug": "VIVIDHA"
+  },
+  "NINSYS": {
+    "id": 1273332,
+    "name": "NINtec Systems Ltd",
+    "slug": "NINSYS"
+  },
+  "INFLUX": {
+    "id": 1285492,
+    "name": "Influx Healthtech Ltd",
+    "slug": "INFLUX"
+  },
+  "MOBILISE": {
+    "id": 1285901,
+    "name": "Mobilise App Lab Ltd",
+    "slug": "MOBILISE"
   }
 }

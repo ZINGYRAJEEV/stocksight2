@@ -146,6 +146,7 @@ def build_pe_history(
         )
 
     pe_vals = [p.pe for p in points if p.pe is not None and p.pe > 0]
+    fy_pe_vals = [p.pe for p in points if p.kind == "fy" and p.pe is not None and p.pe > 0]
     meta: dict[str, Any] = {
         "ticker": disp,
         "raw_ticker": raw,
@@ -155,16 +156,25 @@ def build_pe_history(
         "current_eps": cur_eps,
         "current_price": cur_price,
         "median_pe": round(float(np.median(pe_vals)), 2) if pe_vals else None,
+        "fy_median_pe": round(float(np.median(fy_pe_vals)), 2) if fy_pe_vals else None,
         "min_pe": round(min(pe_vals), 2) if pe_vals else None,
         "max_pe": round(max(pe_vals), 2) if pe_vals else None,
         "eps_source": "Screener.in consolidated P&L (EPS in Rs, Mar FY)",
         "price_source": "Yahoo Finance adjusted close at/near 31 Mar FY",
+        "roce_pct": profile.get("roce_pct"),
+        "roe_pct": profile.get("roe_pct"),
+        "profit_growth_3y_pct": profile.get("profit_growth_3y_pct"),
+        "profit_growth_ttm_pct": profile.get("profit_growth_ttm_pct"),
+        "market_cap_cr": profile.get("market_cap_cr"),
+        "profile": profile,
     }
-    if points and meta["current_pe"] and meta["median_pe"]:
+    median_ref = meta["fy_median_pe"] if meta["fy_median_pe"] is not None else meta["median_pe"]
+    if points and meta["current_pe"] and median_ref:
         meta["pct_vs_median"] = round(
-            (float(meta["current_pe"]) / float(meta["median_pe"]) - 1.0) * 100.0,
+            (float(meta["current_pe"]) / float(median_ref) - 1.0) * 100.0,
             1,
         )
+        meta["pct_vs_fy_median"] = meta["pct_vs_median"] if meta["fy_median_pe"] else None
     return points, meta
 
 
