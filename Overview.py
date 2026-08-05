@@ -71,6 +71,7 @@ def _import_navigation_pages():
         "page_valuation_rulebook",
         "page_earnings_surprise",
         "page_pead_screener",
+        "page_bonds_treasury",
         "page_value_growth",
         "page_multibagger_patterns",
         "page_fast_movers",
@@ -159,6 +160,7 @@ try:
     page_valuation_rulebook = _nav["page_valuation_rulebook"]
     page_earnings_surprise = _nav["page_earnings_surprise"]
     page_pead_screener = _nav["page_pead_screener"]
+    page_bonds_treasury = _nav["page_bonds_treasury"]
     page_value_growth = _nav["page_value_growth"]
     page_multibagger_patterns = _nav["page_multibagger_patterns"]
     page_fast_movers = _nav["page_fast_movers"]
@@ -261,6 +263,7 @@ NAV_PAGES = {
         st.Page(page_valuation_rulebook, title="Valuation Rulebook", icon="🧮"),
         st.Page(page_earnings_surprise, title="Earnings Surprise", icon="💎"),
         st.Page(page_pead_screener, title="PEAD Screener", icon="📈"),
+        st.Page(page_bonds_treasury, title="Bonds & Treasury", icon="🏛️"),
         st.Page(page_crisis_value, title="Crisis Value (Steady Earnings)", icon="🏦"),
     ],
     "📚 My Learning": [

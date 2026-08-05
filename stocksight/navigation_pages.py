@@ -327,6 +327,12 @@ def page_pead_screener() -> None:
     render_pead_page()
 
 
+def page_bonds_treasury() -> None:
+    from bonds_treasury_page import render_bonds_treasury_page
+
+    render_bonds_treasury_page()
+
+
 def page_value_growth() -> None:
     from value_growth_page import render_value_growth_page
 
@@ -401,6 +407,7 @@ __all__ = [
     "page_valuation_rulebook",
     "page_earnings_surprise",
     "page_pead_screener",
+    "page_bonds_treasury",
     "page_value_growth",
     "page_multibagger_patterns",
 ]
