@@ -1,53 +1,23 @@
 {
-  "GANESHIN": {
-    "id": 1285176,
-    "name": "Ganesh Infraworld Ltd",
-    "slug": "GANESHIN"
+  "VIVIANA": {
+    "id": 1275293,
+    "name": "Viviana Power Tech Ltd",
+    "slug": "VIVIANA"
   },
-  "TECHD": {
-    "id": 1285651,
-    "name": "TechD Cybersecurity Ltd",
-    "slug": "TECHD"
+  "SILVERTUC": {
+    "id": 1274204,
+    "name": "Silver Touch Technologies Ltd",
+    "slug": "SILVERTUC"
   },
-  "ADISOFT": {
-    "id": 1285969,
-    "name": "Adisoft Technologies Ltd",
-    "slug": "ADISOFT"
+  "531297": {
+    "id": 255,
+    "name": "Artefact Projects Ltd",
+    "slug": "531297"
   },
-  "NIYATILEAS": {
-    "id": 2286,
-    "name": "Veerhealth Care Ltd",
-    "slug": "NIYATILEAS"
-  },
-  "INNOMET": {
-    "id": 1284977,
-    "name": "Innomet Advanced Materials Ltd",
-    "slug": "INNOMET"
-  },
-  "DYNAMIC": {
-    "id": 1274980,
-    "name": "Dynamic Services & Security Ltd",
-    "slug": "DYNAMIC"
-  },
-  "ADVAIT": {
-    "id": 1274785,
-    "name": "Advait Energy Transitions Limited",
-    "slug": "ADVAIT"
-  },
-  "538713": {
-    "id": 1085309,
-    "name": "Atishay Ltd",
-    "slug": "538713"
-  },
-  "HECPROJECT": {
-    "id": 1270259,
-    "name": "HEC Infra Projects Ltd",
-    "slug": "HECPROJECT"
-  },
-  "VDEAL": {
-    "id": 1284947,
-    "name": "Vdeal System Ltd",
-    "slug": "VDEAL"
+  "544189": {
+    "id": 1284801,
+    "name": "Sattrix Information Security Ltd",
+    "slug": "544189"
   },
   "ELECON": {
     "id": 903,
