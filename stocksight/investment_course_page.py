@@ -55,12 +55,18 @@ Aligned with [`docs/Stock_Analysis_Workflow_1.md`](docs/Stock_Analysis_Workflow_
 2. Identify growth drivers (AR / presentations) — *manual*  
 3. Future growth (concalls / guidance) — *manual*  
 4. Valuation: **PE vs historical median** + **PEG** (PEG &lt; 1 buy · =1 fair · &gt; 1 avoid)  
+   → use the in-app **Valuation Rulebook** for discounted-PE / forward models  
 5. Story building (mgmt / Glassdoor / risks) — *manual via research links*
 
 ### SHARED — Quick-Fire Numbers Checklist (final pass)
 Sales & profit CAGR · OPM trend · interest reducing YoY · tax caution if falling · net profit YoY  
 (+ Google scam check via link — not automated)
 """
+        )
+        st.page_link(
+            "page_valuation_rulebook",
+            label="Open Valuation Rulebook (discounted PE / forward model)",
+            icon="🧮",
         )
         st.markdown("**Key websites/tools**")
         for name, use in RESEARCH_TOOLS:
@@ -145,6 +151,12 @@ def render_investment_course_page() -> None:
             )
         with c2:
             st.markdown("#### Workflow A valuation")
+            st.page_link(
+                "page_valuation_rulebook",
+                label="Valuation Rulebook",
+                icon="🧮",
+                help="Forward EPS x P/E and discounted fair value (My Learning).",
+            )
             max_peg = st.slider("Max PEG (buy zone)", 0.5, 2.0, 1.0, 0.05, key=f"{key}_peg")
             max_pct = st.slider(
                 "Max vs FY median % (Stalwart / PE check)",

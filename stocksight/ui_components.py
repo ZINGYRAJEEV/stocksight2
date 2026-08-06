@@ -1384,7 +1384,7 @@ def _render_pre_buy_research_card(
             st.session_state.val_prefill_ticker = sym_clean
             st.session_state.val_baseline = None
             st.success(
-                f"**{sym_clean}** queued. Open **🌱 Theme Screens → Valuation Rulebook** in the sidebar."
+                f"**{sym_clean}** queued. Open **📚 My Learning → Valuation Rulebook** in the sidebar."
             )
 
     # Analyst section — only show if any analyst column is populated
