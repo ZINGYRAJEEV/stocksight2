@@ -274,7 +274,7 @@ NAV_PAGES = {
         st.Page(page_multibagger_patterns, title="Multi-Bagger Patterns", icon="🚀"),
         st.Page(page_value_growth, title="Value Growth (P/E · EPS)", icon="📐"),
         st.Page(page_below_median_pe, title="Healthy Below Median PE", icon="📉"),
-        st.Page(page_investment_course, title="Investment Course (Lynch Categories)", icon="📘"),
+        st.Page(page_investment_course, title="Investment Course (Workflow)", icon="📘"),
     ],
     "🤖 Algo Strategy": [
         st.Page(page_algo_strategy_hub, title="Algo Strategy Hub", icon="🤖"),

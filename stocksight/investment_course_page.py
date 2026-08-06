@@ -1,4 +1,4 @@
-"""Investment Course Screener — Streamlit UI (FF Basic→Advance notes)."""
+"""Investment Course Screener — UI aligned to Stock_Analysis_Workflow_1.md."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import streamlit as st
 from investment_course_screener import (
     META,
     RANK_BY_OPTIONS,
+    RESEARCH_TOOLS,
     SCAN_MODES,
     SCAN_SOURCES,
     InvestmentCourseFilters,
@@ -34,40 +35,70 @@ from ui_components import (
 
 
 def _rules_panel() -> None:
-    with st.expander("📖 How this screen works (course rules)", expanded=True):
+    with st.expander("📖 Stock Analysis Workflow 1 — how this screen works", expanded=True):
         st.markdown(
             """
-Inspired by **Basic → Advance** investment course notes (Lynch-style categories).
-Educational only — not affiliated with any course provider.
+Aligned with [`docs/Stock_Analysis_Workflow_1.md`](docs/Stock_Analysis_Workflow_1.md)
+(Basic → Advance course notes). Educational only — not affiliated with any course provider.
 
-| Category | Rule |
-|----------|------|
-| **Fast Grower** | Sales 3Y **and** profit 3Y CAGR **≥ 15%** (Screener compounded) |
-| **Stalwart** | Both growth in **10–15%**; buy when P/E **≤ FY median** |
-| **Slow Grower** | Both &lt; ~7% (GDP proxy) — prefer fixed deposit |
-| **Cyclical** | Sector keywords (cement, paper, steel, agri, cables, MDF…) |
-| **PEG** | PE ÷ profit growth 3Y — **&lt; 1 buy**, ≈1 fair, **&gt; 1 expensive** |
-| **Volume spike** | 1w vol &gt; 5× 1y avg **and** 1w return &gt; 5% **and** mcap &gt; 50 Cr |
+### STEP 0 — Categorize first (always)
+| Sales + profit growth (Screener compounded) | Category |
+|---|---|
+| **≥15% and ≥15%** | **Fast Grower** → Workflow A |
+| **~10–15%** | **Stalwart** → Workflow B |
+| At/below ~GDP (~7%) | **Slow Grower** (usually prefer FD) |
+| Demand/supply, no pricing power | **Cyclical** |
+| Distressed + recovery signs | **Turnaround** (manual) |
 
-**Data:** Screener.in compounded sales/profit + Stock P/E; FY median from PE history;
-Yahoo for volume/returns. Build a **story** (mgmt, industry, risks) before buying.
+### WORKFLOW A — Fast Growers
+1. Confirm compounded sales & profit ≥15% on Screener P&L  
+2. Identify growth drivers (AR / presentations) — *manual*  
+3. Future growth (concalls / guidance) — *manual*  
+4. Valuation: **PE vs historical median** + **PEG** (PEG &lt; 1 buy · =1 fair · &gt; 1 avoid)  
+5. Story building (mgmt / Glassdoor / risks) — *manual via research links*
+
+### SHARED — Quick-Fire Numbers Checklist (final pass)
+Sales & profit CAGR · OPM trend · interest reducing YoY · tax caution if falling · net profit YoY  
+(+ Google scam check via link — not automated)
 """
         )
+        st.markdown("**Key websites/tools**")
+        for name, use in RESEARCH_TOOLS:
+            st.markdown(f"- **{name}** — {use}")
         st.code(
             "\n".join(
                 [
-                    "-- Fast Grower buy",
-                    "sales_3Y >= 15 AND profit_3Y >= 15 AND PEG <= 1 AND mcap >= 500",
+                    "-- STEP 0",
+                    "sales_3Y >= 15 AND profit_3Y >= 15  => Fast Grower",
+                    "sales_3Y, profit_3Y in [10,15)     => Stalwart",
+                    "both < ~7%                         => Slow Grower",
                     "",
-                    "-- Stalwart buy",
-                    "sales_3Y in [10,15) AND profit_3Y in [10,15)",
-                    "AND current_PE <= FY_median_PE",
+                    "-- WORKFLOW A valuation",
+                    "PEG = PE / profit_3Y_growth",
+                    "OR current_PE <= FY_median_PE (PE chart)",
                     "",
-                    "-- Volume spike (Ch.10)",
-                    "avg_vol_1w > avg_vol_1y * 5 AND return_1w > 5 AND mcap > 50",
+                    "-- Quick-Fire (auto)",
+                    "OPM stable/up; interest YoY down; net profit YoY > 0",
                 ]
             ),
             language="sql",
+        )
+
+
+def _story_panel() -> None:
+    with st.expander("📝 Story building checklist (manual — every serious candidate)", expanded=False):
+        st.markdown(
+            """
+Order: **Management → Industry → Risk**
+
+1. Google promoter + scam/fraud · YouTube interviews · promoter salary vs peers (Screener AR)  
+2. Glassdoor **≥ 3.0**  
+3. Sticky/repeat business? Segment mix?  
+4. Market share / industry growth (Trendlyne, presentations, Value Pickr)  
+5. Credit ratings + risk factors on Screener  
+6. Banks: NPA + ROA  
+7. Write a one-paragraph story before you buy
+"""
         )
 
 
@@ -82,6 +113,7 @@ def render_investment_course_page() -> None:
     st.markdown(f"### {META['emoji']} {META['title']}")
     page_audience_note(META["audience"], META["purpose"])
     _rules_panel()
+    _story_panel()
 
     key = "invc"
     render_screener_session_panel(key_prefix=f"{key}_screener")
@@ -89,9 +121,9 @@ def render_investment_course_page() -> None:
 
     mode_key = f"{key}_mode"
     mode_ids = list(SCAN_MODES.keys())
-    ensure_session_choice(mode_key, mode_ids, "buy_candidates")
+    ensure_session_choice(mode_key, mode_ids, "step0_categorize")
     mode = st.radio(
-        "Scan mode",
+        "Workflow mode",
         mode_ids,
         format_func=lambda x: SCAN_MODES[x],
         horizontal=False,
@@ -112,21 +144,26 @@ def render_investment_course_page() -> None:
                 help="Start with Curated or Nifty 50 — Screener + PE history is slow.",
             )
         with c2:
-            st.markdown("#### Valuation gates")
-            max_peg = st.slider("Max PEG (Fast Grower)", 0.5, 2.0, 1.0, 0.05, key=f"{key}_peg")
+            st.markdown("#### Workflow A valuation")
+            max_peg = st.slider("Max PEG (buy zone)", 0.5, 2.0, 1.0, 0.05, key=f"{key}_peg")
             max_pct = st.slider(
-                "Max vs FY median % (Stalwart)",
+                "Max vs FY median % (Stalwart / PE check)",
                 -30.0,
                 5.0,
                 0.0,
                 1.0,
                 key=f"{key}_pct",
-                help="0 = at or below FY median PE.",
             )
-            min_fy = st.slider("Min FY PE points (Stalwart)", 2, 10, 3, 1, key=f"{key}_fy")
+            min_fy = st.slider("Min FY PE points", 2, 10, 3, 1, key=f"{key}_fy")
         with c3:
-            st.markdown("#### Size & volume")
+            st.markdown("#### Size, Quick-Fire & volume")
             min_mcap = st.slider("Min market cap (₹ Cr)", 100.0, 5000.0, 500.0, 50.0, key=f"{key}_mcap")
+            min_qf = st.slider("Min Quick-Fire score (0 = off)", 0, 8, 0, 1, key=f"{key}_qf")
+            require_qf = st.checkbox(
+                "Workflow A: require strong Quick-Fire",
+                value=False,
+                key=f"{key}_req_qf",
+            )
             vol_mcap = st.slider("Volume mode min mcap (₹ Cr)", 50.0, 1000.0, 50.0, 25.0, key=f"{key}_vmcap")
             vol_mult = st.slider("Volume multiple (1w vs 1y)", 2.0, 10.0, 5.0, 0.5, key=f"{key}_vmult")
             min_wret = st.slider("Min 1-week return %", 1.0, 20.0, 5.0, 0.5, key=f"{key}_wret")
@@ -134,9 +171,8 @@ def render_investment_course_page() -> None:
     with st.container(border=True):
         min_roce = st.slider("Min ROCE % (0 = off)", 0.0, 30.0, 0.0, 1.0, key=f"{key}_roce")
         st.caption(
-            "Turnaround / story building is qualitative (management change, con-calls) — "
-            "use Screener links after the scan. Portfolio tip from notes: ~15–20 names; "
-            "avoid tiny mcaps; max ~5% per name."
+            "Portfolio rules from workflow: avoid tiny mcaps (₹100–500 Cr floor); "
+            "~15–20 stocks; max ~5% per name. Turnaround = manual research only."
         )
 
     render_watchlist_panel(f"{key}_wl")
@@ -154,7 +190,10 @@ def render_investment_course_page() -> None:
         min_roce_pct=min_roce,
         vol_mult=vol_mult,
         min_week_return_pct=min_wret,
-        need_pe_history=mode in ("buy_candidates", "stalwarts_discount", "classify_all"),
+        require_quickfire_pass=require_qf,
+        min_checklist_score=min_qf,
+        need_pe_history=mode
+        in ("step0_categorize", "workflow_a_fast", "buy_candidates", "stalwarts_discount"),
     )
 
     if run:
@@ -186,19 +225,22 @@ def render_investment_course_page() -> None:
     last_mode = st.session_state.get(f"{session_key}_mode", mode)
 
     if results is None:
-        st.info("👆 Pick mode and universe, then click **SCAN NOW**.")
+        st.info("👆 Start with **STEP 0 — Categorize**, then run **WORKFLOW A** on Fast Growers.")
         return
 
     if not results:
         st.warning(
-            "No matches. Try **Classify all**, lower min mcap, raise max PEG, "
-            "or use **Curated / Nifty 50**."
+            "No matches. Try **STEP 0**, lower min mcap / Quick-Fire, or **Curated / Nifty 50**."
         )
         return
 
     rank_key = f"{key}_rank"
     rank_choices = list(RANK_BY_OPTIONS.keys())
-    default_rank = "vol_ratio" if last_mode == "volume_spike" else "score"
+    default_rank = (
+        "vol_ratio"
+        if last_mode == "volume_spike"
+        else ("checklist" if last_mode == "workflow_a_fast" else "score")
+    )
     ensure_session_choice(rank_key, rank_choices, default_rank)
     rank_by = st.radio(
         "Rank results by",
@@ -208,6 +250,16 @@ def render_investment_course_page() -> None:
         key=rank_key,
     )
     results = sort_investment_course(results, rank_by=rank_by, mode=last_mode)
+
+    # Category counts for STEP 0
+    if last_mode == "step0_categorize":
+        cats = {}
+        for r in results:
+            cats[r.category] = cats.get(r.category, 0) + 1
+        st.markdown("#### STEP 0 — category mix")
+        cols = st.columns(min(len(cats), 6) or 1)
+        for i, (cat, n) in enumerate(sorted(cats.items(), key=lambda x: -x[1])):
+            cols[i % len(cols)].metric(cat, n)
 
     st.success(
         f"**{len(results)}** matches · {SCAN_MODES.get(last_mode, last_mode)} · "
@@ -236,16 +288,22 @@ def render_investment_course_page() -> None:
             "Score": st.column_config.NumberColumn(format="%.1f"),
             "Sales 3Y %": st.column_config.NumberColumn(format="%.1f"),
             "Profit 3Y %": st.column_config.NumberColumn(format="%.1f"),
+            "Sales TTM %": st.column_config.NumberColumn(format="%.1f"),
+            "Profit TTM %": st.column_config.NumberColumn(format="%.1f"),
             "P/E": st.column_config.NumberColumn(format="%.1f"),
             "FY median P/E": st.column_config.NumberColumn(format="%.1f"),
             "vs median %": st.column_config.NumberColumn(format="%+.1f"),
             "PEG": st.column_config.NumberColumn(format="%.2f"),
+            "OPM %": st.column_config.NumberColumn(format="%.1f"),
+            "OPM Δ pp": st.column_config.NumberColumn(format="%+.1f"),
+            "Net profit YoY %": st.column_config.NumberColumn(format="%+.1f"),
             "ROCE %": st.column_config.NumberColumn(format="%.1f"),
             "1w ret %": st.column_config.NumberColumn(format="%+.1f"),
             "Vol ratio": st.column_config.NumberColumn(format="%.1f"),
             "Price": st.column_config.NumberColumn(format="₹%.2f"),
             "Verdict": st.column_config.TextColumn(width="medium"),
-            "PEG verdict": st.column_config.TextColumn(width="medium"),
+            "Next steps": st.column_config.TextColumn(width="large"),
+            "QF flags": st.column_config.TextColumn(width="large"),
             "Raw": None,
             "Notes": None,
             "Yahoo Finance": st.column_config.LinkColumn(display_text="Yahoo ↗"),
@@ -253,6 +311,12 @@ def render_investment_course_page() -> None:
             "Moneycontrol": st.column_config.LinkColumn(display_text="MC ↗"),
             "TradingView": st.column_config.LinkColumn(display_text="TV ↗"),
             "Screener.in": st.column_config.LinkColumn(display_text="Screener ↗"),
+            "Screener Concalls": st.column_config.LinkColumn(display_text="Concalls ↗"),
+            "Trendlyne": st.column_config.LinkColumn(display_text="Trendlyne ↗"),
+            "Tijori Finance": st.column_config.LinkColumn(display_text="Tijori ↗"),
+            "Value Pickr": st.column_config.LinkColumn(display_text="ValuePickr ↗"),
+            "Glassdoor": st.column_config.LinkColumn(display_text="Glassdoor ↗"),
+            "Google scam check": st.column_config.LinkColumn(display_text="Scam check ↗"),
         },
     )
 
@@ -265,7 +329,7 @@ def render_investment_course_page() -> None:
     )
 
     if last_mode != "volume_spike" and results:
-        st.markdown("#### P/E history (top match)")
+        st.markdown("#### P/E history (top match) — Workflow A step 4")
         top = results[0]
         render_pe_history_panel(
             display_ticker=top.ticker,
@@ -274,14 +338,15 @@ def render_investment_course_page() -> None:
             key_prefix=f"{key}_pehist",
         )
 
-    with st.expander("Pass notes (per stock)", expanded=False):
+    with st.expander("Quick-Fire + next steps (per stock)", expanded=False):
         for r in results[:25]:
             st.markdown(
-                f"**{r.label}** ({r.category}) — {r.verdict}: "
-                f"{' · '.join(r.pass_notes)}"
+                f"**{r.label}** ({r.category}) — {r.verdict}  \n"
+                f"QF {r.checklist_score}/{r.checklist_max}: {' · '.join(r.checklist_flags[:5])}  \n"
+                f"*{r.next_steps}*"
             )
 
     st.caption(
-        "Course-inspired rules using Screener.in CAGR and FY median P/E. "
-        "Not investment advice. Cross-check annual reports, concalls, and Glassdoor."
+        "Source: Stock Analysis Workflow 1. Quant gates from Screener.in; "
+        "story / Glassdoor / concalls are manual. Not investment advice."
     )

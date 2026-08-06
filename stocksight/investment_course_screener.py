@@ -1,9 +1,8 @@
 """
-Investment Course Screener — FF Basic→Advance / Lynch-style categories.
+Investment Course Screener — Stock Analysis Workflow (STEP 0 + Workflow A + Quick-Fire).
 
-Classifies NSE names using Screener.in compounded sales+profit CAGR, then applies
-course buy gates (PEG, PE vs FY median, Chapter 10 volume spike). Educational only;
-inspired by publicly shared course notes — not affiliated with Financially Free™.
+Aligned with docs/Stock_Analysis_Workflow_1.md / docs/stock_analysis/Stock_Analysis_Workflow_1.md.
+Educational only; inspired by course notes — not affiliated with Financially Free™.
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+from urllib.parse import quote_plus
 
 import yfinance as yf
 
@@ -18,69 +18,68 @@ try:
     from .multibagger import SCAN_SOURCES, resolve_scan_tickers
     from .pe_history import build_pe_history
     from .screener import fetch_price_history, get_sector_industry, get_stock_links, hist_series
-    from .screener_in_data import fetch_screener_company_html, fetch_screener_value_profile
+    from .screener_in_data import (
+        _parse_section_table,
+        fetch_screener_company_html,
+        fetch_screener_value_profile,
+    )
 except ImportError:
     from multibagger import SCAN_SOURCES, resolve_scan_tickers
     from pe_history import build_pe_history
     from screener import fetch_price_history, get_sector_industry, get_stock_links, hist_series
-    from screener_in_data import fetch_screener_company_html, fetch_screener_value_profile
+    from screener_in_data import (
+        _parse_section_table,
+        fetch_screener_company_html,
+        fetch_screener_value_profile,
+    )
 
 META = {
     "id": "investment_course",
-    "title": "Investment Course (Lynch Categories)",
+    "title": "Investment Course (Stock Analysis Workflow)",
     "emoji": "📘",
     "nav_title": "Investment Course",
     "audience": (
-        "Investors learning **Fast Grower · Stalwart · Cyclical · Slow Grower** rules — "
-        "sales+profit CAGR from Screener.in, PEG, and PE vs own FY median."
+        "Investors following **Stock Analysis Workflow 1**: **STEP 0 categorize**, "
+        "**Workflow A Fast Growers**, then the **Quick-Fire Numbers Checklist**."
     ),
     "purpose": (
-        "Implements Basic→Advance course gates: Fast Grower (≥15% sales & profit), "
-        "Stalwart (10–15%, buy ≤ FY median PE), PEG < 1, and Ch.10 volume spike. "
-        "Educational approximation — verify on Screener.in / annual reports."
+        "STEP 0 buckets by Screener compounded sales+profit CAGR. "
+        "Workflow A confirms ≥15%/≥15% growth, PE vs FY median, and PEG. "
+        "Quick-Fire flags OPM trend, interest YoY, and growth consistency."
     ),
 }
 
+# Modes mapped to Stock_Analysis_Workflow_1.md
 SCAN_MODES: dict[str, str] = {
+    "step0_categorize": "STEP 0 — Categorize the company",
+    "workflow_a_fast": "WORKFLOW A — Fast Growers (growth + valuation)",
     "buy_candidates": "Buy candidates (Fast PEG≤1 or Stalwart ≤ median PE)",
-    "fast_growers": "Fast Growers (sales & profit ≥15%)",
-    "stalwarts_discount": "Stalwarts at discount (10–15% + PE ≤ FY median)",
-    "volume_spike": "Volume spike (Ch.10 formula)",
-    "classify_all": "Classify all (no buy gate)",
+    "stalwarts_discount": "WORKFLOW B — Stalwarts at/below median PE",
+    "volume_spike": "Bottom-up — Volume spike (Ch.10)",
 }
 
 RANK_BY_OPTIONS: dict[str, str] = {
-    "score": "Course score",
+    "score": "Workflow score",
+    "checklist": "Quick-Fire checklist score",
     "peg": "PEG (lowest)",
     "discount": "Discount vs FY median %",
     "growth": "Min(sales, profit) 3Y %",
     "vol_ratio": "Volume ratio (spike mode)",
 }
 
+RESEARCH_TOOLS = (
+    ("Screener.in", "Financials, PE chart, shareholding, concalls, credit ratings"),
+    ("Trendlyne", "Broker reports + concall YouTube"),
+    ("Tijori Finance", "Investor press releases"),
+    ("Value Pickr", "Open investor forum"),
+    ("Glassdoor", "Culture rating (target 3.0+)"),
+    ("Google / YouTube", "Promoter scam check + interviews"),
+)
+
 CYCLICAL_KEYWORDS = (
-    "cement",
-    "paper",
-    "steel",
-    "iron",
-    "cotton",
-    "textile",
-    "agri",
-    "agriculture",
-    "sugar",
-    "cable",
-    "wire",
-    "mdf",
-    "wood",
-    "plywood",
-    "chemical",
-    "commodity",
-    "metal",
-    "mining",
-    "aluminium",
-    "aluminum",
-    "copper",
-    "shipping",
-    "construction",
+    "cement", "paper", "steel", "iron", "cotton", "textile", "agri", "agriculture",
+    "sugar", "cable", "wire", "mdf", "wood", "plywood", "chemical", "commodity",
+    "metal", "mining", "aluminium", "aluminum", "copper", "shipping", "construction",
     "building",
 )
 
@@ -91,16 +90,18 @@ STALWART_MIN_PCT = 10.0
 
 @dataclass
 class InvestmentCourseFilters:
-    mode: str = "buy_candidates"
+    mode: str = "step0_categorize"
     max_peg: float = 1.0
-    max_pct_vs_fy_median: float = 0.0  # at or below median
+    max_pct_vs_fy_median: float = 0.0
     min_fy_points: int = 3
     min_market_cap_cr: float = 500.0
     volume_min_market_cap_cr: float = 50.0
     max_debt_equity: float = 2.0
-    min_roce_pct: float = 0.0  # soft; 0 = off
+    min_roce_pct: float = 0.0
     vol_mult: float = 5.0
     min_week_return_pct: float = 5.0
+    require_quickfire_pass: bool = False  # Workflow A: optional hard gate
+    min_checklist_score: int = 0
     screener_delay_sec: float = 0.18
     need_pe_history: bool = True
 
@@ -119,15 +120,30 @@ class InvestmentCourseResult:
     n_fy_points: int
     sales_growth_3y_pct: Optional[float]
     profit_growth_3y_pct: Optional[float]
+    sales_growth_ttm_pct: Optional[float]
+    profit_growth_ttm_pct: Optional[float]
     peg: Optional[float]
     peg_verdict: str
     roce_pct: Optional[float]
     market_cap_cr: Optional[float]
     market_cap_display: str
-    week_return_pct: Optional[float]
-    vol_ratio: Optional[float]
-    score: float
-    verdict: str
+    # Quick-Fire Numbers Checklist
+    opm_latest_pct: Optional[float]
+    opm_delta_pp: Optional[float]
+    interest_latest: Optional[float]
+    interest_delta: Optional[float]
+    interest_reducing: Optional[bool]
+    tax_latest: Optional[float]
+    tax_falling: Optional[bool]
+    net_profit_yoy_pct: Optional[float]
+    checklist_score: int
+    checklist_max: int
+    checklist_flags: list[str] = field(default_factory=list)
+    week_return_pct: Optional[float] = None
+    vol_ratio: Optional[float] = None
+    score: float = 0.0
+    verdict: str = ""
+    next_steps: str = ""
     pass_notes: list[str] = field(default_factory=list)
     links: dict = field(default_factory=dict)
 
@@ -170,24 +186,196 @@ def classify_category(
     sector: str = "",
     industry: str = "",
 ) -> tuple[str, str]:
-    """Return (category, rationale) from course growth bands."""
+    """STEP 0 — Categorize from Screener compounded sales + profit growth."""
     s = float(sales_3y) if sales_3y is not None else None
     p = float(profit_3y) if profit_3y is not None else None
 
     if s is not None and p is not None:
         if s >= FAST_GROWTH_PCT and p >= FAST_GROWTH_PCT:
-            return "Fast Grower", f"Sales {s:.1f}% & profit {p:.1f}% >= 15%"
+            return "Fast Grower", f"STEP 0: Sales {s:.1f}% & profit {p:.1f}% >= 15%"
         if STALWART_MIN_PCT <= s < FAST_GROWTH_PCT and STALWART_MIN_PCT <= p < FAST_GROWTH_PCT:
-            return "Stalwart", f"Sales {s:.1f}% & profit {p:.1f}% in 10-15%"
+            return "Stalwart", f"STEP 0: Sales {s:.1f}% & profit {p:.1f}% in 10-15%"
         if s < INDIA_GDP_PROXY_PCT and p < INDIA_GDP_PROXY_PCT:
-            return "Slow Grower", f"Both growth < ~{INDIA_GDP_PROXY_PCT:.0f}% GDP - prefer FD"
+            return "Slow Grower", f"STEP 0: Both < ~{INDIA_GDP_PROXY_PCT:.0f}% GDP - prefer FD"
 
     if _is_cyclical(sector, industry):
-        return "Cyclical", f"Sector/industry matches cyclical keywords ({sector or '—'})"
+        return "Cyclical", f"STEP 0: Cyclical sector keywords ({sector or '-'})"
 
     if s is None or p is None:
-        return "Unclassified", "Missing sales or profit 3Y CAGR"
-    return "Other", f"Sales {s:.1f}% / profit {p:.1f}% — not in Fast/Stalwart/Slow bands"
+        return "Unclassified", "STEP 0: Missing sales or profit 3Y CAGR"
+    return "Other", f"STEP 0: Sales {s:.1f}% / profit {p:.1f}% - check Turnaround manually"
+
+
+def _row_vals(data: dict, *needles: str) -> list[Optional[float]]:
+    for key, vals in data.items():
+        if any(n in key for n in needles):
+            return vals
+    return []
+
+
+def _last_two(vals: list[Optional[float]]) -> tuple[Optional[float], Optional[float]]:
+    clean = [float(v) for v in vals if v is not None]
+    if len(clean) < 2:
+        if len(clean) == 1:
+            return clean[0], None
+        return None, None
+    return clean[-1], clean[-2]
+
+
+def parse_quickfire_from_html(html: str) -> dict:
+    """
+    SHARED STEP — Quick-Fire Numbers Checklist (quantifiable fields from Screener P&L).
+    """
+    out: dict = {
+        "opm_latest_pct": None,
+        "opm_delta_pp": None,
+        "interest_latest": None,
+        "interest_delta": None,
+        "interest_reducing": None,
+        "tax_latest": None,
+        "tax_falling": None,
+        "net_profit_yoy_pct": None,
+    }
+    if not html:
+        return out
+
+    _headers, data = _parse_section_table(html, "profit-loss")
+    if not data:
+        return out
+
+    opm_vals = _row_vals(data, "opm")
+    opm_now, opm_prev = _last_two(opm_vals)
+    if opm_now is not None:
+        out["opm_latest_pct"] = round(opm_now, 1)
+    if opm_now is not None and opm_prev is not None:
+        out["opm_delta_pp"] = round(opm_now - opm_prev, 1)
+
+    int_vals = _row_vals(data, "interest")
+    # Prefer financing interest row, avoid "interest coverage" if present as separate
+    int_now, int_prev = _last_two(int_vals)
+    if int_now is not None:
+        out["interest_latest"] = round(int_now, 2)
+    if int_now is not None and int_prev is not None:
+        out["interest_delta"] = round(int_now - int_prev, 2)
+        out["interest_reducing"] = int_now < int_prev
+
+    tax_vals = _row_vals(data, "tax %", "tax%")
+    if not tax_vals:
+        tax_vals = _row_vals(data, "tax")
+    tax_now, tax_prev = _last_two(tax_vals)
+    if tax_now is not None:
+        out["tax_latest"] = round(tax_now, 1)
+    if tax_now is not None and tax_prev is not None and tax_prev > 0:
+        # Falling tax YoY can be a caution flag (workflow)
+        out["tax_falling"] = tax_now < tax_prev - 1.0
+
+    np_vals = _row_vals(data, "net profit", "profit after tax", "pat")
+    np_now, np_prev = _last_two(np_vals)
+    if np_now is not None and np_prev is not None and abs(np_prev) > 1e-6:
+        out["net_profit_yoy_pct"] = round((np_now / np_prev - 1.0) * 100.0, 1)
+
+    return out
+
+
+def score_quickfire_checklist(
+    *,
+    sales_3y: Optional[float],
+    profit_3y: Optional[float],
+    sales_ttm: Optional[float],
+    profit_ttm: Optional[float],
+    qf: dict,
+    category: str,
+) -> tuple[int, int, list[str]]:
+    """Return (score, max_score, flag strings) for Quick-Fire checklist."""
+    flags: list[str] = []
+    score = 0
+    max_score = 7
+
+    # 1 Sales growth trend & compounded
+    if sales_3y is not None and sales_3y >= (FAST_GROWTH_PCT if category == "Fast Grower" else STALWART_MIN_PCT):
+        score += 1
+        flags.append(f"Sales 3Y OK ({sales_3y:.1f}%)")
+    elif sales_3y is not None:
+        flags.append(f"Sales 3Y weak ({sales_3y:.1f}%)")
+    else:
+        flags.append("Sales 3Y missing")
+
+    # 2 Profit growth trend & compounded
+    if profit_3y is not None and profit_3y >= (FAST_GROWTH_PCT if category == "Fast Grower" else STALWART_MIN_PCT):
+        score += 1
+        flags.append(f"Profit 3Y OK ({profit_3y:.1f}%)")
+    elif profit_3y is not None:
+        flags.append(f"Profit 3Y weak ({profit_3y:.1f}%)")
+    else:
+        flags.append("Profit 3Y missing")
+
+    # 3-4 Margin / OPM stable or improving
+    opm_d = qf.get("opm_delta_pp")
+    if opm_d is not None and opm_d >= -1.0:
+        score += 1
+        flags.append(f"OPM stable/up ({opm_d:+.1f} pp)")
+    elif opm_d is not None:
+        flags.append(f"OPM falling ({opm_d:+.1f} pp)")
+    else:
+        flags.append("OPM trend n/a")
+
+    # 5 Interest reducing YoY
+    if qf.get("interest_reducing") is True:
+        score += 1
+        flags.append("Interest reducing YoY")
+    elif qf.get("interest_reducing") is False:
+        flags.append("Interest not reducing")
+    else:
+        flags.append("Interest n/a")
+
+    # 6 Tax falling = caution (do not award point; note it)
+    if qf.get("tax_falling"):
+        flags.append("CAUTION: tax % falling YoY")
+    else:
+        score += 1
+        flags.append("Tax % not a red flag")
+
+    # 7 Net profit growth
+    np_yoy = qf.get("net_profit_yoy_pct")
+    if np_yoy is not None and np_yoy > 0:
+        score += 1
+        flags.append(f"Net profit YoY +{np_yoy:.1f}%")
+    elif np_yoy is not None:
+        flags.append(f"Net profit YoY {np_yoy:.1f}%")
+    elif profit_ttm is not None and profit_ttm > 0:
+        score += 1
+        flags.append(f"Profit TTM +{profit_ttm:.1f}%")
+    else:
+        flags.append("Net profit YoY n/a")
+
+    # Bonus consistency: TTM still growing for Fast Growers
+    if category == "Fast Grower":
+        max_score += 1
+        if (sales_ttm is None or sales_ttm >= 0) and (profit_ttm is None or profit_ttm >= 0):
+            if sales_ttm is not None or profit_ttm is not None:
+                score += 1
+                flags.append("TTM growth not collapsing")
+            else:
+                flags.append("TTM n/a")
+        else:
+            flags.append("TTM growth soft")
+
+    return score, max_score, flags
+
+
+def research_links(disp: str, raw: str, company_name: str = "") -> dict:
+    """Key websites from Stock_Analysis_Workflow_1.md."""
+    links = get_stock_links(raw)
+    slug = disp.strip().upper()
+    q = quote_plus(company_name or slug)
+    links["Screener.in"] = f"https://www.screener.in/company/{slug}/consolidated/"
+    links["Screener Concalls"] = f"https://www.screener.in/company/{slug}/consolidated/#documents"
+    links["Trendlyne"] = f"https://trendlyne.com/search/?q={q}"
+    links["Tijori Finance"] = f"https://www.tijorifinance.com/search/?q={q}"
+    links["Value Pickr"] = f"https://forum.valuepickr.com/search?q={q}"
+    links["Glassdoor"] = f"https://www.glassdoor.com/Search/results.htm?keyword={q}"
+    links["Google scam check"] = f"https://www.google.com/search?q={q}+scam+OR+fraud"
+    return links
 
 
 def _course_score(
@@ -196,6 +384,8 @@ def _course_score(
     pct_vs: Optional[float],
     sales: Optional[float],
     profit: Optional[float],
+    checklist_score: int = 0,
+    checklist_max: int = 7,
 ) -> float:
     g = min(float(sales or 0), float(profit or 0))
     pts = min(g, 40.0) * 0.5
@@ -209,33 +399,59 @@ def _course_score(
         pts += 5.0
     elif category == "Slow Grower":
         pts -= 15.0
+    if checklist_max > 0:
+        pts += (checklist_score / checklist_max) * 12.0
     return round(pts, 1)
 
 
-def _verdict(category: str, peg: Optional[float], pct_vs: Optional[float], mode: str) -> str:
+def _verdict(
+    category: str,
+    peg: Optional[float],
+    pct_vs: Optional[float],
+    mode: str,
+    checklist_score: int,
+    checklist_max: int,
+) -> str:
     if category == "Slow Grower":
-        return "Avoid — slow grower (FD better)"
+        return "Avoid - slow grower (FD better)"
     if mode == "volume_spike":
-        return "Volume spike — research story"
+        return "Volume spike - research story"
+    qf = f"QF {checklist_score}/{checklist_max}"
     if category == "Fast Grower":
+        if peg is not None and peg < 1.0 and (pct_vs is None or pct_vs <= 5):
+            return f"Workflow A: Fast Grower + cheap PEG ({qf})"
         if peg is not None and peg < 1.0:
-            return "Fast Grower + cheap PEG"
-        if peg is not None and peg <= 1.05:
-            return "Fast Grower — fair PEG"
-        return "Fast Grower — check valuation"
+            return f"Workflow A: Fast Grower PEG OK - check PE chart ({qf})"
+        if pct_vs is not None and pct_vs <= 0:
+            return f"Workflow A: Fast Grower below median PE ({qf})"
+        return f"Workflow A: confirm growth drivers + valuation ({qf})"
     if category == "Stalwart":
         if pct_vs is not None and pct_vs <= 0:
-            return "Stalwart at/below median PE"
-        return "Stalwart — wait for lower PE"
+            return f"Stalwart at/below median PE ({qf})"
+        return f"Stalwart - wait for lower PE ({qf})"
     if category == "Cyclical":
-        if pct_vs is not None and pct_vs <= 0:
-            return "Cyclical — PE below history"
-        return "Cyclical — watch margins / cycle"
-    return "Review story / category"
+        return f"Cyclical - track OPM trail ({qf})"
+    return f"STEP 0: {category} - build story ({qf})"
+
+
+def _next_steps(category: str) -> str:
+    if category == "Fast Grower":
+        return (
+            "1) Confirm CAGR on Screener P&L  2) Growth drivers in AR/presentations  "
+            "3) Future growth via concalls  4) PE vs median + PEG  5) Story: mgmt/Glassdoor"
+        )
+    if category == "Stalwart":
+        return "Check margin stability (OPM) + PE ≤ historical mean; trim after 30-40% gain"
+    if category == "Cyclical":
+        return "OPM rising with room to run; shareholding for promoter buying; capacity in presentations"
+    if category == "Slow Grower":
+        return "Usually pass unless deep value + strong dividend; diagnose why slow"
+    if category == "Turnaround":
+        return "Mgmt change, debt reduction, shareholding - manual only"
+    return "Re-check STEP 0 category; then open matching workflow"
 
 
 def _volume_spike_metrics(raw: str) -> tuple[Optional[float], Optional[float], Optional[float]]:
-    """Return (week_return_pct, vol_ratio, last_price)."""
     try:
         hist = fetch_price_history(raw, "1d")
     except Exception:
@@ -268,11 +484,27 @@ def _volume_spike_metrics(raw: str) -> tuple[Optional[float], Optional[float], O
 
 
 def _needs_pe_history(mode: str, category: str) -> bool:
-    if mode in ("stalwarts_discount", "buy_candidates") and category in ("Stalwart", "Cyclical", "Fast Grower"):
+    if mode in ("workflow_a_fast", "buy_candidates", "stalwarts_discount"):
         return True
-    if mode == "classify_all" and category in ("Stalwart", "Cyclical"):
+    if mode == "step0_categorize" and category in ("Fast Grower", "Stalwart", "Cyclical"):
         return True
-    return mode == "stalwarts_discount"
+    return False
+
+
+def _empty_qf_fields() -> dict:
+    return {
+        "opm_latest_pct": None,
+        "opm_delta_pp": None,
+        "interest_latest": None,
+        "interest_delta": None,
+        "interest_reducing": None,
+        "tax_latest": None,
+        "tax_falling": None,
+        "net_profit_yoy_pct": None,
+        "checklist_score": 0,
+        "checklist_max": 7,
+        "checklist_flags": [],
+    }
 
 
 def scan_investment_course(
@@ -281,7 +513,7 @@ def scan_investment_course(
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
 ) -> list[InvestmentCourseResult]:
     flt = filters or InvestmentCourseFilters()
-    mode = flt.mode if flt.mode in SCAN_MODES else "buy_candidates"
+    mode = flt.mode if flt.mode in SCAN_MODES else "step0_categorize"
     universe = resolve_scan_tickers(scan_source)
     if not universe:
         return []
@@ -308,9 +540,6 @@ def scan_investment_course(
                 mcap = profile.get("market_cap_cr")
                 if mcap is not None and mcap < flt.volume_min_market_cap_cr:
                     continue
-                if mcap is None:
-                    # Soft allow if Screener missing mcap
-                    pass
 
                 stock = yf.Ticker(raw)
                 sector, industry = get_sector_industry(stock)
@@ -319,14 +548,13 @@ def scan_investment_course(
                 cat, rationale = classify_category(sales, profit, sector=sector or "", industry=industry or "")
                 pe = profile.get("pe")
                 peg = _peg(pe, profit)
+                qf_fields = _empty_qf_fields()
                 notes = [
                     f"1w ret {week_ret:.1f}%",
-                    f"Vol ratio {vol_ratio:.1f}× (≥{flt.vol_mult:.0f}×)",
+                    f"Vol ratio {vol_ratio:.1f}x (>={flt.vol_mult:.0f}x)",
                     rationale,
                 ]
-                links = get_stock_links(raw)
-                if profile.get("screener_url"):
-                    links["Screener.in"] = profile["screener_url"]
+                links = research_links(disp, raw, label)
 
                 results.append(
                     InvestmentCourseResult(
@@ -342,6 +570,8 @@ def scan_investment_course(
                         n_fy_points=0,
                         sales_growth_3y_pct=sales,
                         profit_growth_3y_pct=profit,
+                        sales_growth_ttm_pct=profile.get("sales_growth_ttm_pct"),
+                        profit_growth_ttm_pct=profile.get("profit_growth_ttm_pct"),
                         peg=peg,
                         peg_verdict=peg_verdict(peg),
                         roce_pct=profile.get("roce_pct"),
@@ -350,16 +580,17 @@ def scan_investment_course(
                         week_return_pct=week_ret,
                         vol_ratio=vol_ratio,
                         score=_course_score(cat, peg, None, sales, profit) + float(vol_ratio or 0) * 2,
-                        verdict=_verdict(cat, peg, None, mode),
+                        verdict=_verdict(cat, peg, None, mode, 0, 7),
+                        next_steps=_next_steps(cat),
                         pass_notes=notes,
                         links=links,
+                        **qf_fields,
                     )
                 )
                 if flt.screener_delay_sec > 0:
                     time.sleep(flt.screener_delay_sec)
                 continue
 
-            # Fundamental modes
             html = fetch_screener_company_html(disp)
             if flt.screener_delay_sec > 0:
                 time.sleep(flt.screener_delay_sec)
@@ -369,6 +600,8 @@ def scan_investment_course(
 
             sales = profile.get("sales_growth_3y_pct")
             profit = profile.get("profit_growth_3y_pct")
+            sales_ttm = profile.get("sales_growth_ttm_pct")
+            profit_ttm = profile.get("profit_growth_ttm_pct")
             pe = profile.get("pe")
             mcap = profile.get("market_cap_cr")
             roce = profile.get("roce_pct")
@@ -377,6 +610,16 @@ def scan_investment_course(
             stock = yf.Ticker(raw)
             sector, industry = get_sector_industry(stock)
             cat, rationale = classify_category(sales, profit, sector=sector or "", industry=industry or "")
+
+            qf = parse_quickfire_from_html(html or "")
+            ck_score, ck_max, ck_flags = score_quickfire_checklist(
+                sales_3y=sales,
+                profit_3y=profit,
+                sales_ttm=sales_ttm,
+                profit_ttm=profit_ttm,
+                qf=qf,
+                category=cat,
+            )
 
             fy_med = None
             pct_vs = None
@@ -400,23 +643,38 @@ def scan_investment_course(
             notes = [rationale]
             if peg is not None:
                 notes.append(f"PEG {peg:.2f}")
-            if pct_vs is not None and fy_med is not None:
+            if pct_vs is not None and fy_med is not None and pe is not None:
                 notes.append(f"P/E {pe:.1f} vs FY med {fy_med:.1f} ({pct_vs:+.1f}%)")
+            notes.append(f"Quick-Fire {ck_score}/{ck_max}")
 
-            # Soft filters
-            min_mcap = flt.min_market_cap_cr
-            if mode != "classify_all" and mcap is not None and mcap < min_mcap:
+            if mode != "step0_categorize" and mcap is not None and mcap < flt.min_market_cap_cr:
                 continue
             if flt.min_roce_pct > 0 and (roce is None or roce < flt.min_roce_pct):
-                if mode != "classify_all":
+                if mode != "step0_categorize":
                     continue
 
-            # Mode gates
             keep = False
-            if mode == "classify_all":
+            if mode == "step0_categorize":
                 keep = True
-            elif mode == "fast_growers":
-                keep = cat == "Fast Grower"
+            elif mode == "workflow_a_fast":
+                # Workflow A: confirm Fast Grower; valuation via PEG and/or PE vs median
+                if cat != "Fast Grower":
+                    keep = False
+                else:
+                    val_ok = (peg is not None and peg <= flt.max_peg) or (
+                        pct_vs is not None
+                        and fy_med is not None
+                        and n_fy >= flt.min_fy_points
+                        and pct_vs <= flt.max_pct_vs_fy_median + 5.0  # soft room
+                    )
+                    # Still list Fast Growers even if valuation stretched (so user can research)
+                    keep = True
+                    if not val_ok:
+                        notes.append("Valuation stretched - check PE chart / PEG")
+                    if flt.require_quickfire_pass and ck_score < max(flt.min_checklist_score, ck_max - 2):
+                        keep = False
+                    if flt.min_checklist_score > 0 and ck_score < flt.min_checklist_score:
+                        keep = False
             elif mode == "stalwarts_discount":
                 keep = (
                     cat == "Stalwart"
@@ -436,22 +694,14 @@ def scan_investment_course(
                     and pct_vs is not None
                     and pct_vs <= flt.max_pct_vs_fy_median
                 )
-                keep = fast_ok or stalwart_ok
-                if cat == "Slow Grower":
-                    keep = False
+                keep = (fast_ok or stalwart_ok) and cat != "Slow Grower"
             else:
                 keep = False
 
             if not keep:
                 continue
 
-            if cat == "Fast Grower" and mode == "fast_growers" and peg is not None and peg > flt.max_peg * 2:
-                # Still show fast growers in that mode; soft note only
-                notes.append("PEG stretched vs course <1 rule")
-
-            links = get_stock_links(raw)
-            if profile.get("screener_url"):
-                links["Screener.in"] = profile["screener_url"]
+            links = research_links(disp, raw, label)
 
             results.append(
                 InvestmentCourseResult(
@@ -467,15 +717,29 @@ def scan_investment_course(
                     n_fy_points=n_fy,
                     sales_growth_3y_pct=sales,
                     profit_growth_3y_pct=profit,
+                    sales_growth_ttm_pct=sales_ttm,
+                    profit_growth_ttm_pct=profit_ttm,
                     peg=peg,
                     peg_verdict=peg_verdict(peg),
                     roce_pct=roce,
                     market_cap_cr=mcap,
                     market_cap_display=_mcap_display(mcap),
+                    opm_latest_pct=qf.get("opm_latest_pct"),
+                    opm_delta_pp=qf.get("opm_delta_pp"),
+                    interest_latest=qf.get("interest_latest"),
+                    interest_delta=qf.get("interest_delta"),
+                    interest_reducing=qf.get("interest_reducing"),
+                    tax_latest=qf.get("tax_latest"),
+                    tax_falling=qf.get("tax_falling"),
+                    net_profit_yoy_pct=qf.get("net_profit_yoy_pct"),
+                    checklist_score=ck_score,
+                    checklist_max=ck_max,
+                    checklist_flags=ck_flags,
                     week_return_pct=None,
                     vol_ratio=None,
-                    score=_course_score(cat, peg, pct_vs, sales, profit),
-                    verdict=_verdict(cat, peg, pct_vs, mode),
+                    score=_course_score(cat, peg, pct_vs, sales, profit, ck_score, ck_max),
+                    verdict=_verdict(cat, peg, pct_vs, mode, ck_score, ck_max),
+                    next_steps=_next_steps(cat),
                     pass_notes=notes,
                     links=links,
                 )
@@ -490,9 +754,15 @@ def sort_investment_course(
     results: list[InvestmentCourseResult],
     *,
     rank_by: str = "score",
-    mode: str = "buy_candidates",
+    mode: str = "step0_categorize",
 ) -> list[InvestmentCourseResult]:
-    if rank_by == "peg" or (rank_by == "score" and mode == "fast_growers"):
+    if rank_by == "checklist":
+        return sorted(
+            results,
+            key=lambda r: (int(r.checklist_score or 0), float(r.score or 0)),
+            reverse=True,
+        )
+    if rank_by == "peg" or (rank_by == "score" and mode == "workflow_a_fast"):
         return sorted(
             results,
             key=lambda r: (
@@ -517,6 +787,12 @@ def sort_investment_course(
 
 
 def result_to_row(r: InvestmentCourseResult, rank: int) -> dict:
+    interest_flag = "—"
+    if r.interest_reducing is True:
+        interest_flag = "Yes"
+    elif r.interest_reducing is False:
+        interest_flag = "No"
+
     return {
         "S.No.": rank,
         "Name": r.label,
@@ -525,18 +801,28 @@ def result_to_row(r: InvestmentCourseResult, rank: int) -> dict:
         "Category": r.category,
         "Score": r.score,
         "Verdict": r.verdict,
+        "QF score": f"{r.checklist_score}/{r.checklist_max}",
         "Sales 3Y %": r.sales_growth_3y_pct,
         "Profit 3Y %": r.profit_growth_3y_pct,
+        "Sales TTM %": r.sales_growth_ttm_pct,
+        "Profit TTM %": r.profit_growth_ttm_pct,
         "P/E": r.pe,
         "FY median P/E": r.fy_median_pe,
         "vs median %": r.pct_vs_median,
         "PEG": r.peg,
         "PEG verdict": r.peg_verdict,
+        "OPM %": r.opm_latest_pct,
+        "OPM Δ pp": r.opm_delta_pp,
+        "Interest ↓": interest_flag,
+        "Tax caution": "Yes" if r.tax_falling else ("No" if r.tax_falling is False else "—"),
+        "Net profit YoY %": r.net_profit_yoy_pct,
         "ROCE %": r.roce_pct,
         "1w ret %": r.week_return_pct,
         "Vol ratio": r.vol_ratio,
         "Price": r.price,
         "Mcap": r.market_cap_display,
         "Sector": r.sector,
+        "Next steps": r.next_steps,
         "Notes": " · ".join(r.pass_notes[:5]),
+        "QF flags": " · ".join(r.checklist_flags[:6]),
     }
