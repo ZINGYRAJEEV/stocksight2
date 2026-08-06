@@ -274,7 +274,7 @@ NAV_PAGES = {
         st.Page(page_value_growth, title="Value Growth (P/E · EPS)", icon="📐"),
         st.Page(page_below_median_pe, title="Healthy Below Median PE", icon="📉"),
         st.Page("stocksight/pages/Valuation Rulebook.py", title="Valuation Rulebook", icon="🧮"),
-        st.Page(page_investment_course, title="Investment Course (Workflow)", icon="📘"),
+        st.Page(page_investment_course, title="Investment Course + Valuation", icon="📘"),
     ],
     "🤖 Algo Strategy": [
         st.Page(page_algo_strategy_hub, title="Algo Strategy Hub", icon="🤖"),

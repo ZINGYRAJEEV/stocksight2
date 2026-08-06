@@ -1357,3 +1357,90 @@ def assess_wealth_creation(
         risks=risks,
         suggestions=suggestions,
     )
+
+
+STRONG_WEALTH_VERDICT = "Strong wealth candidate"
+
+
+def build_default_valuation_inputs(
+    baseline: ValuationBaseline,
+    *,
+    projection_years: int = 3,
+) -> ValuationInputs:
+    """Default Rulebook inputs from a loaded baseline (no Streamlit session)."""
+    book = SECTOR_RULEBOOK.get(baseline.sector_key, SECTOR_RULEBOOK["generic"])
+    rev, _ = default_revenue_cr_y0(baseline)
+    opm_start = float(baseline.opm_pct or book["opm_default_pct"])
+    opm_end = opm_start
+    if baseline.sector_key == "amc" and baseline.opm_pct:
+        opm_end = min(80.0, opm_start + 4.0)
+    pe_is_pb = bool(book.get("pe_is_pb"))
+    pe_start = float(
+        baseline.trailing_pe
+        if baseline.trailing_pe and not pe_is_pb
+        else book["pe_default"]
+    )
+    pe_end = round(pe_start * 0.67, 1)
+    return ValuationInputs(
+        revenue_cr_y0=float(rev),
+        revenue_growth_pct=float(baseline.revenue_growth_5y_pct or 12.0),
+        projection_years=int(projection_years),
+        opm_pct=opm_start,
+        tax_rate_pct=float(baseline.tax_rate_pct or 25.0),
+        interest_drag_pct=float(baseline.interest_drag_pct or 0.0),
+        shares_cr=float(baseline.shares_cr or 1.0),
+        fair_pe=pe_start,
+        pe_is_pb=pe_is_pb,
+        book_value_per_share=float(baseline.book_value_per_share or 0.0),
+        terminal_pe=pe_end,
+        terminal_opm_pct=opm_end,
+        base_calendar_year=default_estimate_year(baseline),
+        cagr_holding_years=int(projection_years),
+    )
+
+
+def quick_wealth_snapshot(
+    raw_ticker: str,
+    *,
+    projection_years: int = 3,
+) -> dict[str, Any]:
+    """
+    Screener-friendly wealth snapshot using Valuation Rulebook defaults.
+    Returns {} on failure. Check ``is_strong_wealth`` or ``wealth_verdict``.
+    """
+    try:
+        base = load_valuation_baseline(raw_ticker)
+        if not base or not base.data_ok:
+            return {}
+        inputs = build_default_valuation_inputs(base, projection_years=projection_years)
+        entry = float(base.price or 0.0)
+        if entry <= 0:
+            return {}
+        proj = project_valuation(
+            base,
+            inputs,
+            current_price=entry,
+            historical=base.historical_revenue,
+        )
+        wealth = assess_wealth_creation(base, inputs, proj, entry_price=entry)
+        return {
+            "wealth_verdict": wealth.verdict,
+            "wealth_emoji": wealth.verdict_emoji,
+            "wealth_score": wealth.wealth_score,
+            "wealth_stance": wealth.valuation_stance,
+            "wealth_stance_color": wealth.valuation_stance_color,
+            "wealth_detail": wealth.valuation_detail,
+            "model_target": round(float(wealth.model_target), 2),
+            "upside_pct": round(float(wealth.upside_pct), 1),
+            "implied_cagr_pct": round(float(wealth.implied_cagr_pct), 1),
+            "max_buy_15pct": round(float(wealth.max_buy_15pct), 2)
+            if wealth.max_buy_15pct is not None
+            else None,
+            "margin_of_safety_pct": round(float(wealth.margin_of_safety_pct), 1),
+            "is_strong_wealth": wealth.verdict == STRONG_WEALTH_VERDICT,
+            "strengths": list(wealth.strengths or [])[:4],
+            "risks": list(wealth.risks or [])[:4],
+            "suggestions": list(wealth.suggestions or [])[:3],
+        }
+    except Exception:
+        return {}

@@ -1,4 +1,4 @@
-"""Investment Course Screener — UI aligned to Stock_Analysis_Workflow_1.md."""
+"""Investment Course + Valuation — Workflow 1 scan with Rulebook wealth on each match."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from ui_components import (
     page_audience_note,
     prepare_scan_results_df,
     render_clickable_scan_table,
+    render_historical_detail_panel,
     render_watchlist_panel,
     safe_set_page_config,
 )
@@ -38,76 +39,122 @@ VALUATION_RULEBOOK_PAGE = "stocksight/pages/Valuation Rulebook.py"
 
 
 def _rules_panel() -> None:
-    with st.expander("📖 Stock Analysis Workflow 1 — how this screen works", expanded=True):
+    with st.expander("📖 How this screen works", expanded=False):
         st.markdown(
             """
-Aligned with [`docs/Stock_Analysis_Workflow_1.md`](docs/Stock_Analysis_Workflow_1.md)
-(Basic → Advance course notes). Educational only — not affiliated with any course provider.
+Aligned with [`docs/Stock_Analysis_Workflow_1.md`](docs/Stock_Analysis_Workflow_1.md).
+**Scan** applies STEP 0 / Workflow A gates, then runs a **Valuation Rulebook** snapshot
+(target price, implied CAGR, Strong wealth flag) on each match.
 
-### STEP 0 — Categorize first (always)
-| Sales + profit growth (Screener compounded) | Category |
+| Category | Rule |
 |---|---|
-| **≥15% and ≥15%** | **Fast Grower** → Workflow A |
-| **~10–15%** | **Stalwart** → Workflow B |
-| At/below ~GDP (~7%) | **Slow Grower** (usually prefer FD) |
-| Demand/supply, no pricing power | **Cyclical** |
-| Distressed + recovery signs | **Turnaround** (manual) |
+| **Fast Grower** | Sales & profit 3Y ≥ 15% |
+| **Stalwart** | Both 10–15%; buy at/below FY median PE |
+| **Strong wealth** | Rulebook: upside ≥20%, CAGR ≥16%, score ≥70, entry ≤ max buy @15% |
 
-### WORKFLOW A — Fast Growers
-1. Confirm compounded sales & profit ≥15% on Screener P&L  
-2. Identify growth drivers (AR / presentations) — *manual*  
-3. Future growth (concalls / guidance) — *manual*  
-4. Valuation: **PE vs historical median** + **PEG** (PEG &lt; 1 buy · =1 fair · &gt; 1 avoid)  
-   → use the in-app **Valuation Rulebook** for discounted-PE / forward models  
-5. Story building (mgmt / Glassdoor / risks) — *manual via research links*
-
-### SHARED — Quick-Fire Numbers Checklist (final pass)
-Sales & profit CAGR · OPM trend · interest reducing YoY · tax caution if falling · net profit YoY  
-(+ Google scam check via link — not automated)
+Click a result row for **price chart**, **P/E history**, and the full **wealth panel**.
 """
         )
         st.page_link(
             VALUATION_RULEBOOK_PAGE,
-            label="Open Valuation Rulebook (discounted PE / forward model)",
+            label="Open full Valuation Rulebook (tweak assumptions)",
             icon="🧮",
         )
-        st.markdown("**Key websites/tools**")
+        st.markdown("**Research tools**")
         for name, use in RESEARCH_TOOLS:
             st.markdown(f"- **{name}** — {use}")
-        st.code(
-            "\n".join(
-                [
-                    "-- STEP 0",
-                    "sales_3Y >= 15 AND profit_3Y >= 15  => Fast Grower",
-                    "sales_3Y, profit_3Y in [10,15)     => Stalwart",
-                    "both < ~7%                         => Slow Grower",
-                    "",
-                    "-- WORKFLOW A valuation",
-                    "PEG = PE / profit_3Y_growth",
-                    "OR current_PE <= FY_median_PE (PE chart)",
-                    "",
-                    "-- Quick-Fire (auto)",
-                    "OPM stable/up; interest YoY down; net profit YoY > 0",
-                ]
-            ),
-            language="sql",
-        )
 
 
 def _story_panel() -> None:
-    with st.expander("📝 Story building checklist (manual — every serious candidate)", expanded=False):
+    with st.expander("📝 Story building checklist (manual)", expanded=False):
         st.markdown(
             """
-Order: **Management → Industry → Risk**
-
-1. Google promoter + scam/fraud · YouTube interviews · promoter salary vs peers (Screener AR)  
-2. Glassdoor **≥ 3.0**  
-3. Sticky/repeat business? Segment mix?  
-4. Market share / industry growth (Trendlyne, presentations, Value Pickr)  
-5. Credit ratings + risk factors on Screener  
-6. Banks: NPA + ROA  
-7. Write a one-paragraph story before you buy
+1. Google promoter + scam/fraud · YouTube interviews  
+2. Glassdoor ≥ 3.0 · sticky/repeat business?  
+3. Market share / industry growth (Trendlyne, presentations)  
+4. Credit ratings + risk factors on Screener  
+5. Write a one-paragraph story before you buy
 """
+        )
+
+
+def _render_selected_wealth(r) -> None:
+    """Wealth / Rulebook panel for the clicked scan row."""
+    if not r or not (r.wealth_verdict or r.model_target):
+        st.info(
+            "No Valuation Rulebook snapshot for this name "
+            "(data missing or wealth load was skipped)."
+        )
+        return
+
+    color = "#16a34a" if r.is_strong_wealth else "#64748b"
+    stance = r.wealth_stance or "—"
+    st.markdown(
+        f"""
+<div style='border:2px solid {color};border-radius:14px;padding:16px 20px;
+            background:#0f172a;margin:8px 0 12px;'>
+  <div style='font-size:0.75rem;letter-spacing:0.06em;color:#94a3b8;text-transform:uppercase;'>
+    Valuation Rulebook read (defaults — educational)
+  </div>
+  <div style='font-size:1.25rem;font-weight:700;color:{color};margin-top:4px;'>
+    {r.wealth_emoji or ""} {r.wealth_verdict or stance}
+  </div>
+  <div style='color:#e2e8f0;margin-top:6px;font-size:0.95rem;'>
+    Stance: <b>{stance}</b>
+    · Target <b>₹{(r.model_target or 0):,.0f}</b>
+    · vs LTP ₹{(r.price or 0):,.0f}
+    · Upside <b>{(r.upside_pct or 0):+.1f}%</b>
+    · Implied CAGR <b>{(r.implied_cagr_pct or 0):.1f}%</b>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    if r.wealth_detail:
+        st.caption(r.wealth_detail)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Wealth score", f"{r.wealth_score}/100" if r.wealth_score is not None else "—")
+    c2.metric("Model target", f"₹{r.model_target:,.0f}" if r.model_target else "—")
+    c3.metric("Upside", f"{r.upside_pct:+.1f}%" if r.upside_pct is not None else "—")
+    c4.metric(
+        "Max buy @15% CAGR",
+        f"₹{r.max_buy_15pct:,.0f}" if r.max_buy_15pct else "—",
+    )
+
+    if r.is_strong_wealth:
+        st.success("🟢 Flagged as **Strong wealth candidate** under default Rulebook assumptions.")
+
+    if r.wealth_strengths or r.wealth_risks or r.wealth_suggestions:
+        with st.expander("Strengths · risks · next steps", expanded=True):
+            if r.wealth_strengths:
+                st.markdown("**Strengths**")
+                for s in r.wealth_strengths:
+                    st.markdown(f"- {s}")
+            if r.wealth_risks:
+                st.markdown("**Risks**")
+                for s in r.wealth_risks:
+                    st.markdown(f"- {s}")
+            if r.wealth_suggestions:
+                st.markdown("**Suggestions**")
+                for s in r.wealth_suggestions:
+                    st.markdown(f"- {s}")
+
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button(
+            f"🧮 Prefill Valuation Rulebook ({r.ticker})",
+            key=f"invc_val_prefill_{r.ticker}",
+            use_container_width=True,
+        ):
+            st.session_state.val_prefill_ticker = r.ticker
+            st.session_state.val_baseline = None
+            st.success(f"**{r.ticker}** queued — open Valuation Rulebook to tweak assumptions.")
+    with b2:
+        st.page_link(
+            VALUATION_RULEBOOK_PAGE,
+            label="Open Valuation Rulebook",
+            icon="🧮",
         )
 
 
@@ -150,16 +197,22 @@ def render_investment_course_page() -> None:
                 "Stock universe (NSE)",
                 nse_sources,
                 key=uni_key,
-                help="Start with Curated or Nifty 50 — Screener + PE history is slow.",
+                help="Start with Curated or Nifty 50 — Screener + wealth model is slower.",
+            )
+            include_wealth = st.checkbox(
+                "Load Valuation Rulebook on each match",
+                value=True,
+                key=f"{key}_wealth",
+                help="Runs default Rulebook model (target, CAGR, Strong wealth flag) per pass.",
+            )
+            strong_only = st.checkbox(
+                "Only Strong wealth candidates",
+                value=False,
+                key=f"{key}_strong",
+                help="Keep names where wealth verdict = Strong wealth candidate.",
             )
         with c2:
             st.markdown("#### Workflow A valuation")
-            st.page_link(
-                VALUATION_RULEBOOK_PAGE,
-                label="Valuation Rulebook",
-                icon="🧮",
-                help="Forward EPS x P/E and discounted fair value (My Learning).",
-            )
             max_peg = st.slider("Max PEG (buy zone)", 0.5, 2.0, 1.0, 0.05, key=f"{key}_peg")
             max_pct = st.slider(
                 "Max vs FY median % (Stalwart / PE check)",
@@ -186,8 +239,9 @@ def render_investment_course_page() -> None:
     with st.container(border=True):
         min_roce = st.slider("Min ROCE % (0 = off)", 0.0, 30.0, 0.0, 1.0, key=f"{key}_roce")
         st.caption(
-            "Portfolio rules from workflow: avoid tiny mcaps (₹100–500 Cr floor); "
-            "~15–20 stocks; max ~5% per name. Turnaround = manual research only."
+            "Scan = Workflow gates + optional Rulebook wealth. "
+            "Click a row for charts / P/E / full wealth panel. "
+            "Use Valuation Rulebook to change assumptions."
         )
 
     render_watchlist_panel(f"{key}_wl")
@@ -207,6 +261,8 @@ def render_investment_course_page() -> None:
         min_week_return_pct=min_wret,
         require_quickfire_pass=require_qf,
         min_checklist_score=min_qf,
+        include_wealth=include_wealth,
+        strong_wealth_only=strong_only,
         need_pe_history=mode
         in ("step0_categorize", "workflow_a_fast", "buy_candidates", "stalwarts_discount"),
     )
@@ -222,12 +278,17 @@ def render_investment_course_page() -> None:
         st.session_state[f"{session_key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")
         st.session_state[f"{session_key}_universe"] = universe
         st.session_state[f"{session_key}_mode"] = mode
+        st.session_state[f"{key}_chart_selected"] = None
         try:
             append_scan_record(
                 META["id"],
                 universe,
                 [r.raw_ticker for r in hits],
-                meta={"matches": len(hits), "mode": mode},
+                meta={
+                    "matches": len(hits),
+                    "mode": mode,
+                    "strong_wealth": sum(1 for r in hits if r.is_strong_wealth),
+                },
             )
         except Exception:
             pass
@@ -240,12 +301,16 @@ def render_investment_course_page() -> None:
     last_mode = st.session_state.get(f"{session_key}_mode", mode)
 
     if results is None:
-        st.info("👆 Start with **STEP 0 — Categorize**, then run **WORKFLOW A** on Fast Growers.")
+        st.info(
+            "👆 Pick a mode and universe, then **SCAN NOW**. "
+            "Results include Valuation Rulebook wealth when enabled."
+        )
         return
 
     if not results:
         st.warning(
-            "No matches. Try **STEP 0**, lower min mcap / Quick-Fire, or **Curated / Nifty 50**."
+            "No matches. Try **STEP 0**, turn off **Only Strong wealth**, "
+            "lower min mcap, or use **Curated / Nifty 50**."
         )
         return
 
@@ -254,7 +319,7 @@ def render_investment_course_page() -> None:
     default_rank = (
         "vol_ratio"
         if last_mode == "volume_spike"
-        else ("checklist" if last_mode == "workflow_a_fast" else "score")
+        else ("wealth" if include_wealth else "score")
     )
     ensure_session_choice(rank_key, rank_choices, default_rank)
     rank_by = st.radio(
@@ -266,7 +331,6 @@ def render_investment_course_page() -> None:
     )
     results = sort_investment_course(results, rank_by=rank_by, mode=last_mode)
 
-    # Category counts for STEP 0
     if last_mode == "step0_categorize":
         cats = {}
         for r in results:
@@ -276,13 +340,16 @@ def render_investment_course_page() -> None:
         for i, (cat, n) in enumerate(sorted(cats.items(), key=lambda x: -x[1])):
             cols[i % len(cols)].metric(cat, n)
 
+    n_strong = sum(1 for r in results if r.is_strong_wealth)
     st.success(
-        f"**{len(results)}** matches · {SCAN_MODES.get(last_mode, last_mode)} · "
-        f"{last_uni} · scanned {scan_at or '—'}"
+        f"**{len(results)}** matches · **{n_strong}** Strong wealth · "
+        f"{SCAN_MODES.get(last_mode, last_mode)} · {last_uni} · scanned {scan_at or '—'}"
     )
 
     rows = []
+    by_ticker = {}
     for i, r in enumerate(results, start=1):
+        by_ticker[r.ticker] = r
         row = result_to_row(r, i)
         for link_name, link_url in (r.links or {}).items():
             row[link_name] = link_url
@@ -301,6 +368,11 @@ def render_investment_course_page() -> None:
         df,
         {
             "Score": st.column_config.NumberColumn(format="%.1f"),
+            "Wealth score": st.column_config.NumberColumn(format="%d"),
+            "Model target ₹": st.column_config.NumberColumn(format="₹%.0f"),
+            "Upside %": st.column_config.NumberColumn(format="%+.1f"),
+            "Implied CAGR %": st.column_config.NumberColumn(format="%.1f"),
+            "Max buy @15%": st.column_config.NumberColumn(format="₹%.0f"),
             "Sales 3Y %": st.column_config.NumberColumn(format="%.1f"),
             "Profit 3Y %": st.column_config.NumberColumn(format="%.1f"),
             "Sales TTM %": st.column_config.NumberColumn(format="%.1f"),
@@ -316,6 +388,7 @@ def render_investment_course_page() -> None:
             "1w ret %": st.column_config.NumberColumn(format="%+.1f"),
             "Vol ratio": st.column_config.NumberColumn(format="%.1f"),
             "Price": st.column_config.NumberColumn(format="₹%.2f"),
+            "Wealth": st.column_config.TextColumn(width="medium"),
             "Verdict": st.column_config.TextColumn(width="medium"),
             "Next steps": st.column_config.TextColumn(width="large"),
             "QF flags": st.column_config.TextColumn(width="large"),
@@ -335,33 +408,76 @@ def render_investment_course_page() -> None:
         },
     )
 
+    chart_sel_key = f"{key}_chart_selected"
+
+    def _on_row_select(row: pd.Series) -> None:
+        try:
+            st.session_state[chart_sel_key] = str(row["Ticker"])
+        except Exception:
+            pass
+
     render_clickable_scan_table(
         df,
         key_prefix=f"{key}_results",
         universe_name=last_uni,
         column_config=col_cfg,
         height=min(560, 48 + len(df) * 38),
+        show_panel=False,
+        on_row_select=_on_row_select,
     )
 
-    if last_mode != "volume_spike" and results:
-        st.markdown("#### P/E history (top match) — Workflow A step 4")
-        top = results[0]
-        render_pe_history_panel(
-            display_ticker=top.ticker,
-            raw_ticker=top.raw_ticker,
-            max_pe_hint=float(top.fy_median_pe) if top.fy_median_pe else None,
-            key_prefix=f"{key}_pehist",
+    sel = st.session_state.get(chart_sel_key)
+    if not sel and results:
+        sel = results[0].ticker
+        st.caption("💡 Click a row to switch charts / wealth panel (showing top match for now).")
+
+    if sel and not df.empty:
+        st.markdown("---")
+        st.markdown(f"#### Selected: **{sel}**")
+        render_historical_detail_panel(
+            df,
+            universe_name=last_uni,
+            key_prefix=f"{key}_detail",
+            selected_ticker=sel,
         )
+
+        hit = df[df["Ticker"].astype(str) == str(sel)]
+        raw_sym = None
+        fy_med_hint = None
+        if not hit.empty:
+            if "Raw" in hit.columns:
+                raw_sym = str(hit.iloc[0]["Raw"])
+            if "FY median P/E" in hit.columns:
+                try:
+                    v = hit.iloc[0]["FY median P/E"]
+                    if pd.notna(v):
+                        fy_med_hint = float(v)
+                except Exception:
+                    pass
+
+        if last_mode != "volume_spike":
+            render_pe_history_panel(
+                display_ticker=str(sel),
+                raw_ticker=raw_sym,
+                max_pe_hint=fy_med_hint,
+                key_prefix=f"{key}_pehist",
+            )
+
+        picked = by_ticker.get(str(sel))
+        if picked:
+            st.markdown("#### Valuation Rulebook (from scan)")
+            _render_selected_wealth(picked)
 
     with st.expander("Quick-Fire + next steps (per stock)", expanded=False):
         for r in results[:25]:
+            wealth_bit = f" · {r.wealth_emoji} {r.wealth_verdict}" if r.wealth_verdict else ""
             st.markdown(
-                f"**{r.label}** ({r.category}) — {r.verdict}  \n"
+                f"**{r.label}** ({r.category}) — {r.verdict}{wealth_bit}  \n"
                 f"QF {r.checklist_score}/{r.checklist_max}: {' · '.join(r.checklist_flags[:5])}  \n"
                 f"*{r.next_steps}*"
             )
 
     st.caption(
-        "Source: Stock Analysis Workflow 1. Quant gates from Screener.in; "
-        "story / Glassdoor / concalls are manual. Not investment advice."
+        "Workflow 1 gates + Valuation Rulebook defaults. "
+        "Not investment advice — tweak assumptions on Valuation Rulebook before acting."
     )

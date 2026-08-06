@@ -35,17 +35,17 @@ except ImportError:
 
 META = {
     "id": "investment_course",
-    "title": "Investment Course (Stock Analysis Workflow)",
+    "title": "Investment Course + Valuation",
     "emoji": "📘",
     "nav_title": "Investment Course",
     "audience": (
-        "Investors following **Stock Analysis Workflow 1**: **STEP 0 categorize**, "
-        "**Workflow A Fast Growers**, then the **Quick-Fire Numbers Checklist**."
+        "Investors following **Stock Analysis Workflow 1**: categorize → Fast Grower gates, "
+        "then the **Valuation Rulebook** wealth read on the same scan."
     ),
     "purpose": (
-        "STEP 0 buckets by Screener compounded sales+profit CAGR. "
-        "Workflow A confirms ≥15%/≥15% growth, PE vs FY median, and PEG. "
-        "Quick-Fire flags OPM trend, interest YoY, and growth consistency."
+        "STEP 0 buckets by Screener sales+profit CAGR. Workflow A confirms growth, PE vs median, PEG. "
+        "Each match also runs a **default Valuation Rulebook** model (target, CAGR, Strong wealth filter). "
+        "Click a result for charts, P/E history, and the full wealth panel."
     ),
 }
 
@@ -60,6 +60,7 @@ SCAN_MODES: dict[str, str] = {
 
 RANK_BY_OPTIONS: dict[str, str] = {
     "score": "Workflow score",
+    "wealth": "Wealth score",
     "checklist": "Quick-Fire checklist score",
     "peg": "PEG (lowest)",
     "discount": "Discount vs FY median %",
@@ -102,6 +103,8 @@ class InvestmentCourseFilters:
     min_week_return_pct: float = 5.0
     require_quickfire_pass: bool = False  # Workflow A: optional hard gate
     min_checklist_score: int = 0
+    include_wealth: bool = True  # Valuation Rulebook snapshot per match
+    strong_wealth_only: bool = False  # keep only "Strong wealth candidate"
     screener_delay_sec: float = 0.18
     need_pe_history: bool = True
 
@@ -146,6 +149,20 @@ class InvestmentCourseResult:
     next_steps: str = ""
     pass_notes: list[str] = field(default_factory=list)
     links: dict = field(default_factory=dict)
+    # Valuation Rulebook snapshot
+    wealth_verdict: str = ""
+    wealth_emoji: str = ""
+    wealth_score: Optional[int] = None
+    wealth_stance: str = ""
+    model_target: Optional[float] = None
+    upside_pct: Optional[float] = None
+    implied_cagr_pct: Optional[float] = None
+    max_buy_15pct: Optional[float] = None
+    is_strong_wealth: bool = False
+    wealth_detail: str = ""
+    wealth_strengths: list[str] = field(default_factory=list)
+    wealth_risks: list[str] = field(default_factory=list)
+    wealth_suggestions: list[str] = field(default_factory=list)
 
 
 def _mcap_display(cr: Optional[float]) -> str:
@@ -507,6 +524,53 @@ def _empty_qf_fields() -> dict:
     }
 
 
+def _empty_wealth_fields() -> dict:
+    return {
+        "wealth_verdict": "",
+        "wealth_emoji": "",
+        "wealth_score": None,
+        "wealth_stance": "",
+        "model_target": None,
+        "upside_pct": None,
+        "implied_cagr_pct": None,
+        "max_buy_15pct": None,
+        "is_strong_wealth": False,
+        "wealth_detail": "",
+        "wealth_strengths": [],
+        "wealth_risks": [],
+        "wealth_suggestions": [],
+    }
+
+
+def _attach_wealth(raw: str, include: bool) -> dict:
+    if not include:
+        return _empty_wealth_fields()
+    try:
+        from valuation_model import quick_wealth_snapshot
+
+        snap = quick_wealth_snapshot(raw) or {}
+        if not snap:
+            return _empty_wealth_fields()
+        return {
+            "wealth_verdict": snap.get("wealth_verdict") or "",
+            "wealth_emoji": snap.get("wealth_emoji") or "",
+            "wealth_score": snap.get("wealth_score"),
+            "wealth_stance": snap.get("wealth_stance") or "",
+            "model_target": snap.get("model_target"),
+            "upside_pct": snap.get("upside_pct"),
+            "implied_cagr_pct": snap.get("implied_cagr_pct"),
+            "max_buy_15pct": snap.get("max_buy_15pct"),
+            "is_strong_wealth": bool(snap.get("is_strong_wealth")),
+            "wealth_detail": snap.get("wealth_detail") or "",
+            "wealth_strengths": list(snap.get("strengths") or []),
+            "wealth_risks": list(snap.get("risks") or []),
+            "wealth_suggestions": list(snap.get("suggestions") or []),
+        }
+    except Exception:
+        return _empty_wealth_fields()
+
+
+
 def scan_investment_course(
     scan_source: str,
     filters: InvestmentCourseFilters | None = None,
@@ -555,6 +619,9 @@ def scan_investment_course(
                     rationale,
                 ]
                 links = research_links(disp, raw, label)
+                wealth = _attach_wealth(raw, flt.include_wealth)
+                if flt.strong_wealth_only and not wealth.get("is_strong_wealth"):
+                    continue
 
                 results.append(
                     InvestmentCourseResult(
@@ -585,6 +652,7 @@ def scan_investment_course(
                         pass_notes=notes,
                         links=links,
                         **qf_fields,
+                        **wealth,
                     )
                 )
                 if flt.screener_delay_sec > 0:
@@ -702,6 +770,9 @@ def scan_investment_course(
                 continue
 
             links = research_links(disp, raw, label)
+            wealth = _attach_wealth(raw, flt.include_wealth)
+            if flt.strong_wealth_only and not wealth.get("is_strong_wealth"):
+                continue
 
             results.append(
                 InvestmentCourseResult(
@@ -742,6 +813,7 @@ def scan_investment_course(
                     next_steps=_next_steps(cat),
                     pass_notes=notes,
                     links=links,
+                    **wealth,
                 )
             )
         except Exception:
@@ -756,6 +828,16 @@ def sort_investment_course(
     rank_by: str = "score",
     mode: str = "step0_categorize",
 ) -> list[InvestmentCourseResult]:
+    if rank_by == "wealth":
+        return sorted(
+            results,
+            key=lambda r: (
+                int(r.wealth_score or -1),
+                1 if r.is_strong_wealth else 0,
+                float(r.score or 0),
+            ),
+            reverse=True,
+        )
     if rank_by == "checklist":
         return sorted(
             results,
@@ -793,6 +875,10 @@ def result_to_row(r: InvestmentCourseResult, rank: int) -> dict:
     elif r.interest_reducing is False:
         interest_flag = "No"
 
+    wealth_label = r.wealth_verdict or "—"
+    if r.wealth_emoji and r.wealth_verdict:
+        wealth_label = f"{r.wealth_emoji} {r.wealth_verdict}"
+
     return {
         "S.No.": rank,
         "Name": r.label,
@@ -800,6 +886,14 @@ def result_to_row(r: InvestmentCourseResult, rank: int) -> dict:
         "Raw": r.raw_ticker,
         "Category": r.category,
         "Score": r.score,
+        "Wealth": wealth_label,
+        "Wealth score": r.wealth_score,
+        "Strong wealth": "Yes" if r.is_strong_wealth else "—",
+        "Model target ₹": r.model_target,
+        "Upside %": r.upside_pct,
+        "Implied CAGR %": r.implied_cagr_pct,
+        "Max buy @15%": r.max_buy_15pct,
+        "Stance": r.wealth_stance or "—",
         "Verdict": r.verdict,
         "QF score": f"{r.checklist_score}/{r.checklist_max}",
         "Sales 3Y %": r.sales_growth_3y_pct,
