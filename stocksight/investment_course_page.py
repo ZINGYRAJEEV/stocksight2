@@ -51,6 +51,7 @@ Aligned with [`docs/Stock_Analysis_Workflow_1.md`](docs/Stock_Analysis_Workflow_
 | **Fast Grower** | Sales & profit 3Y ≥ 15% |
 | **Stalwart** | Both 10–15%; buy at/below FY median PE |
 | **Strong wealth** | Rulebook: upside ≥20%, CAGR ≥16%, score ≥70, entry ≤ max buy @15% |
+| **Below DMA** | Optional: price ≤ 50-DMA and/or ≤ 200-DMA (set how far below) |
 
 Click a result row for **price chart**, **P/E history**, and the full **wealth panel**.
 """
@@ -237,12 +238,49 @@ def render_investment_course_page() -> None:
             min_wret = st.slider("Min 1-week return %", 1.0, 20.0, 5.0, 0.5, key=f"{key}_wret")
 
     with st.container(border=True):
-        min_roce = st.slider("Min ROCE % (0 = off)", 0.0, 30.0, 0.0, 1.0, key=f"{key}_roce")
-        st.caption(
-            "Scan = Workflow gates + optional Rulebook wealth. "
-            "Click a row for charts / P/E / full wealth panel. "
-            "Use Valuation Rulebook to change assumptions."
-        )
+        st.markdown("#### Price vs moving averages")
+        d1, d2, d3 = st.columns([1.0, 1.0, 1.1])
+        with d1:
+            below_50 = st.checkbox(
+                "Only below 50-DMA",
+                value=False,
+                key=f"{key}_below50",
+                help="Keep names where LTP is at or below the 50-day moving average.",
+            )
+            max_vs_50 = st.slider(
+                "Max % vs 50-DMA",
+                -40.0,
+                0.0,
+                0.0,
+                1.0,
+                key=f"{key}_pct50",
+                disabled=not below_50,
+                help="0 = at/below DMA. −10 = at least 10% below the 50-DMA.",
+            )
+        with d2:
+            below_200 = st.checkbox(
+                "Only below 200-DMA",
+                value=False,
+                key=f"{key}_below200",
+                help="Keep names where LTP is at or below the 200-day moving average.",
+            )
+            max_vs_200 = st.slider(
+                "Max % vs 200-DMA",
+                -40.0,
+                0.0,
+                0.0,
+                1.0,
+                key=f"{key}_pct200",
+                disabled=not below_200,
+                help="0 = at/below DMA. −10 = at least 10% below the 200-DMA.",
+            )
+        with d3:
+            min_roce = st.slider("Min ROCE % (0 = off)", 0.0, 30.0, 0.0, 1.0, key=f"{key}_roce")
+            st.caption(
+                "Every match shows **vs 50-DMA %** and **vs 200-DMA %**. "
+                "Tick the boxes to hard-filter for names trading low vs those averages. "
+                "Rank by “Most below 50/200-DMA” after the scan."
+            )
 
     render_watchlist_panel(f"{key}_wl")
 
@@ -263,6 +301,10 @@ def render_investment_course_page() -> None:
         min_checklist_score=min_qf,
         include_wealth=include_wealth,
         strong_wealth_only=strong_only,
+        require_below_50dma=below_50,
+        require_below_200dma=below_200,
+        max_pct_vs_50dma=max_vs_50,
+        max_pct_vs_200dma=max_vs_200,
         need_pe_history=mode
         in ("step0_categorize", "workflow_a_fast", "buy_candidates", "stalwarts_discount"),
     )
@@ -309,7 +351,7 @@ def render_investment_course_page() -> None:
 
     if not results:
         st.warning(
-            "No matches. Try **STEP 0**, turn off **Only Strong wealth**, "
+            "No matches. Try **STEP 0**, turn off **Only Strong wealth** / DMA filters, "
             "lower min mcap, or use **Curated / Nifty 50**."
         )
         return
@@ -319,7 +361,11 @@ def render_investment_course_page() -> None:
     default_rank = (
         "vol_ratio"
         if last_mode == "volume_spike"
-        else ("wealth" if include_wealth else "score")
+        else (
+            "dma200"
+            if below_200
+            else ("dma50" if below_50 else ("wealth" if include_wealth else "score"))
+        )
     )
     ensure_session_choice(rank_key, rank_choices, default_rank)
     rank_by = st.radio(
@@ -387,6 +433,10 @@ def render_investment_course_page() -> None:
             "ROCE %": st.column_config.NumberColumn(format="%.1f"),
             "1w ret %": st.column_config.NumberColumn(format="%+.1f"),
             "Vol ratio": st.column_config.NumberColumn(format="%.1f"),
+            "50-DMA": st.column_config.NumberColumn(format="₹%.2f"),
+            "vs 50-DMA %": st.column_config.NumberColumn(format="%+.1f"),
+            "200-DMA": st.column_config.NumberColumn(format="₹%.2f"),
+            "vs 200-DMA %": st.column_config.NumberColumn(format="%+.1f"),
             "Price": st.column_config.NumberColumn(format="₹%.2f"),
             "Wealth": st.column_config.TextColumn(width="medium"),
             "Verdict": st.column_config.TextColumn(width="medium"),

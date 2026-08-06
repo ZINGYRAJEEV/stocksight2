@@ -66,6 +66,8 @@ RANK_BY_OPTIONS: dict[str, str] = {
     "discount": "Discount vs FY median %",
     "growth": "Min(sales, profit) 3Y %",
     "vol_ratio": "Volume ratio (spike mode)",
+    "dma50": "Most below 50-DMA",
+    "dma200": "Most below 200-DMA",
 }
 
 RESEARCH_TOOLS = (
@@ -105,6 +107,10 @@ class InvestmentCourseFilters:
     min_checklist_score: int = 0
     include_wealth: bool = True  # Valuation Rulebook snapshot per match
     strong_wealth_only: bool = False  # keep only "Strong wealth candidate"
+    require_below_50dma: bool = False
+    require_below_200dma: bool = False
+    max_pct_vs_50dma: float = 0.0  # keep if % vs 50-DMA <= this (0 = at/below)
+    max_pct_vs_200dma: float = 0.0
     screener_delay_sec: float = 0.18
     need_pe_history: bool = True
 
@@ -144,6 +150,10 @@ class InvestmentCourseResult:
     checklist_flags: list[str] = field(default_factory=list)
     week_return_pct: Optional[float] = None
     vol_ratio: Optional[float] = None
+    ma50: Optional[float] = None
+    ma200: Optional[float] = None
+    pct_vs_50dma: Optional[float] = None
+    pct_vs_200dma: Optional[float] = None
     score: float = 0.0
     verdict: str = ""
     next_steps: str = ""
@@ -468,36 +478,128 @@ def _next_steps(category: str) -> str:
     return "Re-check STEP 0 category; then open matching workflow"
 
 
-def _volume_spike_metrics(raw: str) -> tuple[Optional[float], Optional[float], Optional[float]]:
+def _empty_dma_fields() -> dict:
+    return {
+        "ma50": None,
+        "ma200": None,
+        "pct_vs_50dma": None,
+        "pct_vs_200dma": None,
+    }
+
+
+def _volume_spike_metrics(raw: str) -> dict:
+    """1w return, volume ratio, price, and 50/200-DMA from one daily history pull."""
+    empty = {
+        "week_return_pct": None,
+        "vol_ratio": None,
+        "price": None,
+        **_empty_dma_fields(),
+    }
     try:
         hist = fetch_price_history(raw, "1d")
     except Exception:
-        hist = None
+        return empty
     if hist is None or hist.empty or len(hist) < 30:
-        return None, None, None
+        return empty
 
     close = hist_series(hist, "Close")
     vol = hist_series(hist, "Volume")
     if close is None or close.empty or vol is None or vol.empty:
-        return None, None, None
+        return empty
 
-    n = min(5, len(close) - 1)
-    if n < 1:
-        return None, None, None
-    try:
-        week_ret = (float(close.iloc[-1]) / float(close.iloc[-1 - n]) - 1.0) * 100.0
-    except Exception:
-        week_ret = None
+    close_f = close.dropna().astype(float)
+    if close_f.empty:
+        return empty
+
+    n = min(5, len(close_f) - 1)
+    week_ret = None
+    if n >= 1:
+        try:
+            week_ret = (float(close_f.iloc[-1]) / float(close_f.iloc[-1 - n]) - 1.0) * 100.0
+        except Exception:
+            week_ret = None
 
     vol_1w = float(vol.tail(5).mean()) if len(vol) >= 5 else float(vol.mean())
     vol_1y = float(vol.tail(252).mean()) if len(vol) >= 20 else float(vol.mean())
     ratio = (vol_1w / vol_1y) if vol_1y > 0 else None
-    price = float(close.iloc[-1]) if len(close) else None
-    return (
-        round(week_ret, 2) if week_ret is not None else None,
-        round(ratio, 2) if ratio is not None else None,
-        price,
-    )
+    price = float(close_f.iloc[-1])
+
+    out = {
+        "week_return_pct": round(week_ret, 2) if week_ret is not None else None,
+        "vol_ratio": round(ratio, 2) if ratio is not None else None,
+        "price": round(price, 2),
+        **_empty_dma_fields(),
+    }
+    if len(close_f) >= 50:
+        ma50 = float(close_f.rolling(50).mean().iloc[-1])
+        if ma50 > 0:
+            out["ma50"] = round(ma50, 2)
+            out["pct_vs_50dma"] = round((price / ma50 - 1.0) * 100.0, 2)
+    if len(close_f) >= 200:
+        ma200 = float(close_f.rolling(200).mean().iloc[-1])
+        if ma200 > 0:
+            out["ma200"] = round(ma200, 2)
+            out["pct_vs_200dma"] = round((price / ma200 - 1.0) * 100.0, 2)
+    return out
+
+
+def _dma_metrics(raw: str) -> dict:
+    """Price vs 50-DMA / 200-DMA from daily Yahoo history."""
+    out = _empty_dma_fields()
+    try:
+        hist = fetch_price_history(raw, "1d")
+    except Exception:
+        return out
+    if hist is None or hist.empty:
+        return out
+    close = hist_series(hist, "Close")
+    if close is None or close.empty:
+        return out
+    close = close.dropna().astype(float)
+    if close.empty:
+        return out
+    price = float(close.iloc[-1])
+    out["price"] = round(price, 2)
+    if len(close) >= 50:
+        ma50 = float(close.rolling(50).mean().iloc[-1])
+        if ma50 > 0:
+            out["ma50"] = round(ma50, 2)
+            out["pct_vs_50dma"] = round((price / ma50 - 1.0) * 100.0, 2)
+    if len(close) >= 200:
+        ma200 = float(close.rolling(200).mean().iloc[-1])
+        if ma200 > 0:
+            out["ma200"] = round(ma200, 2)
+            out["pct_vs_200dma"] = round((price / ma200 - 1.0) * 100.0, 2)
+    return out
+
+
+def _need_dma(flt: InvestmentCourseFilters) -> bool:
+    return bool(flt.require_below_50dma or flt.require_below_200dma)
+
+
+def _passes_dma_filter(dma: dict, flt: InvestmentCourseFilters) -> bool:
+    if flt.require_below_50dma:
+        pct = dma.get("pct_vs_50dma")
+        if pct is None or float(pct) > float(flt.max_pct_vs_50dma):
+            return False
+    if flt.require_below_200dma:
+        pct = dma.get("pct_vs_200dma")
+        if pct is None or float(pct) > float(flt.max_pct_vs_200dma):
+            return False
+    return True
+
+
+def _attach_dma(raw: str, flt: InvestmentCourseFilters, precomputed: dict | None = None) -> dict:
+    """Attach 50/200-DMA levels; hard-gate only when require_below_* is on."""
+    dma = precomputed if precomputed is not None else _dma_metrics(raw)
+    return {
+        "ma50": dma.get("ma50"),
+        "ma200": dma.get("ma200"),
+        "pct_vs_50dma": dma.get("pct_vs_50dma"),
+        "pct_vs_200dma": dma.get("pct_vs_200dma"),
+        "_dma_ok": _passes_dma_filter(dma, flt) if _need_dma(flt) else True,
+        "_dma_price": dma.get("price"),
+    }
 
 
 def _needs_pe_history(mode: str, category: str) -> bool:
@@ -594,7 +696,10 @@ def scan_investment_course(
         disp = raw.replace(".NS", "").replace(".BO", "")
         try:
             if mode == "volume_spike":
-                week_ret, vol_ratio, price = _volume_spike_metrics(raw)
+                tech = _volume_spike_metrics(raw)
+                week_ret = tech.get("week_return_pct")
+                vol_ratio = tech.get("vol_ratio")
+                price = tech.get("price")
                 if week_ret is None or vol_ratio is None:
                     continue
                 if vol_ratio < flt.vol_mult or week_ret <= flt.min_week_return_pct:
@@ -622,6 +727,16 @@ def scan_investment_course(
                 wealth = _attach_wealth(raw, flt.include_wealth)
                 if flt.strong_wealth_only and not wealth.get("is_strong_wealth"):
                     continue
+                dma_pack = _attach_dma(raw, flt, precomputed=tech)
+                if dma_pack.pop("_dma_ok", True) is False:
+                    continue
+                dma_price = dma_pack.pop("_dma_price", None)
+                if price is None and dma_price is not None:
+                    price = dma_price
+                if dma_pack.get("pct_vs_50dma") is not None:
+                    notes.append(f"vs 50-DMA {dma_pack['pct_vs_50dma']:+.1f}%")
+                if dma_pack.get("pct_vs_200dma") is not None:
+                    notes.append(f"vs 200-DMA {dma_pack['pct_vs_200dma']:+.1f}%")
 
                 results.append(
                     InvestmentCourseResult(
@@ -653,6 +768,7 @@ def scan_investment_course(
                         links=links,
                         **qf_fields,
                         **wealth,
+                        **dma_pack,
                     )
                 )
                 if flt.screener_delay_sec > 0:
@@ -773,6 +889,16 @@ def scan_investment_course(
             wealth = _attach_wealth(raw, flt.include_wealth)
             if flt.strong_wealth_only and not wealth.get("is_strong_wealth"):
                 continue
+            dma_pack = _attach_dma(raw, flt)
+            if dma_pack.pop("_dma_ok", True) is False:
+                continue
+            dma_price = dma_pack.pop("_dma_price", None)
+            if price is None and dma_price is not None:
+                price = dma_price
+            if dma_pack.get("pct_vs_50dma") is not None:
+                notes.append(f"vs 50-DMA {dma_pack['pct_vs_50dma']:+.1f}%")
+            if dma_pack.get("pct_vs_200dma") is not None:
+                notes.append(f"vs 200-DMA {dma_pack['pct_vs_200dma']:+.1f}%")
 
             results.append(
                 InvestmentCourseResult(
@@ -814,6 +940,7 @@ def scan_investment_course(
                     pass_notes=notes,
                     links=links,
                     **wealth,
+                    **dma_pack,
                 )
             )
         except Exception:
@@ -865,6 +992,16 @@ def sort_investment_course(
         )
     if rank_by == "vol_ratio" or mode == "volume_spike":
         return sorted(results, key=lambda r: float(r.vol_ratio or 0), reverse=True)
+    if rank_by == "dma50":
+        return sorted(
+            results,
+            key=lambda r: float(r.pct_vs_50dma) if r.pct_vs_50dma is not None else 9999.0,
+        )
+    if rank_by == "dma200":
+        return sorted(
+            results,
+            key=lambda r: float(r.pct_vs_200dma) if r.pct_vs_200dma is not None else 9999.0,
+        )
     return sorted(results, key=lambda r: float(r.score or 0), reverse=True)
 
 
@@ -913,6 +1050,10 @@ def result_to_row(r: InvestmentCourseResult, rank: int) -> dict:
         "ROCE %": r.roce_pct,
         "1w ret %": r.week_return_pct,
         "Vol ratio": r.vol_ratio,
+        "50-DMA": r.ma50,
+        "vs 50-DMA %": r.pct_vs_50dma,
+        "200-DMA": r.ma200,
+        "vs 200-DMA %": r.pct_vs_200dma,
         "Price": r.price,
         "Mcap": r.market_cap_display,
         "Sector": r.sector,
