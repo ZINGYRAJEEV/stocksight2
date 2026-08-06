@@ -283,6 +283,15 @@ def render_valuation_rulebook_page() -> None:
     if st.session_state.get("val_loaded_ticker") != base.display_ticker:
         apply_baseline_to_session(base, book=SECTOR_RULEBOOK[base.sector_key])
 
+    # Apply Screener pull before the number_input widget is created (Streamlit forbids
+    # mutating a widget key after it has been instantiated in the same run).
+    pending_rev = st.session_state.pop("val_rev0_pending", None)
+    if pending_rev is not None:
+        try:
+            st.session_state.val_rev0 = float(pending_rev)
+        except (TypeError, ValueError):
+            pass
+
     ic1, ic2, ic3, ic3b = st.columns(4)
     rev0 = ic1.number_input(
         "Rule 1 — Revenue ₹ Cr (Row 1)",
@@ -322,7 +331,7 @@ def render_valuation_rulebook_page() -> None:
         c_pull, _ = st.columns([1, 3])
         with c_pull:
             if st.button(f"Use Screener Mar {est_year} sales ({screener_rev:,.0f} Cr)", key="val_pull_rev"):
-                st.session_state.val_rev0 = float(screener_rev)
+                st.session_state.val_rev0_pending = float(screener_rev)
                 st.rerun()
 
     use_growth_path = st.checkbox(
