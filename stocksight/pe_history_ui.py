@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 import streamlit as st
@@ -18,10 +18,45 @@ except ImportError:
     from stocksight.pe_history import build_pe_history, pe_history_to_dataframe  # type: ignore[no-redef]
 
 
+def _sanitize_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    """Drop nested / non-primitive values so st.cache_data can pickle the result."""
+    skip = {"profile"}
+    out: dict[str, Any] = {}
+    for k, v in (meta or {}).items():
+        if k in skip:
+            continue
+        if v is None:
+            out[k] = None
+        elif isinstance(v, bool):
+            out[k] = bool(v)
+        elif isinstance(v, str):
+            out[k] = v
+        elif isinstance(v, int) and not isinstance(v, bool):
+            out[k] = int(v)
+        elif isinstance(v, float):
+            out[k] = float(v)
+        elif hasattr(v, "item"):  # numpy scalar
+            try:
+                out[k] = v.item()
+            except Exception:
+                continue
+        elif isinstance(v, (list, tuple)):
+            cleaned = []
+            for x in v:
+                if x is None or isinstance(x, (bool, int, float, str)):
+                    cleaned.append(x)
+                elif hasattr(x, "item"):
+                    cleaned.append(x.item())
+            out[k] = cleaned
+    return out
+
+
 @st.cache_data(ttl=900, show_spinner=False)
-def _cached_pe_history(display_ticker: str, raw_ticker: str) -> tuple[list, dict]:
+def _cached_pe_history(display_ticker: str, raw_ticker: str) -> tuple[pd.DataFrame, dict]:
+    """Cache a DataFrame + primitive meta — PeHistoryPoint dataclasses are not pickle-safe."""
     points, meta = build_pe_history(display_ticker, raw_ticker)
-    return points, meta
+    df = pe_history_to_dataframe(points)
+    return df, _sanitize_meta(meta)
 
 
 def render_pe_history_panel(
@@ -42,19 +77,18 @@ def render_pe_history_panel(
     with st.expander(f"📉 Historical P/E — **{disp}**", expanded=expanded):
         with st.spinner(f"Loading EPS history (Screener.in) + prices (Yahoo) for {disp}…"):
             try:
-                points, meta = _cached_pe_history(disp, raw)
+                df, meta = _cached_pe_history(disp, raw)
             except Exception as exc:
                 st.warning(f"Could not build P/E history: {exc}")
                 return
 
-        if not points:
+        if df is None or df.empty:
             st.info(
                 "No EPS history found on Screener.in for this name. "
                 "Sign in via the Screener session panel if rate-limited."
             )
             return
 
-        df = pe_history_to_dataframe(points)
         chart_df = df[df["P/E"].notna()].copy()
         if chart_df.empty:
             st.warning("EPS found but could not compute P/E — check Yahoo price history.")

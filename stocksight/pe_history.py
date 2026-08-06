@@ -166,6 +166,7 @@ def build_pe_history(
         "profit_growth_3y_pct": profile.get("profit_growth_3y_pct"),
         "profit_growth_ttm_pct": profile.get("profit_growth_ttm_pct"),
         "market_cap_cr": profile.get("market_cap_cr"),
+        # Keep profile out of cached UI paths — nested dicts can break st.cache_data pickle.
         "profile": profile,
     }
     median_ref = meta["fy_median_pe"] if meta["fy_median_pe"] is not None else meta["median_pe"]
