@@ -273,7 +273,7 @@ NAV_PAGES = {
         st.Page(page_multibagger_patterns, title="Multi-Bagger Patterns", icon="🚀"),
         st.Page(page_value_growth, title="Value Growth (P/E · EPS)", icon="📐"),
         st.Page(page_below_median_pe, title="Healthy Below Median PE", icon="📉"),
-        st.Page(page_valuation_rulebook, title="Valuation Rulebook", icon="🧮"),
+        st.Page("stocksight/pages/Valuation Rulebook.py", title="Valuation Rulebook", icon="🧮"),
         st.Page(page_investment_course, title="Investment Course (Workflow)", icon="📘"),
     ],
     "🤖 Algo Strategy": [

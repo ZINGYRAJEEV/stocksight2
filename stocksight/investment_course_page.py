@@ -34,6 +34,9 @@ from ui_components import (
 )
 
 
+VALUATION_RULEBOOK_PAGE = "stocksight/pages/Valuation Rulebook.py"
+
+
 def _rules_panel() -> None:
     with st.expander("📖 Stock Analysis Workflow 1 — how this screen works", expanded=True):
         st.markdown(
@@ -64,7 +67,7 @@ Sales & profit CAGR · OPM trend · interest reducing YoY · tax caution if fall
 """
         )
         st.page_link(
-            "page_valuation_rulebook",
+            VALUATION_RULEBOOK_PAGE,
             label="Open Valuation Rulebook (discounted PE / forward model)",
             icon="🧮",
         )
@@ -152,7 +155,7 @@ def render_investment_course_page() -> None:
         with c2:
             st.markdown("#### Workflow A valuation")
             st.page_link(
-                "page_valuation_rulebook",
+                VALUATION_RULEBOOK_PAGE,
                 label="Valuation Rulebook",
                 icon="🧮",
                 help="Forward EPS x P/E and discounted fair value (My Learning).",
