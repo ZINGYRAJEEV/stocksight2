@@ -33,6 +33,41 @@ except ImportError:
         fetch_screener_value_profile,
     )
 
+# Sector baskets (Nifty sectoral constituents) — scan one sector at a time.
+try:
+    try:
+        from .intraday import NSE_INTRADAY_UNIVERSES
+    except ImportError:
+        from intraday import NSE_INTRADAY_UNIVERSES
+except Exception:
+    NSE_INTRADAY_UNIVERSES = {}
+
+SECTOR_SCAN_SOURCES: dict[str, list[str]] = {
+    k: list(v)
+    for k, v in (NSE_INTRADAY_UNIVERSES or {}).items()
+    if str(k).startswith("Sector ·")
+}
+
+BROAD_SCAN_SOURCES: list[str] = [
+    s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s
+]
+
+
+def resolve_investment_course_tickers(scan_source: str) -> list[tuple[str, str]]:
+    """Resolve broad NSE/curated lists or sector baskets into (label, raw) pairs."""
+    if scan_source in SECTOR_SCAN_SOURCES:
+        out: list[tuple[str, str]] = []
+        for t in SECTOR_SCAN_SOURCES[scan_source]:
+            raw = t if str(t).endswith((".NS", ".BO")) else f"{t}.NS"
+            disp = raw.replace(".NS", "").replace(".BO", "")
+            out.append((disp, raw))
+        return out
+    return resolve_scan_tickers(scan_source)
+
+
+def universe_ticker_count(scan_source: str) -> int:
+    return len(resolve_investment_course_tickers(scan_source))
+
 META = {
     "id": "investment_course",
     "title": "Investment Course + Valuation",
@@ -683,7 +718,7 @@ def scan_investment_course(
 ) -> list[InvestmentCourseResult]:
     flt = filters or InvestmentCourseFilters()
     mode = flt.mode if flt.mode in SCAN_MODES else "step0_categorize"
-    universe = resolve_scan_tickers(scan_source)
+    universe = resolve_investment_course_tickers(scan_source)
     if not universe:
         return []
 
@@ -1006,6 +1041,22 @@ def sort_investment_course(
             key=lambda r: float(r.pct_vs_200dma) if r.pct_vs_200dma is not None else 9999.0,
         )
     return sorted(results, key=lambda r: float(r.score or 0), reverse=True)
+
+
+def group_results_by_sector(
+    results: list[InvestmentCourseResult],
+    *,
+    rank_by: str = "score",
+    mode: str = "step0_categorize",
+) -> dict[str, list[InvestmentCourseResult]]:
+    """Group scan hits by Yahoo sector (largest groups first)."""
+    grouped: dict[str, list[InvestmentCourseResult]] = {}
+    for r in results:
+        sec = (r.sector or "").strip() or "—"
+        grouped.setdefault(sec, []).append(r)
+    for sec in list(grouped.keys()):
+        grouped[sec] = sort_investment_course(grouped[sec], rank_by=rank_by, mode=mode)
+    return dict(sorted(grouped.items(), key=lambda kv: (-len(kv[1]), kv[0].lower())))
 
 
 def result_to_row(r: InvestmentCourseResult, rank: int) -> dict:

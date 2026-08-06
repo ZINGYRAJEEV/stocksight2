@@ -161,5 +161,36 @@ class TestStressWealthSnapshot(unittest.TestCase):
         self.assertEqual(kwargs.get("current_price"), 1000.0)
 
 
+class TestSectorGrouping(unittest.TestCase):
+    def test_group_by_sector_largest_first(self):
+        from investment_course_screener import group_results_by_sector
+
+        rs = [
+            _sample_result(ticker="A", sector="Technology", score=10),
+            _sample_result(ticker="B", sector="Technology", score=20),
+            _sample_result(ticker="C", sector="Financial Services", score=5),
+        ]
+        grouped = group_results_by_sector(rs, rank_by="score")
+        self.assertEqual(list(grouped.keys())[0], "Technology")
+        self.assertEqual([r.ticker for r in grouped["Technology"]], ["B", "A"])
+        self.assertEqual(len(grouped["Financial Services"]), 1)
+
+
+class TestSectorUniverse(unittest.TestCase):
+    def test_sector_sources_available(self):
+        from investment_course_screener import (
+            SECTOR_SCAN_SOURCES,
+            resolve_investment_course_tickers,
+            universe_ticker_count,
+        )
+
+        self.assertTrue(SECTOR_SCAN_SOURCES)
+        bank_key = next(k for k in SECTOR_SCAN_SOURCES if "Bank" in k and "PSU" not in k)
+        tickers = resolve_investment_course_tickers(bank_key)
+        self.assertGreaterEqual(len(tickers), 5)
+        self.assertTrue(all(r.endswith(".NS") for _, r in tickers))
+        self.assertEqual(universe_ticker_count(bank_key), len(tickers))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -15,15 +15,20 @@ from investment_course_analysis import (
     practical_stance,
 )
 from investment_course_screener import (
+    BROAD_SCAN_SOURCES,
     META,
     RANK_BY_OPTIONS,
     RESEARCH_TOOLS,
     SCAN_MODES,
     SCAN_SOURCES,
+    SECTOR_SCAN_SOURCES,
     InvestmentCourseFilters,
+    group_results_by_sector,
+    resolve_investment_course_tickers,
     result_to_row,
     scan_investment_course,
     sort_investment_course,
+    universe_ticker_count,
 )
 from pe_history_ui import render_pe_history_panel
 from scan_history_store import append_scan_record
@@ -61,8 +66,8 @@ Aligned with [`docs/Stock_Analysis_Workflow_1.md`](docs/Stock_Analysis_Workflow_
 | **Below DMA** | Optional: price ≤ 50-DMA and/or ≤ 200-DMA (set how far below) |
 
 After you click a result: **Steps 3–6** (category research · story checks · stress Rulebook · stance/sizing).
-
-Click a result row for **price chart**, **P/E history**, and the full **wealth panel**.
+Results can be **grouped by sector** after the scan. For faster scans, pick a
+**sector basket** (Bank / IT / Pharma / …) under Universe → Scan scope.
 """
         )
         st.page_link(
@@ -457,15 +462,48 @@ def render_investment_course_page() -> None:
         c1, c2, c3 = st.columns([1.0, 1.05, 1.05])
         with c1:
             st.markdown("#### Universe")
-            uni_key = f"{key}_universe"
-            nse_sources = [s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s]
-            ensure_session_choice(uni_key, nse_sources, nse_sources[0])
-            universe = st.selectbox(
-                "Stock universe (NSE)",
-                nse_sources,
-                key=uni_key,
-                help="Start with Curated or Nifty 50 — Screener + wealth model is slower.",
+            scope_key = f"{key}_uni_scope"
+            ensure_session_choice(scope_key, ["By sector", "Broad market"], "By sector")
+            uni_scope = st.radio(
+                "Scan scope",
+                ["By sector", "Broad market"],
+                horizontal=True,
+                key=scope_key,
+                help="Prefer **By sector** — smaller lists scan faster and are easier to research.",
             )
+
+            if uni_scope == "By sector" and SECTOR_SCAN_SOURCES:
+                sector_keys = list(SECTOR_SCAN_SOURCES.keys())
+                sec_key = f"{key}_sector_uni"
+                ensure_session_choice(sec_key, sector_keys, sector_keys[0])
+                universe = st.selectbox(
+                    "Sector basket",
+                    sector_keys,
+                    key=sec_key,
+                    format_func=lambda s: f"{s.replace('Sector · ', '')} ({universe_ticker_count(s)})",
+                    help="Nifty sectoral constituents — pick one sector per scan.",
+                )
+                preview = resolve_investment_course_tickers(universe)
+                st.caption(
+                    f"**{len(preview)}** tickers · "
+                    + ", ".join(t for t, _ in preview[:12])
+                    + ("…" if len(preview) > 12 else "")
+                )
+            else:
+                uni_key = f"{key}_universe"
+                nse_sources = BROAD_SCAN_SOURCES or [
+                    s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s
+                ]
+                ensure_session_choice(uni_key, nse_sources, nse_sources[0])
+                universe = st.selectbox(
+                    "Stock universe (NSE)",
+                    nse_sources,
+                    key=uni_key,
+                    format_func=lambda s: f"{s} ({universe_ticker_count(s)})",
+                    help="Start with Curated or Nifty 50 — Screener + wealth model is slower.",
+                )
+                st.caption(f"**{universe_ticker_count(universe)}** tickers in this broad list.")
+
             include_wealth = st.checkbox(
                 "Load Valuation Rulebook on each match",
                 value=True,
@@ -610,7 +648,7 @@ def render_investment_course_page() -> None:
 
     if results is None:
         st.info(
-            "👆 Pick a mode and universe, then **SCAN NOW**. "
+            "👆 Pick a **sector basket** (or broad universe), then **SCAN NOW**. "
             "Results include Valuation Rulebook wealth when enabled."
         )
         return
@@ -652,32 +690,74 @@ def render_investment_course_page() -> None:
         for i, (cat, n) in enumerate(sorted(cats.items(), key=lambda x: -x[1])):
             cols[i % len(cols)].metric(cat, n)
 
+    grouped_all = group_results_by_sector(results, rank_by=rank_by, mode=last_mode)
+    sector_names = list(grouped_all.keys())
+
+    st.markdown("#### Sector mix")
+    if sector_names:
+        scols = st.columns(min(len(sector_names), 6) or 1)
+        for i, sec in enumerate(sector_names):
+            scols[i % len(scols)].metric(sec, len(grouped_all[sec]))
+    else:
+        st.caption("No sector data on matches.")
+
+    v1, v2 = st.columns([1.2, 1.4])
+    with v1:
+        view_mode = st.radio(
+            "Results layout",
+            ["Grouped by sector", "Flat table"],
+            horizontal=True,
+            key=f"{key}_view",
+        )
+    with v2:
+        sector_choices = ["All sectors"] + sector_names
+        ensure_session_choice(f"{key}_sector_filter", sector_choices, "All sectors")
+        sector_filter = st.selectbox(
+            "Filter sector",
+            sector_choices,
+            key=f"{key}_sector_filter",
+            help="Show one sector only, or all.",
+        )
+
+    if sector_filter != "All sectors":
+        results = [r for r in results if ((r.sector or "").strip() or "—") == sector_filter]
+        grouped_all = group_results_by_sector(results, rank_by=rank_by, mode=last_mode)
+
     n_strong = sum(1 for r in results if r.is_strong_wealth)
+    n_sectors = len(grouped_all)
     st.success(
-        f"**{len(results)}** matches · **{n_strong}** Strong wealth · "
+        f"**{len(results)}** matches · **{n_sectors}** sector(s) · **{n_strong}** Strong wealth · "
         f"{SCAN_MODES.get(last_mode, last_mode)} · {last_uni} · scanned {scan_at or '—'}"
     )
 
-    rows = []
-    by_ticker = {}
-    for i, r in enumerate(results, start=1):
-        by_ticker[r.ticker] = r
-        row = result_to_row(r, i)
-        for link_name, link_url in (r.links or {}).items():
-            row[link_name] = link_url
-        rows.append(row)
+    by_ticker = {r.ticker: r for r in results}
 
-    df = pd.DataFrame(rows)
-    df = deduplicate_scan_results(df)
-    df = prepare_scan_results_df(
-        df,
-        universe_name=last_uni,
-        cache_key_prefix=f"{key}_results",
-        raw_ticker_col="Raw",
-    )
+    def _rows_for(slice_results: list) -> list[dict]:
+        out = []
+        for i, r in enumerate(slice_results, start=1):
+            row = result_to_row(r, i)
+            for link_name, link_url in (r.links or {}).items():
+                row[link_name] = link_url
+            out.append(row)
+        return out
+
+    def _df_for(slice_results: list, cache_suffix: str) -> pd.DataFrame:
+        df_local = pd.DataFrame(_rows_for(slice_results))
+        if df_local.empty:
+            return df_local
+        df_local = deduplicate_scan_results(df_local)
+        return prepare_scan_results_df(
+            df_local,
+            universe_name=last_uni,
+            cache_key_prefix=f"{key}_results_{cache_suffix}",
+            raw_ticker_col="Raw",
+        )
+
+    # Build a master df (all filtered results) for detail / PE panels
+    df = _df_for(results, "all")
 
     col_cfg = filter_column_config(
-        df,
+        df if not df.empty else pd.DataFrame([{"Ticker": ""}]),
         {
             "Score": st.column_config.NumberColumn(format="%.1f"),
             "Wealth score": st.column_config.NumberColumn(format="%d"),
@@ -704,6 +784,7 @@ def render_investment_course_page() -> None:
             "200-DMA": st.column_config.NumberColumn(format="₹%.2f"),
             "vs 200-DMA %": st.column_config.NumberColumn(format="%+.1f"),
             "Price": st.column_config.NumberColumn(format="₹%.2f"),
+            "Sector": st.column_config.TextColumn(width="medium"),
             "Wealth": st.column_config.TextColumn(width="medium"),
             "Verdict": st.column_config.TextColumn(width="medium"),
             "Next steps": st.column_config.TextColumn(width="large"),
@@ -733,15 +814,45 @@ def render_investment_course_page() -> None:
         except Exception:
             pass
 
-    render_clickable_scan_table(
-        df,
-        key_prefix=f"{key}_results",
-        universe_name=last_uni,
-        column_config=col_cfg,
-        height=min(560, 48 + len(df) * 38),
-        show_panel=False,
-        on_row_select=_on_row_select,
-    )
+    if df.empty:
+        st.warning("No matches in the selected sector filter.")
+        return
+
+    if view_mode == "Grouped by sector":
+        for sec, sec_hits in grouped_all.items():
+            n_sw = sum(1 for r in sec_hits if r.is_strong_wealth)
+            with st.expander(
+                f"**{sec}** — {len(sec_hits)} ticker(s)"
+                + (f" · {n_sw} Strong wealth" if n_sw else ""),
+                expanded=len(grouped_all) <= 4 or sec == sector_names[0],
+            ):
+                tickers_line = ", ".join(r.ticker for r in sec_hits[:40])
+                if len(sec_hits) > 40:
+                    tickers_line += f" … +{len(sec_hits) - 40} more"
+                st.caption(tickers_line)
+                sec_df = _df_for(sec_hits, f"sec_{sec}")
+                if sec_df.empty:
+                    st.caption("No rows.")
+                    continue
+                render_clickable_scan_table(
+                    sec_df,
+                    key_prefix=f"{key}_sec_{sec}",
+                    universe_name=last_uni,
+                    column_config=filter_column_config(sec_df, col_cfg),
+                    height=min(420, 48 + len(sec_df) * 38),
+                    show_panel=False,
+                    on_row_select=_on_row_select,
+                )
+    else:
+        render_clickable_scan_table(
+            df,
+            key_prefix=f"{key}_results",
+            universe_name=last_uni,
+            column_config=col_cfg,
+            height=min(560, 48 + len(df) * 38),
+            show_panel=False,
+            on_row_select=_on_row_select,
+        )
 
     sel = st.session_state.get(chart_sel_key)
     if not sel and results:
@@ -786,14 +897,19 @@ def render_investment_course_page() -> None:
             _render_selected_wealth(picked)
             _render_post_scan_workflow(picked)
 
-    with st.expander("Quick-Fire + next steps (per stock)", expanded=False):
-        for r in results[:25]:
-            wealth_bit = f" · {r.wealth_emoji} {r.wealth_verdict}" if r.wealth_verdict else ""
-            st.markdown(
-                f"**{r.label}** ({r.category}) — {r.verdict}{wealth_bit}  \n"
-                f"QF {r.checklist_score}/{r.checklist_max}: {' · '.join(r.checklist_flags[:5])}  \n"
-                f"*{r.next_steps}*"
-            )
+    with st.expander("Quick-Fire + next steps (by sector)", expanded=False):
+        for sec, sec_hits in grouped_all.items():
+            st.markdown(f"**{sec}**")
+            for r in sec_hits[:15]:
+                wealth_bit = f" · {r.wealth_emoji} {r.wealth_verdict}" if r.wealth_verdict else ""
+                st.markdown(
+                    f"- **{r.label}** ({r.category}) — {r.verdict}{wealth_bit}  \n"
+                    f"  QF {r.checklist_score}/{r.checklist_max}: "
+                    f"{' · '.join(r.checklist_flags[:5])}  \n"
+                    f"  *{r.next_steps}*"
+                )
+            if len(sec_hits) > 15:
+                st.caption(f"…and {len(sec_hits) - 15} more in {sec}")
 
     st.caption(
         "Workflow 1 gates + Valuation Rulebook defaults. "
