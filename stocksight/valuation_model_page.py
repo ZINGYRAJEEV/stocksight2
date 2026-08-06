@@ -577,13 +577,9 @@ def render_valuation_rulebook_page() -> None:
         )
         horizons = [2, 3, 5, 7, 10]
         cagr_df = build_cagr_sensitivity_table(entry_px, targets, horizons)
+        # Avoid Styler.background_gradient — requires matplotlib (not on Streamlit Cloud).
         st.dataframe(
-            cagr_df.style.background_gradient(
-                subset=[c for c in cagr_df.columns if "CAGR" in c],
-                cmap="RdYlGn",
-                vmin=-5,
-                vmax=25,
-            ),
+            cagr_df,
             use_container_width=True,
             hide_index=True,
         )
