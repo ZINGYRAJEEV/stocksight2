@@ -8,7 +8,7 @@ customise growth, OPM, capex, P/E, and shares before publishing.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Literal, Optional
 
@@ -1399,6 +1399,28 @@ def build_default_valuation_inputs(
     )
 
 
+def _wealth_dict_from_assessment(wealth: WealthAssessment) -> dict[str, Any]:
+    return {
+        "wealth_verdict": wealth.verdict,
+        "wealth_emoji": wealth.verdict_emoji,
+        "wealth_score": wealth.wealth_score,
+        "wealth_stance": wealth.valuation_stance,
+        "wealth_stance_color": wealth.valuation_stance_color,
+        "wealth_detail": wealth.valuation_detail,
+        "model_target": round(float(wealth.model_target), 2),
+        "upside_pct": round(float(wealth.upside_pct), 1),
+        "implied_cagr_pct": round(float(wealth.implied_cagr_pct), 1),
+        "max_buy_15pct": round(float(wealth.max_buy_15pct), 2)
+        if wealth.max_buy_15pct is not None
+        else None,
+        "margin_of_safety_pct": round(float(wealth.margin_of_safety_pct), 1),
+        "is_strong_wealth": wealth.verdict == STRONG_WEALTH_VERDICT,
+        "strengths": list(wealth.strengths or [])[:4],
+        "risks": list(wealth.risks or [])[:4],
+        "suggestions": list(wealth.suggestions or [])[:3],
+    }
+
+
 def quick_wealth_snapshot(
     raw_ticker: str,
     *,
@@ -1423,24 +1445,84 @@ def quick_wealth_snapshot(
             historical=base.historical_revenue,
         )
         wealth = assess_wealth_creation(base, inputs, proj, entry_price=entry)
-        return {
-            "wealth_verdict": wealth.verdict,
-            "wealth_emoji": wealth.verdict_emoji,
-            "wealth_score": wealth.wealth_score,
-            "wealth_stance": wealth.valuation_stance,
-            "wealth_stance_color": wealth.valuation_stance_color,
-            "wealth_detail": wealth.valuation_detail,
-            "model_target": round(float(wealth.model_target), 2),
-            "upside_pct": round(float(wealth.upside_pct), 1),
-            "implied_cagr_pct": round(float(wealth.implied_cagr_pct), 1),
-            "max_buy_15pct": round(float(wealth.max_buy_15pct), 2)
-            if wealth.max_buy_15pct is not None
-            else None,
-            "margin_of_safety_pct": round(float(wealth.margin_of_safety_pct), 1),
-            "is_strong_wealth": wealth.verdict == STRONG_WEALTH_VERDICT,
-            "strengths": list(wealth.strengths or [])[:4],
-            "risks": list(wealth.risks or [])[:4],
-            "suggestions": list(wealth.suggestions or [])[:3],
+        return _wealth_dict_from_assessment(wealth)
+    except Exception:
+        return {}
+
+
+def stress_wealth_snapshot(
+    raw_ticker: str,
+    *,
+    projection_years: int = 3,
+    growth_haircut_pp: float = 10.0,
+    opm_haircut_pp: float = 3.0,
+    pe_haircut_pct: float = 15.0,
+    min_growth_pct: float = 8.0,
+) -> dict[str, Any]:
+    """
+    Conservative Rulebook pass: cut growth / OPM / terminal P/E vs defaults.
+    Returns {} on failure. Includes ``assumptions`` describing the haircuts.
+    """
+    try:
+        base = load_valuation_baseline(raw_ticker)
+        if not base or not base.data_ok:
+            return {}
+        base_inputs = build_default_valuation_inputs(base, projection_years=projection_years)
+        entry = float(base.price or 0.0)
+        if entry <= 0:
+            return {}
+
+        stressed_growth = max(
+            float(min_growth_pct),
+            float(base_inputs.revenue_growth_pct) - float(growth_haircut_pp),
+        )
+        stressed_opm = max(1.0, float(base_inputs.opm_pct) - float(opm_haircut_pp))
+        stressed_term_opm = max(
+            1.0,
+            float(base_inputs.terminal_opm_pct or base_inputs.opm_pct) - float(opm_haircut_pp),
+        )
+        pe_mult = max(0.4, 1.0 - float(pe_haircut_pct) / 100.0)
+        stressed_pe = max(4.0, float(base_inputs.fair_pe) * pe_mult)
+        stressed_term_pe = max(
+            4.0,
+            float(base_inputs.terminal_pe or base_inputs.fair_pe) * pe_mult,
+        )
+
+        inputs = replace(
+            base_inputs,
+            revenue_growth_pct=round(stressed_growth, 1),
+            opm_pct=round(stressed_opm, 1),
+            terminal_opm_pct=round(stressed_term_opm, 1),
+            fair_pe=round(stressed_pe, 1),
+            terminal_pe=round(stressed_term_pe, 1),
+        )
+        proj = project_valuation(
+            base,
+            inputs,
+            current_price=entry,
+            historical=base.historical_revenue,
+        )
+        wealth = assess_wealth_creation(base, inputs, proj, entry_price=entry)
+        out = _wealth_dict_from_assessment(wealth)
+        out["assumptions"] = {
+            "growth_pct": inputs.revenue_growth_pct,
+            "base_growth_pct": base_inputs.revenue_growth_pct,
+            "opm_pct": inputs.opm_pct,
+            "base_opm_pct": base_inputs.opm_pct,
+            "fair_pe": inputs.fair_pe,
+            "base_fair_pe": base_inputs.fair_pe,
+            "terminal_pe": inputs.terminal_pe,
+            "entry_price": round(entry, 2),
+            "still_below_max_buy_15": (
+                out.get("max_buy_15pct") is not None
+                and entry <= float(out["max_buy_15pct"])
+            ),
         }
+        out["survives_stress"] = bool(out.get("is_strong_wealth")) or (
+            float(out.get("upside_pct") or -999) >= 15.0
+            and float(out.get("implied_cagr_pct") or -999) >= 12.0
+            and bool(out["assumptions"]["still_below_max_buy_15"])
+        )
+        return out
     except Exception:
         return {}

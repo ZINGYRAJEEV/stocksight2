@@ -7,6 +7,13 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
+from investment_course_analysis import (
+    STORY_CHECKS,
+    category_research_items,
+    draft_story_paragraph,
+    enrich_research_links,
+    practical_stance,
+)
 from investment_course_screener import (
     META,
     RANK_BY_OPTIONS,
@@ -52,6 +59,8 @@ Aligned with [`docs/Stock_Analysis_Workflow_1.md`](docs/Stock_Analysis_Workflow_
 | **Stalwart** | Both 10–15%; buy at/below FY median PE |
 | **Strong wealth** | Rulebook: upside ≥20%, CAGR ≥16%, score ≥70, entry ≤ max buy @15% |
 | **Below DMA** | Optional: price ≤ 50-DMA and/or ≤ 200-DMA (set how far below) |
+
+After you click a result: **Steps 3–6** (category research · story checks · stress Rulebook · stance/sizing).
 
 Click a result row for **price chart**, **P/E history**, and the full **wealth panel**.
 """
@@ -156,6 +165,263 @@ def _render_selected_wealth(r) -> None:
             VALUATION_RULEBOOK_PAGE,
             label="Open Valuation Rulebook",
             icon="🧮",
+        )
+
+
+def _render_post_scan_workflow(r) -> None:
+    """Steps 3–6: research checklist, story builder, stress test, practical stance."""
+    if not r:
+        return
+
+    ticker = str(r.ticker)
+    links = enrich_research_links(r.links or {}, r.ticker, r.label or r.ticker)
+    prefix = f"invc_ps_{ticker}"
+
+    st.markdown("#### After the scan — Steps 3 to 6")
+    st.caption(
+        "Guided workflow from Stock Analysis Workflow 1. "
+        "Tick what you’ve done; stress the Rulebook; then read the stance."
+    )
+
+    tab3, tab4, tab5, tab6 = st.tabs(
+        [
+            "3 · Category research",
+            "4 · Story checks",
+            "5 · Stress Rulebook",
+            "6 · Stance & sizing",
+        ]
+    )
+
+    # ----- Step 3 -----
+    with tab3:
+        st.markdown(f"**{r.category}** research prompts")
+        items = category_research_items(r.category)
+        done = 0
+        for it in items:
+            ck = st.checkbox(
+                it["q"],
+                key=f"{prefix}_r_{it['id']}",
+                help=it.get("hint") or "",
+            )
+            if ck:
+                done += 1
+            st.caption(it.get("hint") or "")
+        st.progress(done / max(len(items), 1), text=f"{done}/{len(items)} answered")
+
+        st.markdown("**Open research links**")
+        link_cols = st.columns(3)
+        for i, (name, url) in enumerate(
+            [
+                ("Screener Concalls", links.get("Screener Concalls")),
+                ("Trendlyne", links.get("Trendlyne")),
+                ("Screener.in", links.get("Screener.in")),
+                ("Tijori Finance", links.get("Tijori Finance")),
+                ("YouTube interviews", links.get("YouTube interviews")),
+                ("Value Pickr", links.get("Value Pickr")),
+            ]
+        ):
+            if not url:
+                continue
+            with link_cols[i % 3]:
+                st.markdown(f"[{name} ↗]({url})")
+
+    # ----- Step 4 -----
+    with tab4:
+        st.markdown("**Story building checklist** (do before any buy)")
+        story_done = 0
+        for chk in STORY_CHECKS:
+            url = links.get(chk["link_key"])
+            label = chk["label"]
+            if url:
+                c_a, c_b = st.columns([3.2, 1.0])
+                with c_a:
+                    ok = st.checkbox(label, key=f"{prefix}_s_{chk['id']}")
+                with c_b:
+                    st.markdown(f"[Open ↗]({url})")
+            else:
+                ok = st.checkbox(label, key=f"{prefix}_s_{chk['id']}")
+            if ok:
+                story_done += 1
+        st.progress(
+            story_done / max(len(STORY_CHECKS), 1),
+            text=f"{story_done}/{len(STORY_CHECKS)} story checks done",
+        )
+
+        draft_key = f"{prefix}_story"
+        if draft_key not in st.session_state:
+            st.session_state[draft_key] = draft_story_paragraph(r)
+        st.text_area(
+            "One-paragraph story (edit until clear — if you can’t finish blanks, don’t buy)",
+            key=draft_key,
+            height=140,
+        )
+        if st.button("Reset story draft from scan", key=f"{prefix}_story_reset"):
+            st.session_state[draft_key] = draft_story_paragraph(r)
+            st.rerun()
+
+    # ----- Step 5 -----
+    with tab5:
+        st.markdown(
+            "Run a **conservative Rulebook** pass: cut growth, OPM, and P/E vs defaults. "
+            "If the thesis dies under mild stress, keep it on the watchlist."
+        )
+        s1, s2, s3 = st.columns(3)
+        with s1:
+            g_cut = st.slider("Growth haircut (pp)", 5.0, 25.0, 10.0, 1.0, key=f"{prefix}_gcut")
+        with s2:
+            o_cut = st.slider("OPM haircut (pp)", 1.0, 10.0, 3.0, 0.5, key=f"{prefix}_ocut")
+        with s3:
+            p_cut = st.slider("P/E haircut (%)", 5.0, 40.0, 15.0, 1.0, key=f"{prefix}_pcut")
+
+        run_stress = st.button(
+            f"▶ Stress-test {ticker}",
+            key=f"{prefix}_stress_btn",
+            type="primary",
+            use_container_width=True,
+        )
+        stress_key = f"{prefix}_stress_result"
+        if run_stress:
+            with st.spinner("Running conservative Rulebook…"):
+                try:
+                    from valuation_model import stress_wealth_snapshot
+
+                    st.session_state[stress_key] = stress_wealth_snapshot(
+                        r.raw_ticker,
+                        growth_haircut_pp=g_cut,
+                        opm_haircut_pp=o_cut,
+                        pe_haircut_pct=p_cut,
+                    )
+                except Exception as exc:
+                    st.session_state[stress_key] = {"error": str(exc)}
+
+        stress = st.session_state.get(stress_key) or {}
+        if stress.get("error"):
+            st.error(f"Stress test failed: {stress['error']}")
+        elif stress:
+            ass = stress.get("assumptions") or {}
+            survives = bool(stress.get("survives_stress"))
+            if survives:
+                st.success(
+                    f"Survives stress · {stress.get('wealth_emoji', '')} "
+                    f"{stress.get('wealth_verdict', '—')}"
+                )
+            else:
+                st.warning(
+                    f"Weak under stress · {stress.get('wealth_verdict', '—')} — "
+                    "prefer watchlist / better entry."
+                )
+
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(
+                "Stress target",
+                f"₹{stress['model_target']:,.0f}" if stress.get("model_target") else "—",
+            )
+            m2.metric(
+                "Stress upside",
+                f"{stress['upside_pct']:+.1f}%" if stress.get("upside_pct") is not None else "—",
+            )
+            m3.metric(
+                "Stress CAGR",
+                f"{stress['implied_cagr_pct']:.1f}%"
+                if stress.get("implied_cagr_pct") is not None
+                else "—",
+            )
+            m4.metric(
+                "Max buy @15%",
+                f"₹{stress['max_buy_15pct']:,.0f}" if stress.get("max_buy_15pct") else "—",
+            )
+
+            st.caption(
+                f"Assumptions: growth {ass.get('base_growth_pct', '—')}% → "
+                f"**{ass.get('growth_pct', '—')}%** · "
+                f"OPM {ass.get('base_opm_pct', '—')}% → **{ass.get('opm_pct', '—')}%** · "
+                f"P/E {ass.get('base_fair_pe', '—')} → **{ass.get('fair_pe', '—')}** · "
+                f"entry ₹{ass.get('entry_price', '—')} · "
+                f"below max-buy@15%: {'Yes' if ass.get('still_below_max_buy_15') else 'No'}"
+            )
+
+            c_base, c_stress = st.columns(2)
+            with c_base:
+                st.markdown("**Scan (defaults)**")
+                st.write(
+                    f"Target ₹{(r.model_target or 0):,.0f} · "
+                    f"upside {(r.upside_pct or 0):+.1f}% · "
+                    f"CAGR {(r.implied_cagr_pct or 0):.1f}% · "
+                    f"{'Strong wealth' if r.is_strong_wealth else (r.wealth_verdict or '—')}"
+                )
+            with c_stress:
+                st.markdown("**Stress case**")
+                st.write(
+                    f"Target ₹{(stress.get('model_target') or 0):,.0f} · "
+                    f"upside {(stress.get('upside_pct') or 0):+.1f}% · "
+                    f"CAGR {(stress.get('implied_cagr_pct') or 0):.1f}% · "
+                    f"{stress.get('wealth_verdict') or '—'}"
+                )
+        else:
+            st.info("Set haircuts and run the stress test.")
+
+        st.page_link(
+            VALUATION_RULEBOOK_PAGE,
+            label="Open full Valuation Rulebook to edit every assumption",
+            icon="🧮",
+        )
+
+    # ----- Step 6 -----
+    with tab6:
+        stress = st.session_state.get(f"{prefix}_stress_result") or {}
+        if stress.get("error"):
+            stress = {}
+        stance = practical_stance(r, stress if stress else None)
+
+        color = (
+            "#16a34a"
+            if "Candidate" in stance["label"]
+            else ("#b45309" if "Watchlist" in stance["label"] or "pass" in stance["label"].lower() else "#64748b")
+        )
+        st.markdown(
+            f"""
+<div style='border:2px solid {color};border-radius:14px;padding:16px 20px;
+            background:#0f172a;margin:4px 0 12px;'>
+  <div style='font-size:0.75rem;letter-spacing:0.06em;color:#94a3b8;text-transform:uppercase;'>
+    Practical stance (educational — not advice)
+  </div>
+  <div style='font-size:1.2rem;font-weight:700;color:{color};margin-top:4px;'>
+    {stance["label"]}
+  </div>
+  <div style='color:#e2e8f0;margin-top:8px;font-size:0.95rem;'>
+    {stance["action"]}
+  </div>
+  <div style='color:#94a3b8;margin-top:6px;font-size:0.9rem;'>
+    Suggested size: <b style='color:#e2e8f0'>{stance["size"]}</b>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+        bcol, rcol = st.columns(2)
+        with bcol:
+            st.markdown("**Bull case (from scan)**")
+            for x in stance["bull"] or ["—"]:
+                st.markdown(f"- {x}")
+        with rcol:
+            st.markdown("**Bear / caution**")
+            for x in stance["bear"] or ["—"]:
+                st.markdown(f"- {x}")
+
+        st.markdown("**Exit ideas (set before you buy)**")
+        for x in stance["exits"]:
+            st.markdown(f"- {x}")
+
+        if not stress:
+            st.caption("Tip: run **Step 5 · Stress Rulebook** first — stance gets sharper with stress results.")
+
+        notes_key = f"{prefix}_notes"
+        st.text_area(
+            "Your decision notes",
+            key=notes_key,
+            height=90,
+            placeholder="e.g. Wait for next concall · Buy 1% on dip below 50-DMA · Trim plan…",
         )
 
 
@@ -455,6 +721,7 @@ def render_investment_course_page() -> None:
             "Value Pickr": st.column_config.LinkColumn(display_text="ValuePickr ↗"),
             "Glassdoor": st.column_config.LinkColumn(display_text="Glassdoor ↗"),
             "Google scam check": st.column_config.LinkColumn(display_text="Scam check ↗"),
+            "YouTube interviews": st.column_config.LinkColumn(display_text="YouTube ↗"),
         },
     )
 
@@ -517,6 +784,7 @@ def render_investment_course_page() -> None:
         if picked:
             st.markdown("#### Valuation Rulebook (from scan)")
             _render_selected_wealth(picked)
+            _render_post_scan_workflow(picked)
 
     with st.expander("Quick-Fire + next steps (per stock)", expanded=False):
         for r in results[:25]:

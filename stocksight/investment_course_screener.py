@@ -401,7 +401,10 @@ def research_links(disp: str, raw: str, company_name: str = "") -> dict:
     links["Tijori Finance"] = f"https://www.tijorifinance.com/search/?q={q}"
     links["Value Pickr"] = f"https://forum.valuepickr.com/search?q={q}"
     links["Glassdoor"] = f"https://www.glassdoor.com/Search/results.htm?keyword={q}"
-    links["Google scam check"] = f"https://www.google.com/search?q={q}+scam+OR+fraud"
+    links["Google scam check"] = f"https://www.google.com/search?q={q}+scam+OR+fraud+OR+SEBI"
+    links["YouTube interviews"] = (
+        f"https://www.youtube.com/results?search_query={q}+CEO+OR+MD+interview"
+    )
     return links
 
 
