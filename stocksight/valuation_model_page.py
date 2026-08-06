@@ -26,9 +26,6 @@ from valuation_model import (
     projection_sheet_df,
     revenue_for_mar_fy,
     shares_reference_df,
-    style_cagr_buying_table,
-    style_projection_sheet,
-    style_target_cagr_table,
 )
 from ui_components import inject_css, page_audience_note, safe_set_page_config
 
@@ -517,7 +514,7 @@ def render_valuation_rulebook_page() -> None:
     with grid_left:
         st.markdown("#### Year-by-year projection (NAM / Jupiter layout)")
         st.dataframe(
-            style_projection_sheet(sheet_df, proj),
+            sheet_df,
             use_container_width=True,
             hide_index=True,
             height=min(420, 56 + len(sheet_df) * 36),
@@ -536,8 +533,9 @@ def render_valuation_rulebook_page() -> None:
             int(cagr_years),
         )
         if not target_cagr_df.empty:
+            show_tgt = [c for c in target_cagr_df.columns if c != "_cagr"]
             st.dataframe(
-                style_target_cagr_table(target_cagr_df),
+                target_cagr_df[show_tgt],
                 use_container_width=True,
                 hide_index=True,
             )
@@ -551,8 +549,9 @@ def render_valuation_rulebook_page() -> None:
         )
         cagr_col = f"Exp. CAGR ({int(cagr_years)}Y) %"
         if not buy_df.empty:
+            show_buy = [c for c in buy_df.columns if c != "Buying price (raw)"]
             st.dataframe(
-                style_cagr_buying_table(buy_df, cagr_col),
+                buy_df[show_buy],
                 use_container_width=True,
                 hide_index=True,
                 height=min(380, 56 + len(buy_df) * 36),
