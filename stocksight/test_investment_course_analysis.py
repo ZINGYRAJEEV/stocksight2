@@ -192,5 +192,33 @@ class TestSectorUniverse(unittest.TestCase):
         self.assertEqual(universe_ticker_count(bank_key), len(tickers))
 
 
+class TestDataQualityGates(unittest.TestCase):
+    def test_psb_style_missing_cagr_dropped(self):
+        from investment_course_screener import InvestmentCourseFilters, passes_data_quality_gates
+
+        flt = InvestmentCourseFilters(require_growth_cagr=True, drop_unclassified=True)
+        self.assertFalse(
+            passes_data_quality_gates(
+                category="Unclassified",
+                sales_3y=None,
+                profit_3y=None,
+                flt=flt,
+            )
+        )
+
+    def test_fast_grower_with_cagr_kept(self):
+        from investment_course_screener import InvestmentCourseFilters, passes_data_quality_gates
+
+        flt = InvestmentCourseFilters(require_growth_cagr=True, drop_unclassified=True)
+        self.assertTrue(
+            passes_data_quality_gates(
+                category="Fast Grower",
+                sales_3y=20.0,
+                profit_3y=25.0,
+                flt=flt,
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

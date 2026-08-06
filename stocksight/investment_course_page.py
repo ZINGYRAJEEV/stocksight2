@@ -516,6 +516,18 @@ def render_investment_course_page() -> None:
                 key=f"{key}_strong",
                 help="Keep names where wealth verdict = Strong wealth candidate.",
             )
+            require_cagr = st.checkbox(
+                "Require 3Y sales + profit CAGR",
+                value=True,
+                key=f"{key}_req_cagr",
+                help="Drops names like PSB where Screener CAGR is missing (avoids fake Strong wealth).",
+            )
+            drop_unclass = st.checkbox(
+                "Drop Unclassified / thin-data names",
+                value=True,
+                key=f"{key}_drop_unclass",
+                help="STEP 0 only keeps categorized names with usable growth data.",
+            )
         with c2:
             st.markdown("#### Workflow A valuation")
             max_peg = st.slider("Max PEG (buy zone)", 0.5, 2.0, 1.0, 0.05, key=f"{key}_peg")
@@ -605,6 +617,9 @@ def render_investment_course_page() -> None:
         min_checklist_score=min_qf,
         include_wealth=include_wealth,
         strong_wealth_only=strong_only,
+        require_growth_cagr=require_cagr,
+        drop_unclassified=drop_unclass,
+        skip_wealth_without_growth=True,
         require_below_50dma=below_50,
         require_below_200dma=below_200,
         max_pct_vs_50dma=max_vs_50,
@@ -655,8 +670,8 @@ def render_investment_course_page() -> None:
 
     if not results:
         st.warning(
-            "No matches. Try **STEP 0**, turn off **Only Strong wealth** / DMA filters, "
-            "lower min mcap, or use **Curated / Nifty 50**."
+            "No matches. Try **STEP 0**, turn off **Only Strong wealth** / DMA / "
+            "**Require CAGR** filters, lower min mcap, or use **Curated / Nifty 50**."
         )
         return
 

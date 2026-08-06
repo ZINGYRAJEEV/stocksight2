@@ -142,6 +142,9 @@ class InvestmentCourseFilters:
     min_checklist_score: int = 0
     include_wealth: bool = True  # Valuation Rulebook snapshot per match
     strong_wealth_only: bool = False  # keep only "Strong wealth candidate"
+    require_growth_cagr: bool = True  # drop if sales or profit 3Y CAGR missing
+    drop_unclassified: bool = True  # drop Unclassified / thin-data names
+    skip_wealth_without_growth: bool = True  # avoid false Strong wealth on empty CAGR
     require_below_50dma: bool = False
     require_below_200dma: bool = False
     max_pct_vs_50dma: float = 0.0  # keep if % vs 50-DMA <= this (0 = at/below)
@@ -266,6 +269,28 @@ def classify_category(
     if s is None or p is None:
         return "Unclassified", "STEP 0: Missing sales or profit 3Y CAGR"
     return "Other", f"STEP 0: Sales {s:.1f}% / profit {p:.1f}% - check Turnaround manually"
+
+
+def has_growth_cagr(sales_3y: Optional[float], profit_3y: Optional[float]) -> bool:
+    return sales_3y is not None and profit_3y is not None
+
+
+def passes_data_quality_gates(
+    *,
+    category: str,
+    sales_3y: Optional[float],
+    profit_3y: Optional[float],
+    flt: InvestmentCourseFilters,
+) -> bool:
+    """
+    Drop thin-data / Unclassified names that produce misleading wealth reads
+    (e.g. PSB in PSU Bank with missing Screener CAGRs).
+    """
+    if flt.require_growth_cagr and not has_growth_cagr(sales_3y, profit_3y):
+        return False
+    if flt.drop_unclassified and category in ("Unclassified", "Other", ""):
+        return False
+    return True
 
 
 def _row_vals(data: dict, *needles: str) -> list[Optional[float]]:
@@ -762,7 +787,10 @@ def scan_investment_course(
                     rationale,
                 ]
                 links = research_links(disp, raw, label)
-                wealth = _attach_wealth(raw, flt.include_wealth)
+                run_wealth = bool(flt.include_wealth)
+                if flt.skip_wealth_without_growth and not has_growth_cagr(sales, profit):
+                    run_wealth = False
+                wealth = _attach_wealth(raw, run_wealth)
                 if flt.strong_wealth_only and not wealth.get("is_strong_wealth"):
                     continue
                 dma_pack = _attach_dma(raw, flt, precomputed=tech)
@@ -877,7 +905,12 @@ def scan_investment_course(
 
             keep = False
             if mode == "step0_categorize":
-                keep = True
+                keep = passes_data_quality_gates(
+                    category=cat,
+                    sales_3y=sales,
+                    profit_3y=profit,
+                    flt=flt,
+                )
             elif mode == "workflow_a_fast":
                 # Workflow A: confirm Fast Grower; valuation via PEG and/or PE vs median
                 if cat != "Fast Grower":
@@ -923,8 +956,17 @@ def scan_investment_course(
             if not keep:
                 continue
 
+            # Also enforce data-quality gates on non-STEP0 modes (skip misleading empties)
+            if mode != "step0_categorize" and not passes_data_quality_gates(
+                category=cat, sales_3y=sales, profit_3y=profit, flt=flt
+            ):
+                continue
+
             links = research_links(disp, raw, label)
-            wealth = _attach_wealth(raw, flt.include_wealth)
+            run_wealth = bool(flt.include_wealth)
+            if flt.skip_wealth_without_growth and not has_growth_cagr(sales, profit):
+                run_wealth = False
+            wealth = _attach_wealth(raw, run_wealth)
             if flt.strong_wealth_only and not wealth.get("is_strong_wealth"):
                 continue
             dma_pack = _attach_dma(raw, flt)
