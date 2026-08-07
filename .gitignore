@@ -24,6 +24,10 @@ logs/
 output/
 stocksight/.scan_history.jsonl
 stocksight/.sec_company_tickers.json
+# Keep committed NSE equity snapshot (refreshed from NSE EQUITY_L.csv)
+!stocksight/data/
+!stocksight/data/nse_equity_symbols.txt
+!stocksight/data/nse_equity_symbols.meta
 
 # IDE / OS
 .vscode/

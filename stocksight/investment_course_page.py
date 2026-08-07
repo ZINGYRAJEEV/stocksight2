@@ -64,6 +64,7 @@ Aligned with [`docs/Stock_Analysis_Workflow_1.md`](docs/Stock_Analysis_Workflow_
 | **Stalwart** | Both 10–15%; buy at/below FY median PE |
 | **Strong wealth** | Rulebook: upside ≥20%, CAGR ≥16%, score ≥70, entry ≤ max buy @15% |
 | **Below DMA** | Optional: price ≤ 50-DMA and/or ≤ 200-DMA (set how far below) |
+| **PEG &lt; 1** | Optional hard filter: PE / profit 3Y growth ≤ Max PEG (default 1.0) |
 
 After you click a result: **Steps 3–6** (category research · story checks · stress Rulebook · stance/sizing).
 Results can be **grouped by sector** after the scan. For faster scans, pick a
@@ -500,9 +501,19 @@ def render_investment_course_page() -> None:
                     nse_sources,
                     key=uni_key,
                     format_func=lambda s: f"{s} ({universe_ticker_count(s)})",
-                    help="Start with Curated or Nifty 50 — Screener + wealth model is slower.",
+                    help=(
+                        "Prefer Curated / Nifty 50 / sector baskets. "
+                        "**All NSE equities** is 2000+ names — very slow with Screener + wealth."
+                    ),
                 )
-                st.caption(f"**{universe_ticker_count(universe)}** tickers in this broad list.")
+                n_uni = universe_ticker_count(universe)
+                if "All NSE" in universe:
+                    st.warning(
+                        f"**{n_uni}** tickers — full NSE scan can take hours. "
+                        "Use sector baskets or Nifty 500 for normal research."
+                    )
+                else:
+                    st.caption(f"**{n_uni}** tickers in this broad list.")
 
             include_wealth = st.checkbox(
                 "Load Valuation Rulebook on each match",
@@ -530,7 +541,21 @@ def render_investment_course_page() -> None:
             )
         with c2:
             st.markdown("#### Workflow A valuation")
-            max_peg = st.slider("Max PEG (buy zone)", 0.5, 2.0, 1.0, 0.05, key=f"{key}_peg")
+            max_peg = st.slider(
+                "Max PEG (buy zone)",
+                0.5,
+                2.0,
+                1.0,
+                0.05,
+                key=f"{key}_peg",
+                help="Course rule: PEG = PE / profit growth. PEG < 1 ≈ cheap.",
+            )
+            require_peg = st.checkbox(
+                "Only PEG ≤ max (hard filter)",
+                value=False,
+                key=f"{key}_req_peg",
+                help="Keep names where PEG is known and ≤ Max PEG (set 1.0 for classic PEG < 1).",
+            )
             max_pct = st.slider(
                 "Max vs FY median % (Stalwart / PE check)",
                 -30.0,
@@ -606,6 +631,7 @@ def render_investment_course_page() -> None:
     flt = InvestmentCourseFilters(
         mode=mode,
         max_peg=max_peg,
+        require_peg_max=require_peg,
         max_pct_vs_fy_median=max_pct,
         min_fy_points=min_fy,
         min_market_cap_cr=min_mcap,

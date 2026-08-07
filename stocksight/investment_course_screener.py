@@ -130,6 +130,7 @@ STALWART_MIN_PCT = 10.0
 class InvestmentCourseFilters:
     mode: str = "step0_categorize"
     max_peg: float = 1.0
+    require_peg_max: bool = False  # hard gate: keep only when PEG is known and ≤ max_peg
     max_pct_vs_fy_median: float = 0.0
     min_fy_points: int = 3
     min_market_cap_cr: float = 500.0
@@ -786,6 +787,9 @@ def scan_investment_course(
                     f"Vol ratio {vol_ratio:.1f}x (>={flt.vol_mult:.0f}x)",
                     rationale,
                 ]
+                if flt.require_peg_max:
+                    if peg is None or float(peg) > float(flt.max_peg):
+                        continue
                 links = research_links(disp, raw, label)
                 run_wealth = bool(flt.include_wealth)
                 if flt.skip_wealth_without_growth and not has_growth_cagr(sales, profit):
@@ -961,6 +965,10 @@ def scan_investment_course(
                 category=cat, sales_3y=sales, profit_3y=profit, flt=flt
             ):
                 continue
+
+            if flt.require_peg_max:
+                if peg is None or float(peg) > float(flt.max_peg):
+                    continue
 
             links = research_links(disp, raw, label)
             run_wealth = bool(flt.include_wealth)

@@ -29,6 +29,7 @@ try:
         get_pe,
         get_sector_industry,
         get_stock_links,
+        get_universe_tickers,
         hist_series,
         pct_vs_ma,
     )
@@ -39,6 +40,7 @@ except ImportError:
         get_pe,
         get_sector_industry,
         get_stock_links,
+        get_universe_tickers,
         hist_series,
         pct_vs_ma,
     )
@@ -364,7 +366,7 @@ def resolve_scan_tickers(scan_source: str) -> list[tuple[str, str]]:
                 out_us.append((str(row.get("label") or t), t))
         return out_us
 
-    tickers = UNIVERSES.get(scan_source, [])
+    tickers = get_universe_tickers(scan_source)
     out_uni: list[tuple[str, str]] = []
     for t in tickers:
         disp = t.replace(".NS", "").replace(".BO", "")

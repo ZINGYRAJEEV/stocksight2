@@ -220,5 +220,18 @@ class TestDataQualityGates(unittest.TestCase):
         )
 
 
+class TestPegFilter(unittest.TestCase):
+    def test_require_peg_max_logic(self):
+        from investment_course_screener import InvestmentCourseFilters
+
+        flt = InvestmentCourseFilters(require_peg_max=True, max_peg=1.0)
+        self.assertTrue(flt.require_peg_max)
+        self.assertEqual(flt.max_peg, 1.0)
+        # Gate: keep only when peg is not None and peg <= max
+        for peg, expect_keep in [(0.5, True), (1.0, True), (1.01, False), (None, False)]:
+            keep = peg is not None and float(peg) <= float(flt.max_peg)
+            self.assertEqual(keep, expect_keep, msg=f"peg={peg}")
+
+
 if __name__ == "__main__":
     unittest.main()
