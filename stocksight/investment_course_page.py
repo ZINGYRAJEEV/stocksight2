@@ -31,6 +31,20 @@ from investment_course_screener import (
     universe_ticker_count,
 )
 from pe_history_ui import render_pe_history_panel
+from scan_checkpoint_store import (
+    CHUNK_THRESHOLD,
+    DEFAULT_CHUNK_SIZE,
+    PAGE_ID as CKPT_PAGE,
+    checkpoint_matches,
+    clear_checkpoint,
+    filters_fingerprint,
+    hits_from_checkpoint,
+    load_checkpoint,
+    merge_hits,
+    result_from_dict,
+    result_to_dict,
+    save_checkpoint,
+)
 from scan_history_store import append_scan_record
 from screener_session_ui import render_screener_session_panel
 from session_utils import deduplicate_scan_results
@@ -641,9 +655,6 @@ def render_investment_course_page() -> None:
 
     render_watchlist_panel(f"{key}_wl")
 
-    scan_progress = st.empty()
-    run = st.button("▶  SCAN NOW", use_container_width=True, key=f"{key}_scan", type="primary")
-
     flt = InvestmentCourseFilters(
         mode=mode,
         max_peg=max_peg,
@@ -669,44 +680,252 @@ def render_investment_course_page() -> None:
         need_pe_history=mode
         in ("step0_categorize", "workflow_a_fast", "buy_candidates", "stalwarts_discount"),
     )
+    flt_hash = filters_fingerprint(flt)
+    n_uni = universe_ticker_count(universe)
+    use_chunks = n_uni > CHUNK_THRESHOLD
 
-    if run:
-        prog = scan_progress.progress(0, text="Initialising…")
+    ckpt = load_checkpoint(CKPT_PAGE)
+    can_resume = checkpoint_matches(
+        ckpt, universe=universe, mode=mode, filters_hash=flt_hash
+    )
+
+    st.markdown("#### Scan control")
+    if use_chunks:
+        st.caption(
+            f"Large universe (**{n_uni}** tickers) → scans run in **chunks** with a checkpoint, "
+            "so Cloud timeouts / disconnects do not wipe progress. Keep the tab open for auto-continue."
+        )
+        chunk_size = int(
+            st.number_input(
+                "Tickers per chunk",
+                min_value=25,
+                max_value=300,
+                value=DEFAULT_CHUNK_SIZE,
+                step=25,
+                key=f"{key}_chunk_size",
+                help="Smaller chunks = safer on Streamlit Cloud; larger = fewer reruns.",
+            )
+        )
+        auto_continue = st.checkbox(
+            "Auto-continue chunks until done",
+            value=True,
+            key=f"{key}_auto_continue",
+            help="After each chunk, automatically start the next until the universe is finished.",
+        )
+    else:
+        chunk_size = n_uni or DEFAULT_CHUNK_SIZE
+        auto_continue = False
+
+    if can_resume and ckpt:
+        st.info(
+            f"Checkpoint: **{int(ckpt.get('next_index') or 0)} / {int(ckpt.get('total') or n_uni)}** "
+            f"scanned · **{len(ckpt.get('hits') or [])}** matches so far. "
+            "Use **Continue** or **Reset**."
+        )
+
+    b1, b2, b3, b4 = st.columns(4)
+    with b1:
+        run_fresh = st.button(
+            "▶  SCAN NOW",
+            use_container_width=True,
+            key=f"{key}_scan",
+            type="primary",
+        )
+    with b2:
+        run_continue = st.button(
+            "⏯ Continue",
+            use_container_width=True,
+            key=f"{key}_continue",
+            disabled=not can_resume,
+        )
+    with b3:
+        stop_scan = st.button(
+            "⏹ Stop",
+            use_container_width=True,
+            key=f"{key}_stop",
+        )
+    with b4:
+        reset_ckpt = st.button(
+            "🗑 Reset checkpoint",
+            use_container_width=True,
+            key=f"{key}_reset_ckpt",
+        )
+
+    if reset_ckpt:
+        clear_checkpoint(CKPT_PAGE)
+        st.session_state.pop(f"{key}_scan_job", None)
+        st.session_state[f"{key}_cancel"] = False
+        st.success("Checkpoint cleared.")
+        st.rerun()
+
+    if stop_scan:
+        st.session_state[f"{key}_cancel"] = True
+        st.session_state.pop(f"{key}_scan_job", None)
+        st.warning("Stop requested — current chunk will finish, then pause.")
+
+    scan_progress = st.empty()
+
+    if run_fresh:
+        clear_checkpoint(CKPT_PAGE)
+        st.session_state[f"{key}_cancel"] = False
+        st.session_state[f"{key}_scan_job"] = {
+            "universe": universe,
+            "mode": mode,
+            "filters_hash": flt_hash,
+            "next_index": 0,
+            "hits": [],
+            "auto": bool(auto_continue) if use_chunks else False,
+            "chunk_size": int(chunk_size) if use_chunks else max(n_uni, 1),
+            "fresh": True,
+        }
+        st.rerun()
+
+    if run_continue and can_resume and ckpt:
+        st.session_state[f"{key}_cancel"] = False
+        st.session_state[f"{key}_scan_job"] = {
+            "universe": universe,
+            "mode": mode,
+            "filters_hash": flt_hash,
+            "next_index": int(ckpt.get("next_index") or 0),
+            "hits": [result_to_dict(r) for r in hits_from_checkpoint(ckpt)],
+            "auto": bool(auto_continue) if use_chunks else False,
+            "chunk_size": int(chunk_size) if use_chunks else max(n_uni, 1),
+            "fresh": False,
+        }
+        st.rerun()
+
+    job = st.session_state.get(f"{key}_scan_job")
+    if (
+        job
+        and job.get("universe") == universe
+        and job.get("mode") == mode
+        and job.get("filters_hash") == flt_hash
+    ):
+        start_idx = int(job.get("next_index") or 0)
+        csize = int(job.get("chunk_size") or DEFAULT_CHUNK_SIZE)
+        prior_hits = []
+        for row in job.get("hits") or []:
+            try:
+                prior_hits.append(result_from_dict(row))
+            except Exception:
+                pass
+
+        prog = scan_progress.progress(
+            int(start_idx / max(n_uni, 1) * 100),
+            text=f"Resuming at {start_idx}/{n_uni}…",
+        )
 
         def cb(i, t, s):
             prog.progress(int(i / max(t, 1) * 100), text=f"Fetching {s}… ({i}/{t})")
 
-        hits = scan_investment_course(universe, filters=flt, progress_cb=cb)
-        st.session_state[session_key] = hits
+        def cancel_cb() -> bool:
+            return bool(st.session_state.get(f"{key}_cancel"))
+
+        chunk = scan_investment_course(
+            universe,
+            filters=flt,
+            progress_cb=cb,
+            start_index=start_idx,
+            max_tickers=csize if use_chunks else None,
+            cancel_cb=cancel_cb,
+        )
+        merged = merge_hits(prior_hits, chunk.hits)
+        merged = sort_investment_course(merged, rank_by="score", mode=mode)
+
+        st.session_state[session_key] = merged
         st.session_state[f"{session_key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")
         st.session_state[f"{session_key}_universe"] = universe
         st.session_state[f"{session_key}_mode"] = mode
-        st.session_state[f"{key}_chart_selected"] = None
-        try:
-            append_scan_record(
-                META["id"],
-                universe,
-                [r.raw_ticker for r in hits],
-                meta={
-                    "matches": len(hits),
-                    "mode": mode,
-                    "strong_wealth": sum(1 for r in hits if r.is_strong_wealth),
-                },
+        if job.get("fresh"):
+            st.session_state[f"{key}_chart_selected"] = None
+
+        if chunk.cancelled or st.session_state.get(f"{key}_cancel"):
+            save_checkpoint(
+                universe=universe,
+                mode=mode,
+                filters_hash=flt_hash,
+                next_index=chunk.next_index,
+                total=chunk.total,
+                hits=merged,
             )
-        except Exception:
-            pass
-        prog.empty()
-        scan_progress.empty()
+            st.session_state.pop(f"{key}_scan_job", None)
+            st.session_state[f"{key}_cancel"] = False
+            prog.empty()
+            scan_progress.empty()
+            st.warning(
+                f"Paused at **{chunk.next_index}/{chunk.total}**. "
+                f"**{len(merged)}** matches saved — click **Continue** to resume."
+            )
+        elif chunk.done:
+            clear_checkpoint(CKPT_PAGE)
+            st.session_state.pop(f"{key}_scan_job", None)
+            try:
+                append_scan_record(
+                    META["id"],
+                    universe,
+                    [r.raw_ticker for r in merged],
+                    meta={
+                        "matches": len(merged),
+                        "mode": mode,
+                        "strong_wealth": sum(1 for r in merged if r.is_strong_wealth),
+                        "scanned": chunk.total,
+                    },
+                )
+            except Exception:
+                pass
+            prog.empty()
+            scan_progress.empty()
+            st.success(f"Scan complete — **{chunk.total}** tickers · **{len(merged)}** matches.")
+        else:
+            save_checkpoint(
+                universe=universe,
+                mode=mode,
+                filters_hash=flt_hash,
+                next_index=chunk.next_index,
+                total=chunk.total,
+                hits=merged,
+            )
+            st.session_state[f"{key}_scan_job"] = {
+                "universe": universe,
+                "mode": mode,
+                "filters_hash": flt_hash,
+                "next_index": chunk.next_index,
+                "hits": [result_to_dict(r) for r in merged],
+                "auto": bool(job.get("auto")),
+                "chunk_size": csize,
+                "fresh": False,
+            }
+            prog.empty()
+            scan_progress.empty()
+            st.info(
+                f"Chunk done — **{chunk.next_index}/{chunk.total}** · "
+                f"**{len(merged)}** matches so far."
+            )
+            if job.get("auto") and not st.session_state.get(f"{key}_cancel"):
+                st.rerun()
 
     results = st.session_state.get(session_key)
     scan_at = st.session_state.get(f"{session_key}_at")
     last_uni = st.session_state.get(f"{session_key}_universe", universe)
     last_mode = st.session_state.get(f"{session_key}_mode", mode)
 
+    # Restore partial hits from checkpoint when session was lost but disk remains
+    if results is None and can_resume and ckpt:
+        restored = hits_from_checkpoint(ckpt)
+        if restored:
+            st.session_state[session_key] = restored
+            st.session_state[f"{session_key}_at"] = "checkpoint"
+            st.session_state[f"{session_key}_universe"] = universe
+            st.session_state[f"{session_key}_mode"] = mode
+            results = restored
+            scan_at = "checkpoint"
+            last_uni = universe
+            last_mode = mode
+
     if results is None:
         st.info(
             "👆 Pick a **sector basket** (or broad universe), then **SCAN NOW**. "
-            "Results include Valuation Rulebook wealth when enabled."
+            "Large universes run in **chunks** with resume support."
         )
         return
 
@@ -727,6 +946,13 @@ def render_investment_course_page() -> None:
                     "Pick **Nifty 500** or a **sector basket** instead."
                 )
                 return
+        # Incomplete scan with zero hits yet — don't show "no matches" as final
+        if can_resume and ckpt and int(ckpt.get("next_index") or 0) > 0:
+            st.info(
+                "No matches yet in the scanned portion. Click **Continue** to keep going, "
+                "or loosen filters and **SCAN NOW** again."
+            )
+            return
         st.warning(
             "No matches. Try **STEP 0**, turn off **Only Strong wealth** / DMA / "
             "**Require CAGR** / **PEG** filters, lower min mcap, or use **Curated / Nifty 50**."

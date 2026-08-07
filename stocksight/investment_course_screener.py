@@ -748,21 +748,61 @@ def _attach_wealth(raw: str, include: bool) -> dict:
 
 
 
+@dataclass
+class ScanChunkResult:
+    """One slice of a (possibly multi-chunk) Investment Course scan."""
+
+    hits: list[InvestmentCourseResult]
+    next_index: int
+    total: int
+    done: bool
+    cancelled: bool = False
+
+
 def scan_investment_course(
     scan_source: str,
     filters: InvestmentCourseFilters | None = None,
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
-) -> list[InvestmentCourseResult]:
+    *,
+    start_index: int = 0,
+    max_tickers: Optional[int] = None,
+    cancel_cb: Optional[Callable[[], bool]] = None,
+) -> ScanChunkResult:
+    """
+    Scan a slice of the universe so long runs (full NSE) can checkpoint / resume.
+
+    - start_index: first ticker index to process (0-based)
+    - max_tickers: max names in this chunk (None = rest of universe)
+    - cancel_cb: if returns True mid-loop, stop and return cancelled=True
+    """
     flt = filters or InvestmentCourseFilters()
     mode = flt.mode if flt.mode in SCAN_MODES else "step0_categorize"
     universe = resolve_investment_course_tickers(scan_source)
     if not universe:
-        return []
+        return ScanChunkResult(hits=[], next_index=0, total=0, done=True)
 
     results: list[InvestmentCourseResult] = []
     total = len(universe)
+    start = max(0, min(int(start_index or 0), total))
+    if max_tickers is None:
+        end = total
+    else:
+        end = min(total, start + max(0, int(max_tickers)))
 
-    for i, (label, raw) in enumerate(universe):
+    for i in range(start, end):
+        if cancel_cb is not None:
+            try:
+                if cancel_cb():
+                    return ScanChunkResult(
+                        hits=results,
+                        next_index=i,
+                        total=total,
+                        done=False,
+                        cancelled=True,
+                    )
+            except Exception:
+                pass
+        label, raw = universe[i]
         if progress_cb:
             progress_cb(i + 1, total, raw)
         if not (raw.endswith(".NS") or raw.endswith(".BO")):
@@ -1045,7 +1085,13 @@ def scan_investment_course(
         except Exception:
             continue
 
-    return sort_investment_course(results, rank_by="score", mode=mode)
+    return ScanChunkResult(
+        hits=sort_investment_course(results, rank_by="score", mode=mode),
+        next_index=end,
+        total=total,
+        done=end >= total,
+        cancelled=False,
+    )
 
 
 def sort_investment_course(
