@@ -495,16 +495,25 @@ def render_investment_course_page() -> None:
                 nse_sources = BROAD_SCAN_SOURCES or [
                     s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s
                 ]
-                ensure_session_choice(uni_key, nse_sources, nse_sources[0])
+                # Always surface full NSE at the top of Broad market.
+                all_nse = "All NSE equities (~2300) - very slow"
+                if all_nse not in nse_sources:
+                    nse_sources = [all_nse] + list(nse_sources)
+                else:
+                    nse_sources = [all_nse] + [s for s in nse_sources if s != all_nse]
+                ensure_session_choice(uni_key, nse_sources, nse_sources[1] if len(nse_sources) > 1 else nse_sources[0])
                 universe = st.selectbox(
                     "Stock universe (NSE)",
                     nse_sources,
                     key=uni_key,
                     format_func=lambda s: f"{s} ({universe_ticker_count(s)})",
                     help=(
-                        "Prefer Curated / Nifty 50 / sector baskets. "
-                        "**All NSE equities** is 2000+ names — very slow with Screener + wealth."
+                        "First option = full NSE (~2300). "
+                        "Prefer Curated / Nifty 50 / sector baskets for normal scans."
                     ),
+                )
+                st.caption(
+                    "💡 Full list = **All NSE equities (~2300) - very slow** (first row in this dropdown)."
                 )
                 n_uni = universe_ticker_count(universe)
                 if "All NSE" in universe:

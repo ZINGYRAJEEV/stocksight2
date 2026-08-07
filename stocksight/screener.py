@@ -209,7 +209,7 @@ UNIVERSES = {
     "Nifty 500 (NSE)": NIFTY_50 + NIFTY_500_EXTRA,
     "NSE Small/Mid-Cap Movers": NSE_SMALLMID_EXTRA,
     "Nifty 500 + Small/Mid Movers (NSE)": NIFTY_50 + NIFTY_500_EXTRA + NSE_SMALLMID_EXTRA,
-    "All NSE equities (full list — very slow)": [],  # lazy — see get_universe_tickers()
+    "All NSE equities (~2300) - very slow": [],  # lazy — see get_universe_tickers()
     "S&P 500 (NYSE)": SP500,
 }
 
@@ -218,14 +218,17 @@ PE_DATA_CAP = {
     "Nifty 500 (NSE)":   300,
     "NSE Small/Mid-Cap Movers": 400,
     "Nifty 500 + Small/Mid Movers (NSE)": 400,
-    "All NSE equities (full list — very slow)": 80,
+    "All NSE equities (~2300) - very slow": 80,
     "S&P 500 (NYSE)":    500,
 }
 
 
 def get_universe_tickers(universe_name: str) -> list[str]:
     """Resolve a universe label to Yahoo tickers (lazy-loads full NSE list)."""
-    if universe_name == "All NSE equities (full list — very slow)":
+    if universe_name in (
+        "All NSE equities (~2300) - very slow",
+        "All NSE equities (full list — very slow)",  # legacy label
+    ):
         try:
             from .nse_universe import load_nse_equity_tickers
         except ImportError:

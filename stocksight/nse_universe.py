@@ -142,4 +142,4 @@ def nse_equity_count(*, force_refresh: bool = False) -> int:
     return len(load_nse_equity_tickers(force_refresh=force_refresh))
 
 
-ALL_NSE_EQUITIES_LABEL = "All NSE equities (full list — very slow)"
+ALL_NSE_EQUITIES_LABEL = "All NSE equities (~2300) - very slow"

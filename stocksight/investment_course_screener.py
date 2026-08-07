@@ -48,9 +48,20 @@ SECTOR_SCAN_SOURCES: dict[str, list[str]] = {
     if str(k).startswith("Sector ·")
 }
 
-BROAD_SCAN_SOURCES: list[str] = [
-    s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s
-]
+# Put full NSE first so it is obvious in the Broad market dropdown.
+_ALL_NSE_LABEL = "All NSE equities (~2300) - very slow"
+BROAD_SCAN_SOURCES: list[str] = []
+_seen_broad: set[str] = set()
+for _s in [_ALL_NSE_LABEL, *[s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s]]:
+    if _s in _seen_broad:
+        continue
+    # Skip legacy empty key if present
+    if _s.startswith("All NSE") and _s != _ALL_NSE_LABEL:
+        continue
+    _seen_broad.add(_s)
+    BROAD_SCAN_SOURCES.append(_s)
+if _ALL_NSE_LABEL not in BROAD_SCAN_SOURCES:
+    BROAD_SCAN_SOURCES.insert(0, _ALL_NSE_LABEL)
 
 
 def resolve_investment_course_tickers(scan_source: str) -> list[tuple[str, str]]:

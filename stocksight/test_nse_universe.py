@@ -38,11 +38,14 @@ class TestNseUniverse(unittest.TestCase):
 
         full = get_universe_tickers("Nifty 50 (NSE)")
         self.assertEqual(len(full), 50)
-        all_label = "All NSE equities (full list — very slow)"
+        all_label = "All NSE equities (~2300) - very slow"
         # Uses disk cache from earlier download in this env
         all_syms = get_universe_tickers(all_label)
         self.assertGreater(len(all_syms), 1000)
         self.assertTrue(all(s.endswith(".NS") for s in all_syms[:20]))
+        # Legacy label still resolves
+        legacy = get_universe_tickers("All NSE equities (full list — very slow)")
+        self.assertEqual(len(legacy), len(all_syms))
 
 
 if __name__ == "__main__":
