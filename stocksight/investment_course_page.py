@@ -517,10 +517,17 @@ def render_investment_course_page() -> None:
                 )
                 n_uni = universe_ticker_count(universe)
                 if "All NSE" in universe:
-                    st.warning(
-                        f"**{n_uni}** tickers — full NSE scan can take hours. "
-                        "Use sector baskets or Nifty 500 for normal research."
-                    )
+                    if n_uni <= 0:
+                        st.error(
+                            "Full NSE list failed to load (0 tickers). "
+                            "Cloud may be blocking NSE download — use **Nifty 500** or a **sector basket**. "
+                            "If this persists after redeploy, the committed `stocksight/data/nse_equity_symbols.txt` cache is missing."
+                        )
+                    else:
+                        st.warning(
+                            f"**{n_uni}** tickers — full NSE scan can take hours. "
+                            "Use sector baskets or Nifty 500 for normal research."
+                        )
                 else:
                     st.caption(f"**{n_uni}** tickers in this broad list.")
 
@@ -704,9 +711,25 @@ def render_investment_course_page() -> None:
         return
 
     if not results:
+        if "All NSE" in str(last_uni) and (not results):
+            # Distinguish empty universe vs filters wiping matches
+            try:
+                from nse_universe import last_nse_universe_error, nse_equity_count
+
+                n_all = nse_equity_count()
+                err = last_nse_universe_error()
+            except Exception:
+                n_all, err = 0, ""
+            if n_all <= 0:
+                st.warning(
+                    "No matches because the **full NSE ticker list is empty** "
+                    f"(load error: {err or 'cache missing'}). "
+                    "Pick **Nifty 500** or a **sector basket** instead."
+                )
+                return
         st.warning(
             "No matches. Try **STEP 0**, turn off **Only Strong wealth** / DMA / "
-            "**Require CAGR** filters, lower min mcap, or use **Curated / Nifty 50**."
+            "**Require CAGR** / **PEG** filters, lower min mcap, or use **Curated / Nifty 50**."
         )
         return
 

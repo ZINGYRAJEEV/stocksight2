@@ -225,14 +225,12 @@ PE_DATA_CAP = {
 
 def get_universe_tickers(universe_name: str) -> list[str]:
     """Resolve a universe label to Yahoo tickers (lazy-loads full NSE list)."""
-    if universe_name in (
-        "All NSE equities (~2300) - very slow",
-        "All NSE equities (full list — very slow)",  # legacy label
-    ):
-        try:
-            from .nse_universe import load_nse_equity_tickers
-        except ImportError:
-            from nse_universe import load_nse_equity_tickers
+    try:
+        from .nse_universe import is_all_nse_label, load_nse_equity_tickers
+    except ImportError:
+        from nse_universe import is_all_nse_label, load_nse_equity_tickers
+
+    if is_all_nse_label(universe_name):
         return load_nse_equity_tickers()
     return list(UNIVERSES.get(universe_name, []))
 

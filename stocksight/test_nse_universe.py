@@ -26,15 +26,22 @@ class TestNseUniverse(unittest.TestCase):
         self.assertIn("BAJAJ-AUTO.NS", parsed)
         self.assertNotIn("SOMETHING.NS", parsed)  # IL series skipped
 
-        with patch("nse_universe._download_equity_csv", return_value=SAMPLE_CSV):
-            with patch("nse_universe._CACHE_FILE") as mock_file:
-                mock_file.is_file.return_value = False
-                # force in-memory path via empty cache + download
-                import nse_universe as nu
+        self.assertEqual(_parse_equity_csv("<html>blocked</html>"), [])
 
-                nu._SYMBOLS = None
-                syms = nu._parse_equity_csv(SAMPLE_CSV)
-                self.assertGreaterEqual(len(syms), 4)
+        import nse_universe as nu
+
+        # Empty / HTML download must not wipe a good disk cache
+        nu._SYMBOLS = None
+        with patch.object(nu, "_download_equity_csv", return_value="<html>blocked</html>"):
+            with patch.object(nu, "_read_disk_cache", return_value=["RELIANCE.NS", "TCS.NS"] * 600):
+                syms = nu.load_nse_equity_tickers(force_refresh=True)
+                self.assertGreater(len(syms), 1000)
+        # Normal load must use disk cache and skip network
+        nu._SYMBOLS = None
+        with patch.object(nu, "_download_equity_csv", side_effect=AssertionError("no network")):
+            with patch.object(nu, "_read_disk_cache", return_value=["INFY.NS"] * 1200):
+                syms = nu.load_nse_equity_tickers()
+                self.assertEqual(len(syms), 1200)
 
         full = get_universe_tickers("Nifty 50 (NSE)")
         self.assertEqual(len(full), 50)
