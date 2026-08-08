@@ -105,5 +105,58 @@ class TestFundamentalFilters(unittest.TestCase):
         self.assertTrue(filters_for_tier("momentum").require_acceleration)
 
 
+class TestFundamentalResultsTable(unittest.TestCase):
+    def test_result_to_row_dataframe_dedupe_pipeline(self):
+        """Mirrors the page path that crashed on Cloud (dedupe + table columns)."""
+        import pandas as pd
+        from fundamental_screener import FundamentalResult, result_to_row
+        from session_utils import deduplicate_scan_results
+
+        hit = FundamentalResult(
+            ticker="INFY",
+            raw_ticker="INFY.NS",
+            label="Infosys",
+            tier="watchlist",
+            price=1500.0,
+            market_cap_cr=50000.0,
+            market_cap_display="₹50,000 Cr",
+            debt_equity=0.1,
+            interest_coverage=None,
+            current_ratio=None,
+            promoter_holding_pct=15.0,
+            promoter_change_pct=0.0,
+            pledged_pct=0.0,
+            roe_pct=25.0,
+            avg_roe_3y_pct=22.0,
+            roce_pct=30.0,
+            roa_pct=15.0,
+            opm_pct=20.0,
+            sales_growth_3y_pct=12.0,
+            profit_growth_3y_pct=14.0,
+            yoy_sales_pct=11.0,
+            yoy_profit_pct=12.0,
+            pe=22.0,
+            industry_pe=28.0,
+            peg=1.2,
+            price_to_book=5.0,
+            ret_3m_pct=5.0,
+            ret_6m_pct=12.0,
+            ret_1y_pct=20.0,
+            score=40.0,
+            verdict="ok",
+            pass_notes=["ROE 25%"],
+            fail_soft=[],
+            links={"Screener": "https://www.screener.in/company/infy/consolidated/"},
+        )
+        rows = [result_to_row(hit, 1), result_to_row(hit, 2)]
+        df = pd.DataFrame(rows)
+        self.assertIn("Ticker", df.columns)
+        self.assertIn("Raw", df.columns)
+        deduped = deduplicate_scan_results(df, ticker_col="Ticker")
+        self.assertEqual(len(deduped), 1)
+        self.assertEqual(str(deduped.iloc[0]["Ticker"]), "INFY")
+
+
+
 if __name__ == "__main__":
     unittest.main()

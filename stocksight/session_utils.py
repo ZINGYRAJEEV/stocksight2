@@ -215,29 +215,39 @@ class SessionStateManager:
         return st.session_state.get(self.is_running_key, False)
 
 
-def deduplicate_scan_results(df: pd.DataFrame) -> pd.DataFrame:
+def deduplicate_scan_results(
+    df: pd.DataFrame,
+    ticker_col: str = "Ticker",
+) -> pd.DataFrame:
     """
     Remove duplicate records from scan results.
-    
-    Keeps first occurrence of each unique Ticker.
-    
+
+    Keeps first occurrence of each unique ticker column value.
+
     Args:
         df: Scan results dataframe
-    
+        ticker_col: Column used for uniqueness (default ``Ticker``)
+
     Returns:
         Dataframe with duplicates removed
     """
     if df is None or df.empty:
         return df
-    
-    if "Ticker" not in df.columns:
+
+    col = ticker_col if ticker_col in df.columns else None
+    if col is None:
+        for fallback in ("Ticker", "Raw", "Symbol"):
+            if fallback in df.columns:
+                col = fallback
+                break
+    if col is None:
         return df
-    
+
     # Sort by index to keep chronologically first records
     df_sorted = df.sort_index()
-    
-    # Drop duplicates by Ticker, keeping first
-    df_dedup = df_sorted.drop_duplicates(subset=["Ticker"], keep="first")
-    
+
+    # Drop duplicates by ticker column, keeping first
+    df_dedup = df_sorted.drop_duplicates(subset=[col], keep="first")
+
     # Reset index to clean order
     return df_dedup.reset_index(drop=True)

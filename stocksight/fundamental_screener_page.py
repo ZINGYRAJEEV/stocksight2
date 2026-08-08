@@ -311,36 +311,64 @@ def render_fundamental_screener_page() -> None:
     rows = [result_to_row(r, i + 1) for i, r in enumerate(results)]
     df = pd.DataFrame(rows)
     df = deduplicate_scan_results(df, ticker_col="Ticker")
-    df = prepare_scan_results_df(df)
+    df = prepare_scan_results_df(
+        df,
+        universe_name=str(last_uni or ""),
+        cache_key_prefix=f"{key}_results",
+        raw_ticker_col="Raw",
+    )
 
-    col_cfg = {
-        **filter_column_config(df),
-        "Score": st.column_config.NumberColumn(format="%.1f"),
-        "D/E": st.column_config.NumberColumn(format="%.2f"),
-        "PEG": st.column_config.NumberColumn(format="%.2f"),
-        "ROE %": st.column_config.NumberColumn(format="%.1f"),
-    }
+    col_cfg = filter_column_config(
+        df,
+        {
+            "Score": st.column_config.NumberColumn(format="%.1f"),
+            "D/E": st.column_config.NumberColumn(format="%.2f"),
+            "PEG": st.column_config.NumberColumn(format="%.2f"),
+            "ROE %": st.column_config.NumberColumn(format="%.1f"),
+            "Raw": None,
+            "Notes": None,
+            "Soft skips": None,
+        },
+    )
+
+    chart_sel_key = f"{key}_chart_selected"
+
+    def _on_chart_row_select(row: pd.Series) -> None:
+        try:
+            st.session_state[chart_sel_key] = str(row["Ticker"])
+        except Exception:
+            pass
+
     render_clickable_scan_table(
         df,
         key_prefix=f"{key}_tbl",
+        universe_name=str(last_uni or ""),
         column_config=col_cfg,
         height=min(520, 48 + 28 * min(len(df), 18)),
+        show_panel=False,
+        on_row_select=_on_chart_row_select,
     )
 
     by_ticker = {r.ticker: r for r in results}
-    sel = st.session_state.get(f"{key}_tbl_selected")
-    if sel and str(sel) in by_ticker:
+    sel = st.session_state.get(chart_sel_key)
+    if sel and str(sel) in by_ticker and not df.empty:
         picked = by_ticker[str(sel)]
+        st.markdown("---")
         st.markdown(f"#### {picked.label} — detail")
         st.write(picked.verdict)
         st.caption(" · ".join(picked.pass_notes))
         if picked.fail_soft:
             st.caption("Soft skips: " + " · ".join(picked.fail_soft))
-        render_historical_detail_panel(picked.raw_ticker, key_prefix=f"{key}_hist")
         if picked.links:
             link_bits = " · ".join(f"[{k}]({v})" for k, v in picked.links.items() if v)
             if link_bits:
                 st.markdown(link_bits)
+        render_historical_detail_panel(
+            df,
+            universe_name=str(last_uni or ""),
+            key_prefix=f"{key}_hist",
+            selected_ticker=str(sel),
+        )
 
     st.caption(
         "Educational framework only — not investment advice. "
