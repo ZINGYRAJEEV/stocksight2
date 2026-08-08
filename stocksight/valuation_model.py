@@ -472,6 +472,9 @@ def apply_baseline_to_session(base: ValuationBaseline, *, book: dict[str, Any]) 
     """Push Yahoo-loaded defaults into Streamlit widget session state."""
     import streamlit as st
 
+    def _clamp(v: float, lo: float, hi: float) -> float:
+        return max(lo, min(hi, float(v)))
+
     rev, _ = default_revenue_cr_y0(base)
     opm_start = float(base.opm_pct or book["opm_default_pct"])
     opm_end = float(base.opm_pct or book["opm_default_pct"])
@@ -482,20 +485,21 @@ def apply_baseline_to_session(base: ValuationBaseline, *, book: dict[str, Any]) 
     )
     pe_end = round(pe_start * 0.67, 1)
 
-    st.session_state.val_rev0 = float(rev)
-    st.session_state.val_rev_g = float(base.revenue_growth_5y_pct or 12.0)
-    st.session_state.val_opm = opm_start
-    st.session_state.val_terminal_opm = opm_end
-    st.session_state.val_shares = float(base.shares_cr or 1.0)
-    st.session_state.val_pe_start = pe_start
-    st.session_state.val_pe_terminal = pe_end
-    st.session_state.val_entry_px = float(base.price or 1.0)
+    # Keep within Valuation Rulebook widget min/max (Streamlit raises otherwise).
+    st.session_state.val_rev0 = max(0.0, float(rev))
+    st.session_state.val_rev_g = _clamp(float(base.revenue_growth_5y_pct or 12.0), -20.0, 80.0)
+    st.session_state.val_opm = _clamp(opm_start, 0.0, 80.0)
+    st.session_state.val_terminal_opm = _clamp(opm_end, 0.0, 80.0)
+    st.session_state.val_shares = max(0.01, float(base.shares_cr or 1.0))
+    st.session_state.val_pe_start = _clamp(pe_start, 0.5, 120.0)
+    st.session_state.val_pe_terminal = _clamp(pe_end, 0.5, 120.0)
+    st.session_state.val_entry_px = max(0.01, float(base.price or 1.0))
     st.session_state.val_sector_key = base.sector_key
     st.session_state.val_loaded_ticker = base.display_ticker
-    st.session_state.val_est_year = default_estimate_year(base)
+    st.session_state.val_est_year = int(_clamp(float(default_estimate_year(base)), 2020, 2035))
     st.session_state.val_use_growth_path = False
     st.session_state.val_growth_path_text = ""
-
+    st.session_state.val_int_drag = _clamp(float(base.interest_drag_pct or 0.0), 0.0, 15.0)
 
 def load_valuation_baseline(raw_ticker: str) -> ValuationBaseline:
     user_in = (raw_ticker or "").strip()

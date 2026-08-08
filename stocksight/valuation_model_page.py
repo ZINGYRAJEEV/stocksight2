@@ -40,6 +40,64 @@ def _parse_growth_path(text: str) -> list[float]:
     return out
 
 
+def _clamp_session_number(
+    key: str,
+    *,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    default: float | None = None,
+) -> None:
+    """Keep widget session values inside Streamlit number_input bounds."""
+    if key not in st.session_state:
+        if default is not None:
+            st.session_state[key] = default
+        return
+    try:
+        v = float(st.session_state[key])
+    except (TypeError, ValueError):
+        if default is not None:
+            st.session_state[key] = default
+        return
+    if min_value is not None and v < min_value:
+        v = float(min_value)
+    if max_value is not None and v > max_value:
+        v = float(max_value)
+    st.session_state[key] = v
+
+
+def _sanitize_valuation_widget_state(base) -> None:
+    """Prevent StreamlitValueBelowMinError / AboveMax from stale or extreme Yahoo data."""
+    growth_default = (
+        float(base.revenue_growth_5y_pct)
+        if base.revenue_growth_5y_pct is not None
+        else 12.0
+    )
+    _clamp_session_number("val_rev0", min_value=0.0, default=1000.0)
+    _clamp_session_number(
+        "val_rev_g",
+        min_value=-20.0,
+        max_value=80.0,
+        default=max(-20.0, min(80.0, growth_default)),
+    )
+    _clamp_session_number("val_years", min_value=1, max_value=10, default=3)
+    _clamp_session_number("val_est_year", min_value=2020, max_value=2035, default=2026)
+    _clamp_session_number("val_opm", min_value=0.0, max_value=80.0, default=20.0)
+    _clamp_session_number("val_terminal_opm", min_value=0.0, max_value=80.0, default=20.0)
+    _clamp_session_number("val_shares", min_value=0.01, default=1.0)
+    _clamp_session_number("val_pe_start", min_value=0.5, max_value=120.0, default=20.0)
+    _clamp_session_number("val_pe_terminal", min_value=0.5, max_value=120.0, default=15.0)
+    _clamp_session_number("val_entry_px", min_value=0.01, default=1.0)
+    _clamp_session_number("val_cagr_years", min_value=1, max_value=15, default=3)
+    _clamp_session_number("val_buy_discount", min_value=5.0, max_value=50.0, default=27.0)
+    _clamp_session_number(
+        "val_int_drag",
+        min_value=0.0,
+        max_value=15.0,
+        default=max(0.0, min(15.0, float(base.interest_drag_pct or 0.0))),
+    )
+    _clamp_session_number("val_capex", min_value=0.0, max_value=40.0, default=8.0)
+    _clamp_session_number("val_new_debt", min_value=0.0, default=0.0)
+
 def _render_verdict_banner(assessment, entry_px: float, terminal_year: str) -> None:
     st.markdown(
         f"""
@@ -184,6 +242,8 @@ def render_valuation_rulebook_page() -> None:
             except (TypeError, ValueError):
                 pass
 
+        _sanitize_valuation_widget_state(base)
+
         st.markdown("**Growth & sales**")
         ic1, ic2, ic3, ic3b = st.columns(4)
         rev0 = ic1.number_input("Revenue ₹ Cr", min_value=0.0, step=50.0, key="val_rev0")
@@ -191,7 +251,6 @@ def render_valuation_rulebook_page() -> None:
             "Sales growth % / yr",
             min_value=-20.0,
             max_value=80.0,
-            value=float(base.revenue_growth_5y_pct or 12.0),
             step=0.5,
             key="val_rev_g",
         )
@@ -294,7 +353,6 @@ def render_valuation_rulebook_page() -> None:
             "Interest drag % of OP",
             min_value=0.0,
             max_value=15.0,
-            value=float(base.interest_drag_pct or 0.0),
             step=0.5,
             key="val_int_drag",
         )
@@ -302,14 +360,12 @@ def render_valuation_rulebook_page() -> None:
             "Capex % of revenue",
             min_value=0.0,
             max_value=40.0,
-            value=8.0,
             step=0.5,
             key="val_capex",
         )
         new_debt = r3.number_input(
             "Extra net debt ₹ Cr",
             min_value=0.0,
-            value=0.0,
             step=10.0,
             key="val_new_debt",
         )
