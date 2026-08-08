@@ -119,20 +119,24 @@ class TestFundamentalFunnelStore(unittest.TestCase):
                 "fundamental_screener.fetch_screener_company_html",
                 return_value="",
             ):
-                # Empty HTML → no hits, but must iterate only override list (len 1)
-                seen: list[str] = []
+                with patch(
+                    "fundamental_screener.fetch_screener_fundamental_profile",
+                    return_value={},
+                ):
+                    seen: list[str] = []
 
-                def cb(i, t, s):
-                    seen.append(s)
+                    def cb(i, t, s):
+                        seen.append(s)
 
-                hits = scan_fundamental_framework(
-                    "Nifty 50 (NSE)",
-                    filters=filters_for_tier("strict"),
-                    progress_cb=cb,
-                    tickers=[("Infosys", "INFY.NS")],
-                )
-                self.assertEqual(seen, ["INFY.NS"])
-                self.assertEqual(hits, [])
+                    report = scan_fundamental_framework(
+                        "Nifty 50 (NSE)",
+                        filters=filters_for_tier("strict"),
+                        progress_cb=cb,
+                        tickers=[("Infosys", "INFY.NS")],
+                    )
+                    self.assertEqual(seen, ["INFY.NS"])
+                    self.assertEqual(report.hits, [])
+                    self.assertGreaterEqual(report.fail_counts.get("no_screener_data", 0), 1)
 
 
 if __name__ == "__main__":

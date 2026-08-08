@@ -76,7 +76,7 @@ class TestFundamentalFilters(unittest.TestCase):
             "pe": 20.0,
             "industry_pe": 25.0,
         }
-        ok, notes, soft = _passes(profile, flt)
+        ok, notes, soft = _passes(profile, flt)[:3]
         self.assertTrue(ok)
         self.assertTrue(any("ROE" in n for n in notes))
 
@@ -93,8 +93,41 @@ class TestFundamentalFilters(unittest.TestCase):
             "pe": 20.0,
             "industry_pe": 25.0,
         }
-        ok, _, _ = _passes(profile, flt)
+        ok, _, _, reason = _passes(profile, flt)
         self.assertFalse(ok)
+        self.assertEqual(reason, "debt_high")
+
+    def test_strict_soft_skips_missing_icr_opm_yoy(self):
+        """Regression: missing ICR used to hard-fail via governance flag → 0 Tier-2 hits."""
+        flt = filters_for_tier("strict")
+        self.assertTrue(flt.soft_skip_missing_valuation)
+        profile = {
+            "market_cap_cr": 2000.0,
+            "debt_equity": 0.1,
+            "promoter_holding_pct": 55.0,
+            "promoter_change_pct": 0.5,
+            "pledged_pct": 1.0,
+            "roe_pct": 20.0,
+            "avg_roe_3y_pct": None,  # soft
+            "roce_pct": 22.0,
+            "roa_pct": None,  # soft
+            "opm_pct": None,  # soft — was hard fail
+            "sales_growth_3y_pct": 15.0,
+            "profit_growth_3y_pct": 16.0,
+            "yoy_sales_pct": None,  # soft — was hard fail
+            "yoy_profit_pct": None,
+            "interest_coverage": None,  # soft — was hard fail via gov
+            "current_ratio": None,  # soft
+            "pe": 18.0,
+            "industry_pe": 25.0,
+            "peg": 1.1,
+            "price_to_book": 4.0,
+        }
+        ok, notes, soft, reason = _passes(profile, flt)
+        self.assertTrue(ok, f"expected pass, got fail={reason} soft={soft}")
+        self.assertTrue(any("Interest coverage n/a" in s for s in soft))
+        self.assertTrue(any("OPM n/a" in s for s in soft))
+        self.assertEqual(reason, "")
 
     def test_strict_preset_tighter(self):
         w = filters_for_tier("watchlist")

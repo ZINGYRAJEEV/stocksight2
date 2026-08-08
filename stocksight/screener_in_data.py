@@ -519,6 +519,24 @@ def _parse_latest_opm_pct(html: str) -> Optional[float]:
     return _last_non_null(vals)
 
 
+def _parse_interest_coverage_from_pl(html: str) -> Optional[float]:
+    """Operating Profit / Interest from Screener P&L (latest column)."""
+    headers, data = _parse_section_table(html, "profit-loss")
+    if not data:
+        return None
+    op = _last_non_null(_row_values(data, "operating profit"))
+    interest = _last_non_null(_row_values(data, "interest"))
+    if op is None or interest is None:
+        return None
+    try:
+        if abs(float(interest)) < 0.01:
+            return 99.0 if float(op) > 0 else None
+        return round(float(op) / abs(float(interest)), 2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+
 def _yoy_quarterly_growth(html: str) -> dict[str, Optional[float]]:
     """YoY growth: latest quarter vs same quarter ~1 year earlier (4 steps back)."""
     headers, data = _parse_section_table(html, "quarters")
@@ -567,6 +585,7 @@ def fetch_screener_fundamental_profile(display_ticker: str, *, html: str = "") -
     interest_cov = (
         _parse_ratio_block(page, "Interest Coverage Ratio")
         or _parse_ratio_block(page, "Interest Coverage")
+        or _parse_interest_coverage_from_pl(page)
     )
     roa = _parse_ratio_block(page, "ROA") or _parse_ratio_block(page, "Return on assets")
     industry_pe = _parse_ratio_block(page, "Industry PE") or _parse_ratio_block(

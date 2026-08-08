@@ -281,10 +281,13 @@ def render_fundamental_screener_page() -> None:
             )
         with a3:
             soft_val = st.checkbox(
-                "Soft-skip missing PE/PEG/P/B",
+                "Soft-skip missing optional metrics (ICR/OPM/YoY/PE/PEG/P/B…)",
                 value=bool(preset.soft_skip_missing_valuation),
                 key=f"{key}_soft",
-                help="If Industry PE / PEG / P/B missing, don't fail the name.",
+                help=(
+                    "If Screener/Yahoo does not publish a field, skip that gate instead of failing. "
+                    "Debt / promoter / pledge still required when governance is on."
+                ),
             )
             req_gov = st.checkbox(
                 "Require debt / promoter / pledge data",
@@ -350,16 +353,19 @@ def render_fundamental_screener_page() -> None:
             def cb(i, t, s):
                 prog.progress(int(i / max(t, 1) * 100), text=f"Checking {s}… ({i}/{t})")
 
-            hits = scan_fundamental_framework(
+            hits_report = scan_fundamental_framework(
                 universe,
                 filters=flt,
                 progress_cb=cb,
                 tickers=scan_tickers if tier != "watchlist" and funnel_mode != "broad" else None,
             )
+            hits = hits_report.hits
             st.session_state[session_key] = hits
             st.session_state[f"{session_key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")
             st.session_state[f"{session_key}_universe"] = scan_label
             st.session_state[f"{session_key}_tier"] = tier
+            st.session_state[f"{session_key}_fail_counts"] = dict(hits_report.fail_counts)
+            st.session_state[f"{session_key}_scanned"] = int(hits_report.scanned)
 
             # Refresh funnel shortlists after every Tier 1 / Tier 2 scan
             try:
@@ -410,11 +416,19 @@ def render_fundamental_screener_page() -> None:
         return
 
     if not results:
+        fail_counts = st.session_state.get(f"{session_key}_fail_counts") or {}
+        scanned = st.session_state.get(f"{session_key}_scanned")
         st.warning(
-            "No matches. Try **Tier 1 Watchlist**, a larger universe, turn on "
-            "**Soft-skip missing PE/PEG/P/B**, or slightly relax PEG / P/B — "
-            "not debt or promoter/pledge."
+            "No matches. Soft-skip is on by default for missing ICR/OPM/YoY/PE/PEG/P/B — "
+            "try a larger Watchlist, or relax **PEG / P/B** (not debt or promoter/pledge)."
         )
+        if fail_counts:
+            top = sorted(fail_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
+            bits = ", ".join(f"`{k}`×{n}" for k, n in top)
+            st.caption(
+                f"Checked **{scanned if scanned is not None else '—'}** names with data. "
+                f"Top skip reasons: {bits}"
+            )
         return
 
     rank_key = f"{key}_rank"

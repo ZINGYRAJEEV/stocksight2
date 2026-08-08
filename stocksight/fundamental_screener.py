@@ -232,83 +232,100 @@ def _verdict(tier: str, score: float, notes: list[str]) -> str:
     return "Watchlist pass — research before Strict"
 
 
-def _require(
+def _gate_optional(
     val: Optional[float],
     *,
-    ok: bool,
+    threshold_ok: bool,
+    soft: list[str],
+    soft_ok: bool,
+    missing_label: str,
+    pass_label: str,
     notes: list[str],
-    label: str,
-    missing_fail: bool,
-) -> bool:
+) -> tuple[bool, str]:
+    """
+    Optional metric gate.
+    Returns (continue_scan, fail_reason). fail_reason empty means OK / soft-skipped.
+    """
     if val is None:
-        if missing_fail:
-            return False
-        notes.append(f"{label} n/a")
-        return True
-    if not ok:
-        return False
-    notes.append(label)
-    return True
+        if soft_ok:
+            soft.append(missing_label)
+            return True, ""
+        return False, missing_label
+    if not threshold_ok:
+        return False, missing_label.replace(" n/a", "_low")
+    notes.append(pass_label)
+    return True, ""
 
 
-def _passes(profile: dict, flt: FundamentalFilters) -> tuple[bool, list[str], list[str]]:
+def _passes(profile: dict, flt: FundamentalFilters) -> tuple[bool, list[str], list[str], str]:
+    """
+    Returns (ok, pass_notes, soft_skips, fail_reason).
+    fail_reason is a short machine key for skip counters.
+    """
     notes: list[str] = []
     soft: list[str] = []
     gov = bool(flt.require_governance_data)
+    soft_ok = bool(flt.soft_skip_missing_valuation)
 
     mcap = profile.get("market_cap_cr")
     if mcap is None or float(mcap) < flt.min_market_cap_cr:
-        return False, notes, soft
+        return False, notes, soft, "mcap"
     notes.append(f"Mcap {_mcap_display(mcap)}")
 
     de = profile.get("debt_equity")
-    if not _require(
-        de,
-        ok=de is not None and float(de) < flt.max_debt_equity,
-        notes=notes,
-        label=f"D/E {de:.2f}" if de is not None else "D/E",
-        missing_fail=gov,
-    ):
-        return False, notes, soft
+    if de is None:
+        if gov:
+            return False, notes, soft, "missing_debt"
+        soft.append("D/E n/a")
+    elif float(de) >= flt.max_debt_equity:
+        return False, notes, soft, "debt_high"
+    else:
+        notes.append(f"D/E {de:.2f}")
 
     if flt.min_interest_coverage > 0:
         ic = profile.get("interest_coverage")
-        if ic is None:
-            if gov:
-                return False, notes, soft
-            soft.append("Interest coverage n/a")
-        elif float(ic) < flt.min_interest_coverage:
-            return False, notes, soft
-        else:
-            notes.append(f"ICR {ic:.1f}")
+        cont, reason = _gate_optional(
+            ic,
+            threshold_ok=ic is not None and float(ic) >= flt.min_interest_coverage,
+            soft=soft,
+            soft_ok=soft_ok,
+            missing_label="Interest coverage n/a",
+            pass_label=f"ICR {ic:.1f}" if ic is not None else "ICR",
+            notes=notes,
+        )
+        if not cont:
+            return False, notes, soft, "missing_icr" if ic is None else "icr_low"
 
     if flt.min_current_ratio > 0:
         cr = profile.get("current_ratio")
-        if cr is None:
-            if not flt.soft_skip_missing_valuation:
-                return False, notes, soft
-            soft.append("Current ratio n/a")
-        elif float(cr) < flt.min_current_ratio:
-            return False, notes, soft
-        else:
-            notes.append(f"CR {cr:.2f}")
+        cont, _ = _gate_optional(
+            cr,
+            threshold_ok=cr is not None and float(cr) >= flt.min_current_ratio,
+            soft=soft,
+            soft_ok=soft_ok,
+            missing_label="Current ratio n/a",
+            pass_label=f"CR {cr:.2f}" if cr is not None else "CR",
+            notes=notes,
+        )
+        if not cont:
+            return False, notes, soft, "missing_cr" if cr is None else "cr_low"
 
     prom = profile.get("promoter_holding_pct")
-    if not _require(
-        prom,
-        ok=prom is not None and float(prom) > flt.min_promoter_holding_pct,
-        notes=notes,
-        label=f"Promoter {prom:.1f}%" if prom is not None else "Promoter",
-        missing_fail=gov,
-    ):
-        return False, notes, soft
+    if prom is None:
+        if gov:
+            return False, notes, soft, "missing_promoter"
+        soft.append("Promoter n/a")
+    elif float(prom) <= flt.min_promoter_holding_pct:
+        return False, notes, soft, "promoter_low"
+    else:
+        notes.append(f"Promoter {prom:.1f}%")
 
     if flt.min_promoter_change_pct > -900:
         chg = profile.get("promoter_change_pct")
         if chg is None:
             soft.append("Promoter Δ n/a")
         elif float(chg) <= flt.min_promoter_change_pct:
-            return False, notes, soft
+            return False, notes, soft, "promoter_delta"
         else:
             notes.append(f"Promoter Δ {chg:+.1f}%")
 
@@ -316,102 +333,142 @@ def _passes(profile: dict, flt: FundamentalFilters) -> tuple[bool, list[str], li
     # Missing pledge often means 0 on Screener — treat None as 0 when promoter known
     if pledged is None and prom is not None:
         pledged = 0.0
-        profile = dict(profile)
-        profile["pledged_pct"] = 0.0
-    if not _require(
-        pledged,
-        ok=pledged is not None and float(pledged) < flt.max_pledged_pct,
-        notes=notes,
-        label=f"Pledge {pledged:.1f}%" if pledged is not None else "Pledge",
-        missing_fail=gov,
-    ):
-        return False, notes, soft
+    if pledged is None:
+        if gov:
+            return False, notes, soft, "missing_pledge"
+        soft.append("Pledge n/a")
+    elif float(pledged) >= flt.max_pledged_pct:
+        return False, notes, soft, "pledge_high"
+    else:
+        notes.append(f"Pledge {pledged:.1f}%")
 
     roe = profile.get("roe_pct")
     if roe is None or float(roe) <= flt.min_roe_pct:
-        return False, notes, soft
+        return False, notes, soft, "roe"
     notes.append(f"ROE {roe:.1f}%")
 
     if flt.min_avg_roe_3y_pct > 0:
         ar = profile.get("avg_roe_3y_pct")
-        if ar is None:
-            soft.append("Avg ROE 3Y n/a")
-        elif float(ar) <= flt.min_avg_roe_3y_pct:
-            return False, notes, soft
-        else:
-            notes.append(f"Avg ROE 3Y {ar:.1f}%")
+        cont, _ = _gate_optional(
+            ar,
+            threshold_ok=ar is not None and float(ar) > flt.min_avg_roe_3y_pct,
+            soft=soft,
+            soft_ok=soft_ok,
+            missing_label="Avg ROE 3Y n/a",
+            pass_label=f"Avg ROE 3Y {ar:.1f}%" if ar is not None else "Avg ROE 3Y",
+            notes=notes,
+        )
+        if not cont:
+            return False, notes, soft, "missing_avg_roe" if ar is None else "avg_roe_low"
 
     if flt.min_roce_pct > 0:
         roce = profile.get("roce_pct")
-        if roce is None or float(roce) <= flt.min_roce_pct:
-            return False, notes, soft
-        notes.append(f"ROCE {roce:.1f}%")
+        cont, _ = _gate_optional(
+            roce,
+            threshold_ok=roce is not None and float(roce) > flt.min_roce_pct,
+            soft=soft,
+            soft_ok=soft_ok,
+            missing_label="ROCE n/a",
+            pass_label=f"ROCE {roce:.1f}%" if roce is not None else "ROCE",
+            notes=notes,
+        )
+        if not cont:
+            return False, notes, soft, "missing_roce" if roce is None else "roce_low"
 
     if flt.min_roa_pct > 0:
         roa = profile.get("roa_pct")
-        if roa is None:
-            soft.append("ROA n/a")
-        elif float(roa) <= flt.min_roa_pct:
-            return False, notes, soft
-        else:
-            notes.append(f"ROA {roa:.1f}%")
+        cont, _ = _gate_optional(
+            roa,
+            threshold_ok=roa is not None and float(roa) > flt.min_roa_pct,
+            soft=soft,
+            soft_ok=soft_ok,
+            missing_label="ROA n/a",
+            pass_label=f"ROA {roa:.1f}%" if roa is not None else "ROA",
+            notes=notes,
+        )
+        if not cont:
+            return False, notes, soft, "missing_roa" if roa is None else "roa_low"
 
     if flt.min_opm_pct > 0:
         opm = profile.get("opm_pct")
-        if opm is None or float(opm) <= flt.min_opm_pct:
-            return False, notes, soft
-        notes.append(f"OPM {opm:.1f}%")
+        cont, _ = _gate_optional(
+            opm,
+            threshold_ok=opm is not None and float(opm) > flt.min_opm_pct,
+            soft=soft,
+            soft_ok=soft_ok,
+            missing_label="OPM n/a",
+            pass_label=f"OPM {opm:.1f}%" if opm is not None else "OPM",
+            notes=notes,
+        )
+        if not cont:
+            return False, notes, soft, "missing_opm" if opm is None else "opm_low"
 
     sg = profile.get("sales_growth_3y_pct")
     pg = profile.get("profit_growth_3y_pct")
     if sg is None or float(sg) <= flt.min_sales_growth_3y_pct:
-        return False, notes, soft
+        return False, notes, soft, "sales_growth"
     if pg is None or float(pg) <= flt.min_profit_growth_3y_pct:
-        return False, notes, soft
+        return False, notes, soft, "profit_growth"
     notes.append(f"Sales 3Y {sg:.1f}% · Profit 3Y {pg:.1f}%")
 
     if flt.min_yoy_sales_pct > 0:
         ys = profile.get("yoy_sales_pct")
-        if ys is None or float(ys) <= flt.min_yoy_sales_pct:
-            return False, notes, soft
-        notes.append(f"YoY sales {ys:.1f}%")
+        cont, _ = _gate_optional(
+            ys,
+            threshold_ok=ys is not None and float(ys) > flt.min_yoy_sales_pct,
+            soft=soft,
+            soft_ok=soft_ok,
+            missing_label="YoY sales n/a",
+            pass_label=f"YoY sales {ys:.1f}%" if ys is not None else "YoY sales",
+            notes=notes,
+        )
+        if not cont:
+            return False, notes, soft, "missing_yoy_sales" if ys is None else "yoy_sales_low"
     if flt.min_yoy_profit_pct > 0:
         yp = profile.get("yoy_profit_pct")
-        if yp is None or float(yp) <= flt.min_yoy_profit_pct:
-            return False, notes, soft
-        notes.append(f"YoY profit {yp:.1f}%")
+        cont, _ = _gate_optional(
+            yp,
+            threshold_ok=yp is not None and float(yp) > flt.min_yoy_profit_pct,
+            soft=soft,
+            soft_ok=soft_ok,
+            missing_label="YoY profit n/a",
+            pass_label=f"YoY profit {yp:.1f}%" if yp is not None else "YoY profit",
+            notes=notes,
+        )
+        if not cont:
+            return False, notes, soft, "missing_yoy_profit" if yp is None else "yoy_profit_low"
 
     if flt.require_pe_vs_industry:
         pe = profile.get("pe")
         ipe = profile.get("industry_pe")
         if pe is None or ipe is None:
-            if not flt.soft_skip_missing_valuation:
-                return False, notes, soft
+            if not soft_ok:
+                return False, notes, soft, "missing_pe_industry"
             soft.append("PE vs Industry n/a")
         elif float(pe) >= float(ipe) + float(flt.pe_vs_industry_max_gap):
-            return False, notes, soft
+            return False, notes, soft, "pe_vs_industry"
         else:
             notes.append(f"PE {pe:.1f} < Ind {ipe:.1f}+{flt.pe_vs_industry_max_gap:g}")
 
     if flt.max_peg > 0:
         peg = profile.get("peg")
         if peg is None:
-            if not flt.soft_skip_missing_valuation:
-                return False, notes, soft
+            if not soft_ok:
+                return False, notes, soft, "missing_peg"
             soft.append("PEG n/a")
         elif float(peg) >= flt.max_peg:
-            return False, notes, soft
+            return False, notes, soft, "peg_high"
         else:
             notes.append(f"PEG {peg:.2f}")
 
     if flt.max_price_to_book > 0:
         pb = profile.get("price_to_book")
         if pb is None:
-            if not flt.soft_skip_missing_valuation:
-                return False, notes, soft
+            if not soft_ok:
+                return False, notes, soft, "missing_pb"
             soft.append("P/B n/a")
         elif float(pb) >= flt.max_price_to_book:
-            return False, notes, soft
+            return False, notes, soft, "pb_high"
         else:
             notes.append(f"P/B {pb:.2f}")
 
@@ -420,18 +477,29 @@ def _passes(profile: dict, flt: FundamentalFilters) -> tuple[bool, list[str], li
         r6 = profile.get("ret_6m_pct")
         r1 = profile.get("ret_1y_pct")
         if r3 is None or float(r3) <= flt.min_ret_3m_pct:
-            return False, notes, soft
+            return False, notes, soft, "ret_3m"
         if r6 is None or float(r6) <= flt.min_ret_6m_pct:
-            return False, notes, soft
+            return False, notes, soft, "ret_6m"
         notes.append(f"3M {r3:.1f}% · 6M {r6:.1f}%")
         if flt.require_acceleration:
             if r1 is None:
-                return False, notes, soft
+                return False, notes, soft, "ret_1y"
             if float(r3) <= float(r1) / 4.0:
-                return False, notes, soft
+                return False, notes, soft, "acceleration"
             notes.append(f"Accel 3M>{r1:.1f}%/4")
 
-    return True, notes, soft
+    return True, notes, soft, ""
+
+
+@dataclass
+class FundamentalScanReport:
+    hits: list[FundamentalResult]
+    scanned: int = 0
+    fail_counts: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def top_fail_reasons(self) -> list[tuple[str, int]]:
+        return sorted(self.fail_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:8]
 
 
 def _yahoo_overlays(raw: str, profile: dict) -> dict:
@@ -490,7 +558,7 @@ def scan_fundamental_framework(
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
     *,
     tickers: list[tuple[str, str]] | None = None,
-) -> list[FundamentalResult]:
+) -> FundamentalScanReport:
     """
     Scan a broad universe (scan_source) or an explicit ticker list (funnel shortlist).
 
@@ -506,9 +574,11 @@ def scan_fundamental_framework(
     else:
         universe = resolve_scan_tickers(scan_source)
     if not universe:
-        return []
+        return FundamentalScanReport(hits=[])
 
     results: list[FundamentalResult] = []
+    fail_counts: dict[str, int] = {}
+    scanned = 0
     total = len(universe)
 
     for i, (label, raw) in enumerate(universe):
@@ -524,14 +594,19 @@ def scan_fundamental_framework(
             html = fetch_screener_company_html(disp)
             profile = fetch_screener_fundamental_profile(disp, html=html)
             if not profile:
+                fail_counts["no_screener_data"] = fail_counts.get("no_screener_data", 0) + 1
                 continue
-            if flt.tier == "momentum" or profile.get("debt_equity") is None or profile.get(
+            scanned += 1
+            # Always try Yahoo fill for gaps on Strict/Momentum (debt, P/B, ROA, returns)
+            if flt.tier in ("momentum", "strict") or profile.get("debt_equity") is None or profile.get(
                 "price_to_book"
             ) is None:
                 profile = _yahoo_overlays(raw, profile)
 
-            ok, notes, soft = _passes(profile, flt)
+            ok, notes, soft, reason = _passes(profile, flt)
             if not ok:
+                key = reason or "other"
+                fail_counts[key] = fail_counts.get(key, 0) + 1
                 continue
 
             score = _score(profile, flt)
@@ -581,9 +656,14 @@ def scan_fundamental_framework(
             if flt.screener_delay_sec > 0:
                 time.sleep(flt.screener_delay_sec)
         except Exception:
+            fail_counts["fetch_error"] = fail_counts.get("fetch_error", 0) + 1
             continue
 
-    return sort_fundamental_results(results, rank_by="score")
+    return FundamentalScanReport(
+        hits=sort_fundamental_results(results, rank_by="score"),
+        scanned=scanned,
+        fail_counts=fail_counts,
+    )
 
 
 def sort_fundamental_results(
