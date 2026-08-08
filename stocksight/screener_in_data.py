@@ -250,21 +250,41 @@ def fetch_screener_results_latest(*, max_rows: int = 200) -> list[dict]:
 
 
 def _parse_ratio_block(html: str, label: str) -> Optional[float]:
+    """Parse a top-ratios label; supports negatives and % values."""
     m = re.search(rf'id=["\']top-ratios["\'][^>]*>(.*?)</section>', html, re.S | re.I)
     if not m:
         return None
     block = m.group(1)
-    pat = (
-        rf'<span class="name">\s*{re.escape(label)}\s*</span>'
-        rf'.*?<span class="number">([\d.]+)</span>'
+    hit = re.search(
+        rf'<span class="name">\s*{re.escape(label)}\s*</span>(.*?)'
+        rf'(?:<span class="name">|</ul>|</div>\s*</li>|</section>)',
+        block,
+        re.S | re.I,
     )
-    hit = re.search(pat, block, re.S | re.I)
-    if not hit:
-        return None
-    try:
-        return round(float(hit.group(1)), 2)
-    except (TypeError, ValueError):
-        return None
+    chunk = hit.group(1) if hit else ""
+    if not chunk:
+        # Legacy: number span only (no negatives)
+        pat = (
+            rf'<span class="name">\s*{re.escape(label)}\s*</span>'
+            rf'.*?<span class="number">(-?[\d,.]+)\s*%?</span>'
+        )
+        legacy = re.search(pat, block, re.S | re.I)
+        if not legacy:
+            return None
+        return _parse_screener_number(legacy.group(1))
+
+    num = re.search(r'<span class="number"[^>]*>(.*?)</span>', chunk, re.S | re.I)
+    if num:
+        parsed = _parse_screener_number(num.group(1))
+        if parsed is not None:
+            return round(float(parsed), 2)
+    val = re.search(r'<span class="nowrap value"[^>]*>(.*?)</span>', chunk, re.S | re.I)
+    if val:
+        text = _clean_cell(re.sub(r"<[^>]+>", " ", val.group(1)))
+        parsed = _parse_screener_number(text)
+        if parsed is not None:
+            return round(float(parsed), 2)
+    return None
 
 
 def _parse_top_ratio_text(html: str, label: str) -> str:
@@ -446,4 +466,166 @@ def enrich_fundamentals_from_screener(
     if roe is not None:
         out["roe_pct"] = roe
     out["screener_fundamentals_source"] = ratios.get("source", "")
+    return out
+
+
+def _last_non_null(vals: list[Optional[float]]) -> Optional[float]:
+    for v in reversed(vals or []):
+        if v is not None:
+            try:
+                return round(float(v), 2)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _parse_shareholding_governance(html: str) -> dict[str, Optional[float]]:
+    """Promoter holding / pledge / QoQ change from Screener shareholding section."""
+    out: dict[str, Optional[float]] = {
+        "promoter_holding_pct": None,
+        "promoter_change_pct": None,
+        "pledged_pct": None,
+    }
+    headers, data = _parse_section_table(html, "shareholding")
+    if not data:
+        return out
+
+    promoter_vals: list[Optional[float]] = []
+    pledged_vals: list[Optional[float]] = []
+    for key, vals in data.items():
+        k = (key or "").lower()
+        if "pledge" in k:
+            pledged_vals = vals
+        elif "promoter" in k and "non" not in k:
+            promoter_vals = vals
+
+    out["promoter_holding_pct"] = _last_non_null(promoter_vals)
+    out["pledged_pct"] = _last_non_null(pledged_vals)
+    # Change = latest − prior reported column
+    cleaned = [v for v in promoter_vals if v is not None]
+    if len(cleaned) >= 2:
+        try:
+            out["promoter_change_pct"] = round(float(cleaned[-1]) - float(cleaned[-2]), 2)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _parse_latest_opm_pct(html: str) -> Optional[float]:
+    headers, data = _parse_section_table(html, "profit-loss")
+    if not data:
+        return None
+    vals = _row_values(data, "opm %", "operating profit margin")
+    return _last_non_null(vals)
+
+
+def _yoy_quarterly_growth(html: str) -> dict[str, Optional[float]]:
+    """YoY growth: latest quarter vs same quarter ~1 year earlier (4 steps back)."""
+    headers, data = _parse_section_table(html, "quarters")
+    if not headers:
+        return {"yoy_sales_pct": None, "yoy_profit_pct": None}
+    sales = _row_values(data, "sales+", "sales +", "revenue")
+    profit = _row_values(data, "net profit", "pat", "profit after tax")
+    pairs: list[tuple[Optional[float], Optional[float]]] = []
+    for s, p in zip(sales, profit):
+        if s is None and p is None:
+            continue
+        pairs.append((s, p))
+    if len(pairs) < 5:
+        return {"yoy_sales_pct": None, "yoy_profit_pct": None}
+    s_now, p_now = pairs[-1]
+    s_yoy, p_yoy = pairs[-5]
+    return {
+        "yoy_sales_pct": _qoq_pct(s_now, s_yoy),
+        "yoy_profit_pct": _qoq_pct(p_now, p_yoy),
+    }
+
+
+def fetch_screener_fundamental_profile(display_ticker: str, *, html: str = "") -> dict:
+    """
+    Fields for the 3-tier Fundamental Screener Framework.
+
+    Prefer Screener.in top-ratios / tables; leave None when absent so callers
+    can hard-fail governance gates or soft-skip valuation checks.
+    """
+    page = html or fetch_screener_company_html(display_ticker)
+    if not page:
+        return {}
+
+    base = fetch_screener_value_profile(display_ticker, html=page)
+    if not base:
+        base = {}
+
+    # Debt / liquidity / valuation — try several Screener label variants
+    debt_eq = (
+        _parse_ratio_block(page, "Debt to equity")
+        or _parse_ratio_block(page, "Debt to Equity")
+    )
+    current_ratio = _parse_ratio_block(page, "Current ratio") or _parse_ratio_block(
+        page, "Current Ratio"
+    )
+    interest_cov = (
+        _parse_ratio_block(page, "Interest Coverage Ratio")
+        or _parse_ratio_block(page, "Interest Coverage")
+    )
+    roa = _parse_ratio_block(page, "ROA") or _parse_ratio_block(page, "Return on assets")
+    industry_pe = _parse_ratio_block(page, "Industry PE") or _parse_ratio_block(
+        page, "Industry P/E"
+    )
+    peg = _parse_ratio_block(page, "PEG Ratio") or _parse_ratio_block(page, "PEG")
+    pb = (
+        _parse_ratio_block(page, "Price to book value")
+        or _parse_ratio_block(page, "Price to Book value")
+        or _parse_ratio_block(page, "Book Value")
+    )
+    # Book Value on Screener is often ₹/share — Price to book is separate
+    if pb is not None and pb > 50:
+        # Likely book value per share, not P/B — drop and recompute later from Yahoo
+        pb = None
+
+    promoter_top = _parse_ratio_block(page, "Promoter holding")
+    pledged_top = _parse_ratio_block(page, "Pledged percentage") or _parse_ratio_block(
+        page, "Promoter pledging"
+    )
+
+    sh = _parse_shareholding_governance(page)
+    promoter = promoter_top if promoter_top is not None else sh.get("promoter_holding_pct")
+    pledged = pledged_top if pledged_top is not None else sh.get("pledged_pct")
+    promoter_chg = sh.get("promoter_change_pct")
+
+    roe_tbl = _parse_compounded_table(page, "Return on Equity")
+    avg_roe_3y = roe_tbl.get("y3")
+
+    opm = _parse_latest_opm_pct(page)
+    yoy = _yoy_quarterly_growth(page)
+
+    # PEG proxy when Screener PEG missing
+    if peg is None:
+        pe = base.get("pe")
+        g = base.get("profit_growth_3y_pct") or base.get("profit_growth_ttm_pct")
+        if pe is not None and g is not None and float(g) > 0:
+            peg = round(float(pe) / float(g), 2)
+
+    slug = display_ticker.replace(".NS", "").replace(".BO", "").strip().lower()
+    out = dict(base)
+    out.update(
+        {
+            "debt_equity": debt_eq,
+            "current_ratio": current_ratio,
+            "interest_coverage": interest_cov,
+            "roa_pct": roa,
+            "industry_pe": industry_pe,
+            "peg": peg,
+            "price_to_book": pb,
+            "promoter_holding_pct": promoter,
+            "promoter_change_pct": promoter_chg,
+            "pledged_pct": pledged,
+            "avg_roe_3y_pct": avg_roe_3y,
+            "opm_pct": opm,
+            "yoy_sales_pct": yoy.get("yoy_sales_pct"),
+            "yoy_profit_pct": yoy.get("yoy_profit_pct"),
+            "screener_url": f"https://www.screener.in/company/{slug}/consolidated/",
+            "source": "Screener.in fundamental profile",
+        }
+    )
     return out

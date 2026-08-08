@@ -75,6 +75,7 @@ def _import_navigation_pages():
         "page_below_median_pe",
         "page_investment_course",
         "page_value_growth",
+        "page_fundamental_screener",
         "page_multibagger_patterns",
         "page_fast_movers",
         "page_btst_screener",
@@ -166,6 +167,7 @@ try:
     page_below_median_pe = _nav["page_below_median_pe"]
     page_investment_course = _nav["page_investment_course"]
     page_value_growth = _nav["page_value_growth"]
+    page_fundamental_screener = _nav["page_fundamental_screener"]
     page_multibagger_patterns = _nav["page_multibagger_patterns"]
     page_fast_movers = _nav["page_fast_movers"]
     page_btst_screener = _nav["page_btst_screener"]
@@ -272,6 +274,7 @@ NAV_PAGES = {
     "📚 My Learning": [
         st.Page(page_multibagger_patterns, title="Multi-Bagger Patterns", icon="🚀"),
         st.Page(page_value_growth, title="Value Growth (P/E · EPS)", icon="📐"),
+        st.Page(page_fundamental_screener, title="Fundamental Screener (3-Tier)", icon="🛡️"),
         st.Page(page_below_median_pe, title="Healthy Below Median PE", icon="📉"),
         st.Page("stocksight/pages/Valuation Rulebook.py", title="Valuation Rulebook", icon="🧮"),
         st.Page(page_investment_course, title="Investment Course + Valuation", icon="📘"),

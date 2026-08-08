@@ -351,6 +351,12 @@ def page_value_growth() -> None:
     render_value_growth_page()
 
 
+def page_fundamental_screener() -> None:
+    from fundamental_screener_page import render_fundamental_screener_page
+
+    render_fundamental_screener_page()
+
+
 def page_multibagger_patterns() -> None:
     from multibagger_patterns_page import render_multibagger_patterns_page
 
@@ -423,5 +429,6 @@ __all__ = [
     "page_below_median_pe",
     "page_investment_course",
     "page_value_growth",
+    "page_fundamental_screener",
     "page_multibagger_patterns",
 ]
