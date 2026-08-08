@@ -14,13 +14,16 @@ A top-down filtering framework for finding **reliable, debt-free, scam-free, fas
 
 **Workflow:**
 ```
-Watchlist (monthly)
+Watchlist (monthly)  →  shortlist saved / refreshed each run
    -> research & track repeats
-      -> Strict Fundamental (on demand)
+      -> Strict Fundamental on **Last Watchlist** (on demand)
+         -> Strict shortlist saved / refreshed
          -> shortlist for long-term portfolio
-      -> Momentum Overlay (before entry)
+      -> Momentum Overlay on **Last Strict** or **Last Watchlist**
          -> shortlist for swing/BTST entries
 ```
+
+> In StockSight, Tier 2 defaults to **Last Watchlist** and Tier 3 to **Last Strict** (then Watchlist). A Tier 1 scan with **0 matches clears** the saved Watchlist so Strict does not use stale names.
 
 ---
 

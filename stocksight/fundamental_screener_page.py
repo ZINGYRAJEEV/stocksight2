@@ -19,6 +19,15 @@ from fundamental_screener import (
     scan_fundamental_framework,
     sort_fundamental_results,
 )
+from fundamental_funnel_store import (
+    TIER_STRICT,
+    TIER_WATCHLIST,
+    clear_all_shortlists,
+    load_tier_shortlist,
+    save_tier_shortlist,
+    shortlist_as_universe,
+    shortlist_summary,
+)
 from scan_history_store import append_scan_record
 from screener_session_ui import render_screener_session_panel
 from session_utils import deduplicate_scan_results
@@ -48,7 +57,10 @@ def _rules_panel() -> None:
 | **2 Strict** | Before deploying capital | Tight |
 | **3 Momentum** | Before swing / BTST entry | Fundamentals + price action |
 
-**Workflow:** Watchlist → research & track repeats → **Strict** for long-term shortlist → **Momentum** for entry timing.
+**Funnel (linked tiers):**
+1. Run **Tier 1** on a broad universe → saved Watchlist **refreshes every scan** (0 hits clears it).
+2. Run **Tier 2** on **Last Watchlist** (recommended) → saved Strict shortlist refreshes.
+3. Run **Tier 3** on **Last Strict** or **Last Watchlist** for entry timing.
 
 **Scam-free guardrails** (debt / promoter / pledge) should stay tight — if Strict returns 0–2 names, relax **PEG or P/B first**, never governance.
 
@@ -97,10 +109,10 @@ def render_fundamental_screener_page() -> None:
             )
             ensure_session_choice(uni_key, nse_sources, default_uni)
             universe = st.selectbox(
-                "Stock universe (NSE)",
+                "Broad market universe (NSE)",
                 nse_sources,
                 key=uni_key,
-                help="Start with Curated or Nifty 50. Full NSE is very slow — use Investment Course chunks for that.",
+                help="Used for Tier 1, or when you choose Broad market for Tier 2/3.",
             )
         with c2:
             st.markdown("#### Tier")
@@ -113,6 +125,90 @@ def render_fundamental_screener_page() -> None:
                 key=tier_key,
                 horizontal=False,
             )
+
+    wl_summary = shortlist_summary(TIER_WATCHLIST)
+    st_summary = shortlist_summary(TIER_STRICT)
+    has_wl = load_tier_shortlist(TIER_WATCHLIST) is not None
+    has_st = load_tier_shortlist(TIER_STRICT) is not None
+
+    st.markdown("#### Funnel shortlists")
+    f1, f2, f3 = st.columns([1.2, 1.2, 0.8])
+    with f1:
+        st.caption(f"**Last Watchlist:** {wl_summary}")
+    with f2:
+        st.caption(f"**Last Strict:** {st_summary}")
+    with f3:
+        if st.button("Clear funnel", key=f"{key}_clear_funnel", help="Wipe saved Watchlist + Strict shortlists"):
+            clear_all_shortlists()
+            st.rerun()
+
+    # Where Tier 2 / 3 pull names from
+    funnel_mode = "broad"
+    scan_tickers = None
+    scan_label = universe
+    if tier == "watchlist":
+        st.info(
+            "Tier 1 scans the **broad universe**. Each run **refreshes** the saved Watchlist "
+            "(0 matches clears it)."
+        )
+    elif tier == "strict":
+        mode_opts = ["last_watchlist", "broad"]
+        labels = {
+            "last_watchlist": f"Last Watchlist ({wl_summary})",
+            "broad": f"Broad market ({universe})",
+        }
+        default_mode = "last_watchlist" if has_wl else "broad"
+        ensure_session_choice(f"{key}_funnel_strict", mode_opts, default_mode)
+        if not has_wl and st.session_state.get(f"{key}_funnel_strict") == "last_watchlist":
+            st.session_state[f"{key}_funnel_strict"] = "broad"
+        funnel_mode = st.radio(
+            "Tier 2 scans",
+            mode_opts,
+            format_func=lambda m: labels[m],
+            key=f"{key}_funnel_strict",
+            horizontal=True,
+        )
+        if funnel_mode == "last_watchlist":
+            scan_tickers = shortlist_as_universe(TIER_WATCHLIST)
+            scan_label = f"Last Watchlist ({len(scan_tickers)})"
+            if not scan_tickers:
+                st.warning("No Watchlist saved yet — run **Tier 1** first, or switch to Broad market.")
+        else:
+            st.caption("Scanning the full broad universe with Strict filters (not the funnel).")
+    else:  # momentum
+        mode_opts = ["last_strict", "last_watchlist", "broad"]
+        labels = {
+            "last_strict": f"Last Strict ({st_summary})",
+            "last_watchlist": f"Last Watchlist ({wl_summary})",
+            "broad": f"Broad market ({universe})",
+        }
+        default_mode = "last_strict" if has_st else ("last_watchlist" if has_wl else "broad")
+        ensure_session_choice(f"{key}_funnel_mom", mode_opts, default_mode)
+        cur = st.session_state.get(f"{key}_funnel_mom")
+        if cur == "last_strict" and not has_st:
+            st.session_state[f"{key}_funnel_mom"] = "last_watchlist" if has_wl else "broad"
+        elif cur == "last_watchlist" and not has_wl:
+            st.session_state[f"{key}_funnel_mom"] = "broad"
+        funnel_mode = st.radio(
+            "Tier 3 scans",
+            mode_opts,
+            format_func=lambda m: labels[m],
+            key=f"{key}_funnel_mom",
+            horizontal=True,
+        )
+        if funnel_mode == "last_strict":
+            scan_tickers = shortlist_as_universe(TIER_STRICT)
+            scan_label = f"Last Strict ({len(scan_tickers)})"
+            if not scan_tickers:
+                st.warning("No Strict shortlist yet — run **Tier 2** on Last Watchlist first.")
+        elif funnel_mode == "last_watchlist":
+            scan_tickers = shortlist_as_universe(TIER_WATCHLIST)
+            scan_label = f"Last Watchlist ({len(scan_tickers)})"
+            if not scan_tickers:
+                st.warning("No Watchlist saved yet — run **Tier 1** first.")
+        else:
+            st.caption("Standalone broad scan (framework prefers funnel names for Tier 3).")
+
 
     preset = filters_for_tier(tier)
     with st.expander("⚙️ Fine-tune thresholds (optional)", expanded=False):
@@ -241,37 +337,68 @@ def render_fundamental_screener_page() -> None:
     scan_progress = st.empty()
     run = st.button("▶  SCAN NOW", use_container_width=True, key=f"{key}_scan", type="primary")
     st.caption(
-        f"Running **{TIER_LABELS[tier]}** on **{universe}**. "
+        f"Running **{TIER_LABELS[tier]}** on **{scan_label}**. "
         "Log into Screener.in (session panel) if fetches look empty on Cloud."
     )
 
     if run:
-        prog = scan_progress.progress(0, text="Initialising…")
+        if tier != "watchlist" and funnel_mode != "broad" and not scan_tickers:
+            st.error("Nothing to scan — run the upstream tier first, or choose Broad market.")
+        else:
+            prog = scan_progress.progress(0, text="Initialising…")
 
-        def cb(i, t, s):
-            prog.progress(int(i / max(t, 1) * 100), text=f"Checking {s}… ({i}/{t})")
+            def cb(i, t, s):
+                prog.progress(int(i / max(t, 1) * 100), text=f"Checking {s}… ({i}/{t})")
 
-        hits = scan_fundamental_framework(universe, filters=flt, progress_cb=cb)
-        st.session_state[session_key] = hits
-        st.session_state[f"{session_key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")
-        st.session_state[f"{session_key}_universe"] = universe
-        st.session_state[f"{session_key}_tier"] = tier
-        try:
-            append_scan_record(
-                META["id"],
+            hits = scan_fundamental_framework(
                 universe,
-                [r.raw_ticker for r in hits],
-                meta={"matches": len(hits), "tier": tier},
+                filters=flt,
+                progress_cb=cb,
+                tickers=scan_tickers if tier != "watchlist" and funnel_mode != "broad" else None,
             )
-        except Exception:
-            pass
-        try:
-            metrics = [(r.ticker, r.raw_ticker, float(r.price or 0), None) for r in hits if r.price]
-            notify_watchlist_alerts_from_metrics(metrics, META["title"])
-        except Exception:
-            pass
-        prog.empty()
-        scan_progress.empty()
+            st.session_state[session_key] = hits
+            st.session_state[f"{session_key}_at"] = datetime.now().strftime("%d %b %Y %H:%M")
+            st.session_state[f"{session_key}_universe"] = scan_label
+            st.session_state[f"{session_key}_tier"] = tier
+
+            # Refresh funnel shortlists after every Tier 1 / Tier 2 scan
+            try:
+                if tier == "watchlist":
+                    save_tier_shortlist(
+                        TIER_WATCHLIST, hits, source_universe=str(universe)
+                    )
+                elif tier == "strict":
+                    save_tier_shortlist(
+                        TIER_STRICT, hits, source_universe=str(scan_label)
+                    )
+            except Exception:
+                pass
+
+            try:
+                append_scan_record(
+                    META["id"],
+                    scan_label,
+                    [r.raw_ticker for r in hits],
+                    meta={
+                        "matches": len(hits),
+                        "tier": tier,
+                        "funnel_mode": funnel_mode if tier != "watchlist" else "broad",
+                    },
+                )
+            except Exception:
+                pass
+            try:
+                metrics = [
+                    (r.ticker, r.raw_ticker, float(r.price or 0), None)
+                    for r in hits
+                    if r.price
+                ]
+                notify_watchlist_alerts_from_metrics(metrics, META["title"])
+            except Exception:
+                pass
+            prog.empty()
+            scan_progress.empty()
+            st.rerun()
 
     results = st.session_state.get(session_key)
     scan_at = st.session_state.get(f"{session_key}_at")

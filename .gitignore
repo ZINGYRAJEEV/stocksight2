@@ -26,6 +26,7 @@ stocksight/.scan_history.jsonl
 stocksight/.sec_company_tickers.json
 stocksight/.invc_scan_checkpoint.json
 stocksight/.screener_buyback_scan_cursor.json
+stocksight/.fundamental_funnel.json
 # Keep committed NSE equity snapshot (refreshed from NSE EQUITY_L.csv)
 !stocksight/data/
 !stocksight/data/nse_equity_symbols.txt

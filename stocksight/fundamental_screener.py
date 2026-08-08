@@ -488,12 +488,23 @@ def scan_fundamental_framework(
     scan_source: str,
     filters: FundamentalFilters | None = None,
     progress_cb: Optional[Callable[[int, int, str], None]] = None,
+    *,
+    tickers: list[tuple[str, str]] | None = None,
 ) -> list[FundamentalResult]:
+    """
+    Scan a broad universe (scan_source) or an explicit ticker list (funnel shortlist).
+
+    ``tickers`` is a list of (label, raw_ticker) — used when Tier 2/3 run on
+    the last Watchlist / Strict shortlist instead of the full NSE basket.
+    """
     flt = filters or filters_for_tier("watchlist")
     if flt.tier not in TIER_IDS:
         flt = replace(flt, tier="watchlist")
 
-    universe = resolve_scan_tickers(scan_source)
+    if tickers is not None:
+        universe = list(tickers)
+    else:
+        universe = resolve_scan_tickers(scan_source)
     if not universe:
         return []
 
