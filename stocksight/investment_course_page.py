@@ -14,6 +14,7 @@ from investment_course_analysis import (
     enrich_research_links,
     practical_stance,
 )
+from theme_baskets import nse_scan_sources
 from investment_course_screener import (
     BROAD_SCAN_SOURCES,
     META,
@@ -506,9 +507,7 @@ def render_investment_course_page() -> None:
                 )
             else:
                 uni_key = f"{key}_universe"
-                nse_sources = BROAD_SCAN_SOURCES or [
-                    s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s
-                ]
+                nse_sources = BROAD_SCAN_SOURCES or nse_scan_sources(SCAN_SOURCES)
                 # Always surface full NSE at the top of Broad market.
                 all_nse = "All NSE equities (~2300) - very slow"
                 if all_nse not in nse_sources:

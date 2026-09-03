@@ -30,6 +30,7 @@ from fundamental_funnel_store import (
 )
 from scan_history_store import append_scan_record
 from screener_session_ui import render_screener_session_panel
+from theme_baskets import EMERGING_MARKET_LABEL, nse_scan_sources
 from session_utils import deduplicate_scan_results
 from ui_components import (
     ensure_session_choice,
@@ -101,17 +102,13 @@ def render_fundamental_screener_page() -> None:
         with c1:
             st.markdown("#### Universe")
             uni_key = f"{key}_universe"
-            nse_sources = [
-                s
-                for s in SCAN_SOURCES
-                if "NSE" in s or "Curated" in s or str(s).startswith("Theme ·")
-            ]
+            nse_sources = nse_scan_sources(SCAN_SOURCES)
             # Prefer theme / curated / Nifty 50 for sane runtimes
             default_uni = next(
                 (
                     s
                     for s in nse_sources
-                    if "Emerging Market" in s or "Curated" in s or "Nifty 50" in s
+                    if s == EMERGING_MARKET_LABEL or "Curated" in s or "Nifty 50" in s
                 ),
                 nse_sources[0] if nse_sources else "",
             )

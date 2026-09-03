@@ -17,6 +17,7 @@ from value_growth_screener import (
     sort_value_growth_results,
 )
 from pe_history_ui import render_pe_history_panel
+from theme_baskets import nse_scan_sources
 from quality_gate import quality_gate_column_config
 from scan_history_store import append_scan_record
 from screener_session_ui import render_screener_session_panel
@@ -98,7 +99,7 @@ def render_value_growth_page() -> None:
         with c1:
             st.markdown("#### Universe")
             uni_key = f"{key}_universe"
-            nse_sources = [s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s]
+            nse_sources = nse_scan_sources(SCAN_SOURCES)
             ensure_session_choice(uni_key, nse_sources, nse_sources[0])
             universe = st.selectbox(
                 "Stock universe (NSE)",

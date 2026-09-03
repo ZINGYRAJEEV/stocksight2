@@ -30,6 +30,7 @@ from multibagger import (
     is_nse_source,
     is_us_source,
 )
+from theme_baskets import EMERGING_MARKET_LABEL
 from volume_led_screener import (
     META,
     MONTHLY_RSI_ENTRY,
@@ -51,6 +52,7 @@ from volume_led_screener import (
 
 _VLM_QUICK_UNIVERSES_NSE: list[tuple[str, str]] = [
     ("Curated", CURATED_NSE_LABEL),
+    ("Growth Club", EMERGING_MARKET_LABEL),
     ("Nifty 50", "Nifty 50 (NSE)"),
     ("Nifty 500", "Nifty 500 (NSE)"),
     ("500+SM", "Nifty 500 + Small/Mid Movers (NSE)"),

@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from multibagger import CURATED_NSE_LABEL, SCAN_SOURCES
+from theme_baskets import nse_scan_sources
 from multibagger_patterns_screener import (
     META,
     RANK_OPTIONS,
@@ -89,7 +90,7 @@ def render_multibagger_patterns_page() -> None:
     key = "mbp"
     render_screener_session_panel(key_prefix=f"{key}_screener")
     session_key = f"{key}_results"
-    nse_sources = [s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s]
+    nse_sources = nse_scan_sources(SCAN_SOURCES)
 
     with st.container(border=True):
         c1, c2, c3 = st.columns([1.0, 1.05, 1.05])

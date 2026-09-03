@@ -16,6 +16,7 @@ import yfinance as yf
 
 try:
     from .multibagger import SCAN_SOURCES, resolve_scan_tickers
+    from .theme_baskets import nse_scan_sources
     from .pe_history import build_pe_history
     from .screener import fetch_price_history, get_sector_industry, get_stock_links, hist_series
     from .screener_in_data import (
@@ -25,6 +26,7 @@ try:
     )
 except ImportError:
     from multibagger import SCAN_SOURCES, resolve_scan_tickers
+    from theme_baskets import nse_scan_sources
     from pe_history import build_pe_history
     from screener import fetch_price_history, get_sector_industry, get_stock_links, hist_series
     from screener_in_data import (
@@ -52,7 +54,7 @@ SECTOR_SCAN_SOURCES: dict[str, list[str]] = {
 _ALL_NSE_LABEL = "All NSE equities (~2300) - very slow"
 BROAD_SCAN_SOURCES: list[str] = []
 _seen_broad: set[str] = set()
-for _s in [_ALL_NSE_LABEL, *[s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s]]:
+for _s in [_ALL_NSE_LABEL, *nse_scan_sources(SCAN_SOURCES)]:
     if _s in _seen_broad:
         continue
     # Skip legacy empty key if present

@@ -23,6 +23,7 @@ from financially_free_screener import (
     sort_ff_results,
 )
 from multibagger import SCAN_SOURCES
+from theme_baskets import nse_scan_sources
 from quality_gate import quality_gate_column_config
 from scan_history_store import append_scan_record
 from screener_session_ui import render_screener_session_panel
@@ -149,7 +150,7 @@ def render_financially_free_page() -> None:
     key = "ff"
     render_screener_session_panel(key_prefix=f"{key}_screener")
     session_key = f"{key}_results"
-    nse_sources = [s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s]
+    nse_sources = nse_scan_sources(SCAN_SOURCES)
 
     with st.container(border=True):
         c1, c2, c3 = st.columns([1.0, 1.05, 1.2])

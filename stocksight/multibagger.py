@@ -48,7 +48,12 @@ except ImportError:
 INR_PER_CRORE = 10_000_000.0
 USD_PER_BILLION = 1_000_000_000.0
 
-NSE_UNIVERSES = [k for k in UNIVERSES if "NSE" in k]
+try:
+    from .theme_baskets import is_nse_scan_source, theme_scan_source_labels
+except ImportError:
+    from theme_baskets import is_nse_scan_source, theme_scan_source_labels
+
+NSE_UNIVERSES = [k for k in UNIVERSES if is_nse_scan_source(k)]
 US_UNIVERSES = [k for k in UNIVERSES if any(x in k for x in ("NYSE", "NASDAQ", "S&P", "Dow"))]
 
 CURATED_NSE_LABEL = "Curated NSE (ROCE export names)"
@@ -99,9 +104,12 @@ CURATED_MULTIBAGGER_US: list[dict[str, str]] = [
     {"label": "Berkshire Hathaway B", "ticker": "BRK-B"},
 ]
 
+_THEME_LABELS = theme_scan_source_labels()
+_NSE_BASE = [k for k in NSE_UNIVERSES if k not in _THEME_LABELS]
 SCAN_SOURCES = (
     [CURATED_NSE_LABEL]
-    + NSE_UNIVERSES
+    + _THEME_LABELS
+    + _NSE_BASE
     + [CURATED_US_LABEL]
     + US_UNIVERSES
 )
@@ -124,6 +132,8 @@ def is_nse_source(scan_source: str) -> bool:
     if not scan_source:
         return True
     if scan_source in (CURATED_NSE_LABEL, LEGACY_CURATED_KEY):
+        return True
+    if is_nse_scan_source(scan_source):
         return True
     return scan_source in NSE_UNIVERSES
 

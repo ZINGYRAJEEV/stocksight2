@@ -18,6 +18,7 @@ from below_median_pe_screener import (
 )
 from pe_history_ui import render_pe_history_panel
 from scan_history_store import append_scan_record
+from theme_baskets import nse_scan_sources
 from screener_session_ui import render_screener_session_panel
 from session_utils import deduplicate_scan_results
 from ui_components import (
@@ -84,7 +85,7 @@ def render_below_median_pe_page() -> None:
         with c1:
             st.markdown("#### Universe")
             uni_key = f"{key}_universe"
-            nse_sources = [s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s]
+            nse_sources = nse_scan_sources(SCAN_SOURCES)
             ensure_session_choice(uni_key, nse_sources, nse_sources[0])
             universe = st.selectbox(
                 "Stock universe (NSE)",

@@ -23,7 +23,9 @@ try:
         normalize_debt_equity,
         normalize_growth_pct,
         normalize_return_pct,
+        SCAN_SOURCES as _MB_SCAN_SOURCES,
     )
+    from .theme_baskets import nse_scan_sources
     from .screener import (
         UNIVERSES,
         compute_rsi,
@@ -43,7 +45,9 @@ except ImportError:
         normalize_debt_equity,
         normalize_growth_pct,
         normalize_return_pct,
+        SCAN_SOURCES as _MB_SCAN_SOURCES,
     )
+    from theme_baskets import nse_scan_sources
     from screener import (
         UNIVERSES,
         compute_rsi,
@@ -56,8 +60,8 @@ except ImportError:
         ma_cross_recent,
     )
 
-NSE_UNIVERSES = [k for k in UNIVERSES if "NSE" in k]
-SCAN_SOURCES = NSE_UNIVERSES
+NSE_UNIVERSES = [k for k in UNIVERSES if "NSE" in k or str(k).startswith("Theme ·")]
+SCAN_SOURCES = nse_scan_sources(_MB_SCAN_SOURCES)
 
 
 @dataclass
