@@ -169,6 +169,17 @@ _NSE_UNIVERSES_BASE: dict[str, list[str]] = {
     "Sector · PSU Bank": NIFTY_PSU_BANK,
 }
 
+# Theme idea baskets (curated niche growth lists)
+try:
+    from theme_baskets import theme_universe_map as _theme_universe_map
+except ImportError:
+    try:
+        from .theme_baskets import theme_universe_map as _theme_universe_map
+    except ImportError:
+        _theme_universe_map = None
+if _theme_universe_map is not None:
+    _NSE_UNIVERSES_BASE.update(_theme_universe_map())
+
 # True union of EVERY universe above — the complete NSE stock list, de-duplicated.
 ALL_NSE_STOCKS: list[str] = list(dict.fromkeys(
     t for tickers in _NSE_UNIVERSES_BASE.values() for t in tickers

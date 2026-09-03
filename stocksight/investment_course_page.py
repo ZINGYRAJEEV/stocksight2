@@ -82,7 +82,7 @@ Aligned with [`docs/Stock_Analysis_Workflow_1.md`](docs/Stock_Analysis_Workflow_
 
 After you click a result: **Steps 3–6** (category research · story checks · stress Rulebook · stance/sizing).
 Results can be **grouped by sector** after the scan. For faster scans, pick a
-**sector basket** (Bank / IT / Pharma / …) under Universe → Scan scope.
+**sector / theme basket** (Bank / IT / Pharma / Emerging Market Growth Club / …) under Universe → Scan scope.
 """
         )
         st.page_link(

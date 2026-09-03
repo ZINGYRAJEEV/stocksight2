@@ -101,10 +101,18 @@ def render_fundamental_screener_page() -> None:
         with c1:
             st.markdown("#### Universe")
             uni_key = f"{key}_universe"
-            nse_sources = [s for s in SCAN_SOURCES if "NSE" in s or "Curated" in s]
-            # Prefer Nifty 50 / curated first for sane runtimes
+            nse_sources = [
+                s
+                for s in SCAN_SOURCES
+                if "NSE" in s or "Curated" in s or str(s).startswith("Theme ·")
+            ]
+            # Prefer theme / curated / Nifty 50 for sane runtimes
             default_uni = next(
-                (s for s in nse_sources if "Curated" in s or "Nifty 50" in s),
+                (
+                    s
+                    for s in nse_sources
+                    if "Emerging Market" in s or "Curated" in s or "Nifty 50" in s
+                ),
                 nse_sources[0] if nse_sources else "",
             )
             ensure_session_choice(uni_key, nse_sources, default_uni)

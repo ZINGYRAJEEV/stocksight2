@@ -45,7 +45,7 @@ except Exception:
 SECTOR_SCAN_SOURCES: dict[str, list[str]] = {
     k: list(v)
     for k, v in (NSE_INTRADAY_UNIVERSES or {}).items()
-    if str(k).startswith("Sector ·")
+    if str(k).startswith("Sector ·") or str(k).startswith("Theme ·")
 }
 
 # Put full NSE first so it is obvious in the Broad market dropdown.

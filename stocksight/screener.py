@@ -213,6 +213,17 @@ UNIVERSES = {
     "S&P 500 (NYSE)": SP500,
 }
 
+# Theme idea baskets (curated) — keep after core indexes
+try:
+    from .theme_baskets import theme_universe_map
+except ImportError:
+    try:
+        from theme_baskets import theme_universe_map
+    except ImportError:
+        theme_universe_map = None  # type: ignore[assignment]
+if theme_universe_map is not None:
+    UNIVERSES.update(theme_universe_map())
+
 PE_DATA_CAP = {
     "Nifty 50 (NSE)":    300,
     "Nifty 500 (NSE)":   300,
@@ -220,6 +231,7 @@ PE_DATA_CAP = {
     "Nifty 500 + Small/Mid Movers (NSE)": 400,
     "All NSE equities (~2300) - very slow": 80,
     "S&P 500 (NYSE)":    500,
+    "Theme · Emerging Market Growth Club (NSE)": 120,
 }
 
 
