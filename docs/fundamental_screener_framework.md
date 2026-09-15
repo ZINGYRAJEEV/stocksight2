@@ -123,3 +123,16 @@ Return over 3months > Return over 1year / 4
 **Momentum (Tier 3 only):** Return over 3/6 months, Return over 1/3/5 years
 
 **Secondary/optional:** Sales, Profit after tax, EPS, Dividend yield, Price to Sales, Price to Free Cash Flow, Enterprise Value
+
+---
+
+## Growth & innovation qualitative checklist
+
+After a name clears Tier 1 / Tier 2 numbers, search **growth opportunities and risk** on:
+
+1. **Screener.in** — credit rating · annual report · conference calls (Documents tab)
+2. **Management discussion** · letter to investors · salary of board members (annual report)
+3. **Tijori Finance** — company data / filings / structural risk
+4. **Trendlyne** — broker research reports + concall videos
+
+In StockSight, open **Fundamental Screener → Theme · Emerging Market Growth Club**, run Tier 1, click a survivor — the detail panel shows deep links for each step.

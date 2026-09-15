@@ -30,6 +30,10 @@ from fundamental_funnel_store import (
 )
 from scan_history_store import append_scan_record
 from screener_session_ui import render_screener_session_panel
+from growth_innovation_research import (
+    GROWTH_INNOVATION_CHECKLIST,
+    checklist_rows_for_ticker,
+)
 from theme_baskets import EMERGING_MARKET_LABEL, nse_scan_sources
 from session_utils import deduplicate_scan_results
 from ui_components import (
@@ -54,7 +58,7 @@ def _rules_panel() -> None:
 
 | Tier | When | Strictness |
 |------|------|------------|
-| **1 Watchlist** | Monthly research funnel | Loose |
+| **1 Watchlist** | Monthly research funnel → then qualitative checklist | Loose |
 | **2 Strict** | Before deploying capital | Tight |
 | **3 Momentum** | Before swing / BTST entry | Fundamentals + price action |
 
@@ -65,8 +69,18 @@ def _rules_panel() -> None:
 
 **Scam-free guardrails** (debt / promoter / pledge) should stay tight — if Strict returns 0–2 names, relax **PEG or P/B first**, never governance.
 
+**Growth & innovation qualitative check** (after numbers pass — click a row for deep links):
+1. Screener.in — **credit rating**, **annual report**, **conference calls**
+2. Management discussion / letter to investors / **board salary**
+3. **Tijori Finance** company data
+4. **Trendlyne** research reports
+
 **Data:** Screener.in consolidated company pages (+ Yahoo for D/E / P/B / returns when needed).
 """
+        )
+        st.caption(
+            "Tip: start with universe **Theme · Emerging Market Growth Club (NSE)** "
+            "(AI cloud, battery materials, data-center cooling, sterile injectables, jewellery)."
         )
         st.markdown("**Tier 1 query (reference)**")
         st.code(
@@ -509,6 +523,9 @@ def render_fundamental_screener_page() -> None:
             link_bits = " · ".join(f"[{k}]({v})" for k, v in picked.links.items() if v)
             if link_bits:
                 st.markdown(link_bits)
+
+        _render_growth_innovation_checklist(picked.ticker, picked.raw_ticker, picked.label)
+
         render_historical_detail_panel(
             df,
             universe_name=str(last_uni or ""),
@@ -518,5 +535,31 @@ def render_fundamental_screener_page() -> None:
 
     st.caption(
         "Educational framework only — not investment advice. "
-        "Cross-check survivors on Screener.in + annual report before sizing."
+        "After Tier 1/2, complete the growth checklist (credit rating, AR, concalls, "
+        "Tijori, Trendlyne) before sizing."
     )
+
+
+def _render_growth_innovation_checklist(disp: str, raw: str, label: str = "") -> None:
+    """Qualitative growth/opportunity + risk checklist from research notes."""
+    with st.expander(
+        "🔎 Growth & innovation research checklist (credit · AR · concalls · Tijori · Trendlyne)",
+        expanded=True,
+    ):
+        st.caption(
+            "Search **growth opportunities and risk** after the quantitative filters pass. "
+            f"{len(GROWTH_INNOVATION_CHECKLIST)} manual checks — open each link and tick mentally."
+        )
+        rows = checklist_rows_for_ticker(disp, raw, company_name=label or disp)
+        for i, row in enumerate(rows, start=1):
+            url = row.get("url") or ""
+            title = row["title"]
+            source = row["source"]
+            if url:
+                st.markdown(f"**{i}. [{title}]({url})** · _{source}_")
+            else:
+                st.markdown(f"**{i}. {title}** · _{source}_")
+            st.caption(f"{row['why']} — {row['how']}")
+
+
+# Keep Streamlit entry helpers at module level for pages/*.py shims.

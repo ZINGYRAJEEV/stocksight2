@@ -12,12 +12,12 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Optional
 
 try:
+    from .growth_innovation_research import growth_innovation_research_links
     from .multibagger import SCAN_SOURCES, extract_multibagger_fundamentals, resolve_scan_tickers
-    from .screener import get_stock_links
     from .screener_in_data import fetch_screener_company_html, fetch_screener_fundamental_profile
 except ImportError:
+    from growth_innovation_research import growth_innovation_research_links
     from multibagger import SCAN_SOURCES, extract_multibagger_fundamentals, resolve_scan_tickers
-    from screener import get_stock_links
     from screener_in_data import fetch_screener_company_html, fetch_screener_fundamental_profile
 
 META = {
@@ -610,9 +610,10 @@ def scan_fundamental_framework(
                 continue
 
             score = _score(profile, flt)
-            links = get_stock_links(raw)
+            links = growth_innovation_research_links(disp, raw, company_name=str(label or disp))
             if profile.get("screener_url"):
                 links = dict(links or {})
+                links["Screener.in"] = profile["screener_url"]
                 links["Screener"] = profile["screener_url"]
 
             results.append(
