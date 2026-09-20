@@ -169,6 +169,10 @@ class SignalResult:
     weekly_confirm_buy: Optional[bool] = None   # None = weekly MTF not evaluated this fetch
     weekly_macd_bullish: Optional[bool] = None
     days_to_earnings: Optional[int] = None     # negative = past / assumed reported
+    next_results_date: Optional[str] = None
+    results_date_status: Optional[str] = None  # confirmed | estimated
+    days_to_results_at_scan: Optional[int] = None
+    scan_date: Optional[str] = None            # YYYY-MM-DD exchange-local at scan
 
     # Oscillator / structure
     stoch_k: Optional[float] = None
@@ -516,6 +520,12 @@ def _build_result(
         weekly_confirm_buy = ex.get("weekly_confirm_buy"),
         weekly_macd_bullish = ex.get("weekly_macd_bullish"),
         days_to_earnings = ex.get("days_to_earnings"),
+        next_results_date = (ex.get("next_results_date") or ex.get("next_earnings") or None) or None,
+        results_date_status = (ex.get("results_date_status") or None),
+        days_to_results_at_scan = ex.get(
+            "days_to_results_at_scan", ex.get("days_to_earnings")
+        ),
+        scan_date = (ex.get("scan_date") or None),
         stoch_k = _finite_num(ex.get("stoch_k")),
         stoch_d = _finite_num(ex.get("stoch_d")),
         stoch_cross_up = bool(ex.get("stoch_cross_up")),
@@ -599,7 +609,12 @@ def _fetch(
         gc = ma_cross_recent(ma20_s, ma50_s, lookback=5)
 
         sector, industry = get_sector_industry(stk)
-        earn = next_earnings_label(stk)
+        try:
+            from earnings_calendar import enrich_scan_row_results_dates
+        except ImportError:
+            from .earnings_calendar import enrich_scan_row_results_dates  # type: ignore
+        earn_info = enrich_scan_row_results_dates(raw_ticker=ticker)
+        earn = earn_info.get("next_earnings") or ""
 
         touch_lower = False
         if bb_l == bb_l and not np.isnan(bb_l):
@@ -660,12 +675,16 @@ def _fetch(
             "bb_touch_lower": touch_lower,
             "atr14": atr_v,
             "next_earnings": earn,
+            "next_results_date": earn_info.get("next_results_date"),
+            "results_date_status": earn_info.get("results_date_status"),
+            "days_to_results_at_scan": earn_info.get("days_to_results_at_scan"),
+            "scan_date": earn_info.get("scan_date"),
             "news_headlines": [],
             "rsi_bullish_div": div_bull,
             "rsi_bearish_div": div_bear,
             "weekly_confirm_buy": weekly_ok,
             "weekly_macd_bullish": weekly_macd_bull,
-            "days_to_earnings": calendar_days_until(earn),
+            "days_to_earnings": earn_info.get("days_to_earnings"),
             "stoch_k": stoch_pack.get("stoch_k"),
             "stoch_d": stoch_pack.get("stoch_d"),
             "stoch_cross_up": bool(stoch_pack.get("stoch_cross_up")),

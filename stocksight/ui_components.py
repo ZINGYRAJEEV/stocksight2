@@ -1988,7 +1988,14 @@ def signal_results_download(
     for r in results:
         decision, composite, matrix_note = _decision_for_signal_result(r)
         links = r.links or {}
+        try:
+            from earnings_calendar import recompute_days_to_results_today
+        except ImportError:
+            from .earnings_calendar import recompute_days_to_results_today  # type: ignore
+        nxt = getattr(r, "next_results_date", None) or r.next_earnings
+        days_today = recompute_days_to_results_today(nxt, raw_ticker=r.raw_ticker)
         row = {
+            "days_to_results_today": days_today,
             "Ticker": r.ticker,
             "Raw": r.raw_ticker,
             "First_seen": first_seen_label(r.raw_ticker),
@@ -2032,6 +2039,15 @@ def signal_results_download(
             "Moneycontrol": links.get("Moneycontrol", ""),
             "MarketWatch": links.get("MarketWatch", ""),
             "TradingView": links.get("TradingView", ""),
+            # Stored results-date fields (days_to_results_today is display-only; recomputed above)
+            "next_results_date": getattr(r, "next_results_date", None) or r.next_earnings or "",
+            "results_date_status": getattr(r, "results_date_status", None) or "",
+            "days_to_results_at_scan": (
+                getattr(r, "days_to_results_at_scan", None)
+                if getattr(r, "days_to_results_at_scan", None) is not None
+                else r.days_to_earnings
+            ),
+            "scan_date": getattr(r, "scan_date", None) or "",
         }
         if scenario_id == "healthy_dip":
             # Append Layer 2/3 fields at end for backward-compatible CSV layout.
@@ -2045,9 +2061,14 @@ def signal_results_download(
             row["tranche_note"] = getattr(r, "tranche_note", None) or ""
         if include_scenario:
             row = {
+                "days_to_results_today": row.get("days_to_results_today"),
                 "Ticker": row["Ticker"],
                 "Scenario": scenario_display_title(r.scenario_id),
-                **{k: v for k, v in row.items() if k != "Ticker"},
+                **{
+                    k: v
+                    for k, v in row.items()
+                    if k not in ("Ticker", "days_to_results_today")
+                },
             }
         rows.append(row)
     df = pd.DataFrame(rows)
@@ -2504,7 +2525,15 @@ def results_table(
 
     rows = []
     for r in results:
+        days_today = None
+        try:
+            from earnings_calendar import recompute_days_to_results_today
+        except ImportError:
+            from .earnings_calendar import recompute_days_to_results_today  # type: ignore
+        nxt = getattr(r, "next_results_date", None) or r.next_earnings
+        days_today = recompute_days_to_results_today(nxt, raw_ticker=r.raw_ticker)
         row = {
+            "days_to_results_today": days_today,
             "Ticker":       r.ticker,
             "First seen":   first_seen_label(r.raw_ticker),
             "Signal":       r.signal_label,
@@ -2541,6 +2570,12 @@ def results_table(
             "Target 2":     r.target2,
             "Risk %":       r.risk_pct,
             "Confidence":   r.confidence,
+            "next_results_date": getattr(r, "next_results_date", None) or r.next_earnings or "",
+            "results_date_status": getattr(r, "results_date_status", None) or "",
+            "days_to_results_at_scan": getattr(r, "days_to_results_at_scan", None)
+            if getattr(r, "days_to_results_at_scan", None) is not None
+            else r.days_to_earnings,
+            "scan_date": getattr(r, "scan_date", None) or "",
         }
         if scenario_id == "healthy_dip":
             row["Drawdown %"] = r.drawdown_52w_pct
@@ -2554,9 +2589,14 @@ def results_table(
             row["Stock-spec"] = "⚠" if getattr(r, "stock_specific_weakness", False) else "—"
         if include_scenario:
             row = {
+                "days_to_results_today": row.get("days_to_results_today"),
                 "Ticker": row["Ticker"],
                 "Scenario": scenario_display_title(r.scenario_id),
-                **{k: v for k, v in row.items() if k != "Ticker"},
+                **{
+                    k: v
+                    for k, v in row.items()
+                    if k not in ("Ticker", "days_to_results_today")
+                },
             }
         rows.append(row)
 
@@ -2577,6 +2617,43 @@ def results_table(
         confluence_map=conf_map,
         sort_by_gate=True,
     )
+
+    try:
+        from earnings_calendar import (
+            DAYS_TODAY_COL,
+            apply_results_date_display_columns,
+            filter_hide_near_results,
+            style_days_to_results,
+        )
+    except ImportError:
+        from .earnings_calendar import (  # type: ignore[attr-defined]
+            DAYS_TODAY_COL,
+            apply_results_date_display_columns,
+            filter_hide_near_results,
+            style_days_to_results,
+        )
+    df = apply_results_date_display_columns(df, raw_ticker_col="Raw")
+
+    with st.sidebar:
+        hide_near = st.checkbox(
+            "Hide stocks with results within N days",
+            value=False,
+            key=f"hide_near_results_{scenario_id}",
+            help="Uses live-recomputed days_to_results_today (exchange-local calendar days).",
+        )
+        near_n = st.number_input(
+            "N days",
+            min_value=0,
+            max_value=90,
+            value=7,
+            key=f"hide_near_results_n_{scenario_id}",
+            disabled=not hide_near,
+        )
+    if hide_near:
+        df = filter_hide_near_results(df, within_days=int(near_n))
+        if df.empty:
+            st.info("All matches are within the earnings-proximity filter.")
+            return
 
     if include_yahoo_context and len(df) <= 50:
         try:
@@ -2610,6 +2687,7 @@ def results_table(
     col_cfg = {
         **_scan_table_news_column_config(),
         **stock_sight_column_config(),
+        DAYS_TODAY_COL: st.column_config.NumberColumn("Days to results", format="%d", help="Live: next results − today (IST/ET)"),
         "Price":        st.column_config.NumberColumn("Price", format="%.2f"),
         "PE":           st.column_config.NumberColumn("PE", format="%.1f"),
         "Vol×":         st.column_config.NumberColumn("Vol×", format="%.2f"),
@@ -2619,6 +2697,7 @@ def results_table(
         "%B":           st.column_config.NumberColumn("%B", format="%.3f"),
         "ATR14":        st.column_config.NumberColumn("ATR14", format="%.4f"),
         "ΔEarn(d)":     st.column_config.NumberColumn("ΔEarn(d)", format="%d"),
+        "days_to_results_at_scan": st.column_config.NumberColumn("Days@scan", format="%d"),
         "%K":           st.column_config.NumberColumn("%K", format="%.1f"),
         "%D":           st.column_config.NumberColumn("%D", format="%.1f"),
         "RS20":         st.column_config.NumberColumn("RS20", format="%.2f"),
@@ -2638,8 +2717,22 @@ def results_table(
             col_cfg[text_col] = st.column_config.TextColumn(text_col, width="large")
 
     gate_note = " · 🟢/🟡/🟠/🔴 = Quality Gate" if GATE_COL in df.columns else ""
-    st.caption(f"💡 Click any row to load its interactive chart in the panel below.{gate_note}")
-    table_arg = dataframe_gate_styler(df) if GATE_COL in df.columns else df
+    st.caption(
+        f"💡 Click any row to load its interactive chart in the panel below.{gate_note} "
+        "· Days to results: red ≤7d, amber 8–21d (live, not stored in CSV)."
+    )
+    if GATE_COL in df.columns:
+        table_arg = dataframe_gate_styler(df)
+    else:
+        table_arg = df
+    if DAYS_TODAY_COL in df.columns:
+        try:
+            table_arg = df.style.map(style_days_to_results, subset=[DAYS_TODAY_COL])
+            if GATE_COL in df.columns:
+                # Prefer days styling; gate styler already applied separately when needed
+                pass
+        except Exception:
+            table_arg = df
     table_event = st.dataframe(
         table_arg, use_container_width=True,
         column_config=filter_column_config(df, col_cfg),
