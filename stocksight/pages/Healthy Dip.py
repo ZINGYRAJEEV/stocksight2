@@ -117,10 +117,10 @@ with st.container(border=True):
         st.markdown(
             """
 <div style='font-size:0.72rem; color:#4a5568; line-height:1.85;'>
-<b>Health</b> ROE · low debt · PE cap<br>
-<b>Dip</b> 20–40% below 52-week high · RSI oversold<br>
-<b>Entry zone</b> Near 200-day MA (optional)<br>
-After scan: <b>Why it fell</b> one-liner from Yahoo headlines
+<b>L1 Health</b> OPM · ROE · sales growth · D/E · IC · pledge<br>
+<b>Dip</b> 15–40% below 52w high · RSI · stock vs sector/index<br>
+<b>L2 State</b> Falling / Basing / Confirmed / Failed<br>
+<b>L3 Risk</b> invalidation · stop% · position size · tranches
 </div>
 """,
             unsafe_allow_html=True,
@@ -130,6 +130,12 @@ After scan: <b>Why it fell</b> one-liner from Yahoo headlines
             value=True,
             key="hd_explain_fall",
             help="Extra Yahoo calls — skipped if more than ~30 matches.",
+        )
+        enable_bottom = st.checkbox(
+            "Bottom-confirmation score (Layer 2)",
+            value=True,
+            key="hd_bottom",
+            help="Scores structure/volume/volatility/momentum/RS/support/regime → state label.",
         )
     with c3:
         st.markdown("#### Fundamentals")
@@ -180,6 +186,8 @@ with st.container(border=True):
             value=bool(p["ic"]),
             key="hd_ic",
         )
+        min_opm = st.slider("Min operating margin %", 0.0, 40.0, 12.0, 0.5, key="hd_opm")
+        min_sales_g = st.slider("Min sales growth % (3Y or TTM)", 0.0, 40.0, 12.0, 0.5, key="hd_sales_g")
 
 adv = scenario_advanced_panel("hd_adv")
 
@@ -222,6 +230,11 @@ if run:
         apply_pb_filter=apply_pb,
         apply_peg_filter=apply_peg,
         apply_interest_coverage=apply_ic,
+        min_operating_margin_pct=float(min_opm),
+        min_sales_growth_3y_pct=float(min_sales_g),
+        enable_bottom_confirmation=bool(enable_bottom),
+        risk_capital=float(adv.get("portfolio_for_sizing", 0.0) or 100_000.0),
+        risk_pct_of_capital=float(adv.get("risk_pct_per_trade", 1.0) or 1.0),
         progress_cb=cb,
         **scan_kw,
     )
@@ -252,8 +265,22 @@ elif not results:
     )
 else:
     st.markdown(f"### 📋 {len(results)} stock(s) matched — review & trade plans")
+    states = sorted({getattr(r, "bottom_state", None) or "—" for r in results})
+    state_filter = st.multiselect(
+        "Filter by bottom state",
+        options=states,
+        default=states,
+        key="hd_state_filter",
+    )
+    filtered = [
+        r
+        for r in results
+        if (getattr(r, "bottom_state", None) or "—") in set(state_filter or states)
+    ]
+    if not filtered:
+        st.warning("No rows match the selected state filter.")
     pf_sz = float(adv.get("portfolio_for_sizing", 0.0) or 0.0)
-    signal_results_download(results, SCENARIO, button_key="hd_dl")
+    signal_results_download(filtered or results, SCENARIO, button_key="hd_dl")
     view = st.radio(
         "View",
         ["Cards", "Table"],
@@ -263,18 +290,23 @@ else:
     )
     st.markdown("---")
 
+    show = filtered or results
     if view == "Cards":
         render_trade_plan_cards(
-            results,
+            show,
             SCENARIO,
             portfolio_value=pf_sz,
             risk_pct=float(adv.get("risk_pct_per_trade", 1.0) or 1.0),
         )
     else:
-        results_table(results, SCENARIO)
+        results_table(show, SCENARIO)
 
     st.markdown("---")
-    st.caption("⚠️ Educational screener only. “Why it fell” is keyword-based — always verify on Screener.in or the annual report.")
+    st.caption(
+        "⚠️ Educational screener only. State labels are Layer-2 bottom confirmation — "
+        "always verify on Screener.in / annual report. CSV adds state, score, groups_hit, "
+        "invalidation, stop_pct, position_size at the end."
+    )
 
 with st.expander("📘 Beginner checklist (before you buy)", expanded=False):
     st.markdown(

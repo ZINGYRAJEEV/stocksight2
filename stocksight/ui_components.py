@@ -2033,6 +2033,16 @@ def signal_results_download(
             "MarketWatch": links.get("MarketWatch", ""),
             "TradingView": links.get("TradingView", ""),
         }
+        if scenario_id == "healthy_dip":
+            # Append Layer 2/3 fields at end for backward-compatible CSV layout.
+            row["state"] = getattr(r, "bottom_state", None) or ""
+            row["score"] = getattr(r, "bottom_score", None)
+            row["groups_hit"] = getattr(r, "bottom_groups_hit", None) or ""
+            row["invalidation"] = getattr(r, "invalidation", None)
+            row["stop_pct"] = getattr(r, "stop_pct_layer3", None)
+            row["position_size"] = getattr(r, "position_size", None)
+            row["stock_specific_weakness"] = bool(getattr(r, "stock_specific_weakness", False))
+            row["tranche_note"] = getattr(r, "tranche_note", None) or ""
         if include_scenario:
             row = {
                 "Ticker": row["Ticker"],
@@ -2535,6 +2545,13 @@ def results_table(
         if scenario_id == "healthy_dip":
             row["Drawdown %"] = r.drawdown_52w_pct
             row["Why it fell"] = (r.fall_context or "—")[:120]
+            row["State"] = getattr(r, "bottom_state", None) or "—"
+            row["Score"] = getattr(r, "bottom_score", None)
+            row["Groups"] = getattr(r, "bottom_groups_hit", None) or "—"
+            row["Invalidation"] = getattr(r, "invalidation", None)
+            row["Stop %"] = getattr(r, "stop_pct_layer3", None)
+            row["Pos size"] = getattr(r, "position_size", None)
+            row["Stock-spec"] = "⚠" if getattr(r, "stock_specific_weakness", False) else "—"
         if include_scenario:
             row = {
                 "Ticker": row["Ticker"],

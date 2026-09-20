@@ -1994,6 +1994,14 @@ def extract_healthy_dip_fundamentals(info: dict) -> dict[str, Optional[float]]:
     if pm is not None and abs(pm) <= 1.0:
         pm *= 100.0
 
+    opm = gf(("operatingMargins", "operatingMargin"))
+    if opm is not None and abs(opm) <= 1.0:
+        opm *= 100.0
+
+    eqg = gf(("earningsQuarterlyGrowth", "earnings_quarterly_growth"))
+    if eqg is not None and abs(eqg) <= 1.0:
+        eqg *= 100.0
+
     wk_high = gf(("fiftyTwoWeekHigh", "52WeekHigh"))
     wk_low = gf(("fiftyTwoWeekLow", "52WeekLow"))
 
@@ -2004,6 +2012,8 @@ def extract_healthy_dip_fundamentals(info: dict) -> dict[str, Optional[float]]:
         "peg_ratio": peg,
         "interest_coverage": ic,
         "profit_margin_pct": pm,
+        "operating_margin_pct": opm,
+        "earnings_quarterly_growth_pct": eqg,
         "week52_high": wk_high,
         "week52_low": wk_low,
     }

@@ -580,21 +580,28 @@ def layer3_risk_fields(
     cfg = cfg or get_healthy_dip_config()
     atr = float(atr or 0.0)
     inv = float(swing_low) - float(cfg["invalidation_atr_mult"]) * atr
-    stop_pct = ((float(price) - inv) / float(price) * 100.0) if price > 0 else None
+    if price <= 0 or inv >= float(price):
+        return {
+            "invalidation": round(inv, 2),
+            "stop_pct": None,
+            "position_size": 0,
+            "drop_wide_stop": True,
+            "tranche_note": "Invalid setup — price at/below invalidation",
+        }
+    stop_pct = (float(price) - inv) / float(price) * 100.0
     cap = float(capital if capital is not None else cfg["default_capital"])
     risk_pct = float(cfg["risk_pct_of_capital"])
     pos = 0
-    if stop_pct is not None and stop_pct > 0 and price > inv:
-        try:
-            from paper_trading import suggest_quantity
-        except ImportError:
-            from .paper_trading import suggest_quantity  # type: ignore
-        pos = suggest_quantity(cash=cap, entry=price, stop=inv, risk_pct=risk_pct)
-    drop = bool(stop_pct is not None and stop_pct > float(cfg["max_stop_pct"]))
+    try:
+        from paper_trading import suggest_quantity
+    except ImportError:
+        from .paper_trading import suggest_quantity  # type: ignore
+    pos = suggest_quantity(cash=cap, entry=price, stop=inv, risk_pct=risk_pct)
+    drop = bool(stop_pct > float(cfg["max_stop_pct"]))
     first = float(cfg["tranche_first_frac"])
     return {
         "invalidation": round(inv, 2),
-        "stop_pct": round(stop_pct, 2) if stop_pct is not None else None,
+        "stop_pct": round(stop_pct, 2),
         "position_size": int(pos),
         "drop_wide_stop": drop,
         "tranche_note": (

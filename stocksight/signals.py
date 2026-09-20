@@ -13,6 +13,7 @@ Each scenario returns a list of SignalResult objects with full trade plan.
 """
 
 from __future__ import annotations
+import logging
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -21,6 +22,8 @@ from typing import Optional
 
 import warnings
 warnings.filterwarnings("ignore")
+
+_log = logging.getLogger(__name__)
 
 try:
     from .screener import (
@@ -187,6 +190,19 @@ class SignalResult:
     roe_pct: Optional[float] = None
     debt_equity: Optional[float] = None
     pct_vs_ma200: Optional[float] = None
+
+    # Healthy Dip Layers 1–3
+    bottom_state: Optional[str] = None          # Falling / Basing / Confirmed / Failed
+    bottom_score: Optional[float] = None        # 0–100
+    bottom_groups_hit: Optional[str] = None     # comma-separated group names
+    invalidation: Optional[float] = None
+    stop_pct_layer3: Optional[float] = None
+    position_size: Optional[int] = None
+    tranche_note: Optional[str] = None
+    stock_specific_weakness: bool = False
+    operating_margin_pct: Optional[float] = None
+    sales_growth_3y_pct: Optional[float] = None
+    skip_reason: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -515,6 +531,17 @@ def _build_result(
         roe_pct = _finite_num(ex.get("roe_pct")),
         debt_equity = _finite_num(ex.get("debt_equity")),
         pct_vs_ma200 = _finite_num(ex.get("pct_vs_ma200")),
+        bottom_state = (ex.get("bottom_state") or None),
+        bottom_score = _finite_num(ex.get("bottom_score")),
+        bottom_groups_hit = (ex.get("bottom_groups_hit") or None),
+        invalidation = _finite_num(ex.get("invalidation")),
+        stop_pct_layer3 = _finite_num(ex.get("stop_pct_layer3")),
+        position_size = int(ex["position_size"]) if ex.get("position_size") is not None else None,
+        tranche_note = (ex.get("tranche_note") or None),
+        stock_specific_weakness = bool(ex.get("stock_specific_weakness")),
+        operating_margin_pct = _finite_num(ex.get("operating_margin_pct")),
+        sales_growth_3y_pct = _finite_num(ex.get("sales_growth_3y_pct")),
+        skip_reason = (ex.get("skip_reason") or None),
     )
 
 
@@ -1047,12 +1074,58 @@ def _healthy_dip_rank_score(
     roe: Optional[float],
     dd_min: float,
     dd_max: float,
+    bottom_score: float = 0.0,
 ) -> float:
     dd_mid = (dd_min + dd_max) / 2.0
     dd_fit = max(0.0, 10.0 - abs(drawdown_pct - dd_mid))
     rsi_fit = max(0.0, 40.0 - rsi)
     roe_fit = min(roe or 0.0, 30.0)
-    return dd_fit + rsi_fit * 0.5 + roe_fit * 0.3
+    return dd_fit + rsi_fit * 0.5 + roe_fit * 0.3 + float(bottom_score) * 0.15
+
+
+def _index_drawdown_52w(benchmark: str) -> Optional[float]:
+    try:
+        hist = fetch_daily_history_min_bars(benchmark, 260)
+        if hist is None or hist.empty or len(hist) < 60:
+            return None
+        price = float(hist["Close"].iloc[-1])
+        hi = float(hist["High"].max())
+        return drawdown_pct_from_52w_high(price, hi)
+    except Exception:
+        return None
+
+
+def _fetch_vix_closes(is_nse: bool) -> Optional[pd.Series]:
+    sym = "^INDIAVIX" if is_nse else "^VIX"
+    try:
+        h = yf.Ticker(sym).history(period="6mo", interval="1d", auto_adjust=True)
+        if h is None or h.empty:
+            return None
+        return h["Close"].astype(float)
+    except Exception:
+        _log.warning("VIX series unavailable (%s) — regime feature skipped", sym)
+        return None
+
+
+def _nse_governance(disp: str) -> dict[str, Optional[float]]:
+    """Promoter pledge / change + optional 3Y sales growth from Screener.in."""
+    out: dict[str, Optional[float]] = {
+        "pledged_pct": None,
+        "promoter_change_pct": None,
+        "sales_growth_3y_pct": None,
+    }
+    try:
+        try:
+            from screener_in_data import fetch_screener_fundamental_profile
+        except ImportError:
+            from .screener_in_data import fetch_screener_fundamental_profile  # type: ignore
+        profile = fetch_screener_fundamental_profile(disp) or {}
+        out["pledged_pct"] = profile.get("pledged_pct")
+        out["promoter_change_pct"] = profile.get("promoter_change_pct")
+        out["sales_growth_3y_pct"] = profile.get("sales_growth_3y_pct")
+    except Exception as exc:
+        _log.warning("Screener.in governance skip for %s: %s", disp, exc)
+    return out
 
 
 def scan_healthy_dip(
@@ -1085,155 +1158,386 @@ def scan_healthy_dip(
     require_stoch_cross_up: bool = False,
     require_stoch_cross_down: bool = False,
     weekly_macd_confirm: bool = False,
+    min_operating_margin_pct: Optional[float] = None,
+    min_sales_growth_3y_pct: Optional[float] = None,
+    require_qtr_profit_not_falling: Optional[bool] = None,
+    apply_promoter_gates: Optional[bool] = None,
+    max_pledged_pct: Optional[float] = None,
+    min_promoter_change_pct: Optional[float] = None,
+    max_stop_pct: Optional[float] = None,
+    risk_capital: Optional[float] = None,
+    risk_pct_of_capital: Optional[float] = None,
+    enable_bottom_confirmation: bool = True,
 ) -> list[SignalResult]:
+    """
+    Healthy Dip with three layers:
+      1) Health gate (fundamentals + drawdown band)
+      2) Bottom-confirmation score -> Falling / Basing / Confirmed / Failed
+      3) Risk fields (invalidation / stop% / size); drop if stop too wide
+    """
+    try:
+        from healthy_dip_config import get_healthy_dip_config
+        from bottom_confirmation import layer3_risk_fields, score_bottom_confirmation
+    except ImportError:
+        from .healthy_dip_config import get_healthy_dip_config  # type: ignore
+        from .bottom_confirmation import layer3_risk_fields, score_bottom_confirmation  # type: ignore
+
+    cfg = get_healthy_dip_config(
+        min_roe_pct=min_roe_pct,
+        max_debt_equity=max_debt_equity,
+        max_pe=max_pe,
+        max_price_to_book=max_price_to_book,
+        max_peg=max_peg,
+        min_interest_coverage=min_interest_coverage,
+        drawdown_min_pct=drawdown_min_pct,
+        drawdown_max_pct=drawdown_max_pct,
+        rsi_max=rsi_max,
+        require_near_ma200=require_near_ma200,
+        ma200_tolerance_pct=ma200_tolerance_pct,
+        apply_pb_filter=apply_pb_filter,
+        apply_peg_filter=apply_peg_filter,
+        apply_interest_coverage=apply_interest_coverage,
+        min_operating_margin_pct=min_operating_margin_pct,
+        min_sales_growth_3y_pct=min_sales_growth_3y_pct,
+        require_qtr_profit_not_falling=require_qtr_profit_not_falling,
+        apply_promoter_gates=apply_promoter_gates,
+        max_pledged_pct=max_pledged_pct,
+        min_promoter_change_pct=min_promoter_change_pct,
+        max_stop_pct=max_stop_pct,
+        default_capital=risk_capital,
+        risk_pct_of_capital=risk_pct_of_capital,
+    )
+
     results: list[tuple[float, SignalResult]] = []
     tickers = _ticker_list(universe_name, tickers_override)
+    seen_uni: set[str] = set()
+    uniq: list[str] = []
+    for t in tickers:
+        if t not in seen_uni:
+            seen_uni.add(t)
+            uniq.append(t)
+    tickers = uniq
     total = len(tickers)
     pe_cap = PE_DATA_CAP.get(universe_name, 400)
+
+    is_nse_uni = "NSE" in str(universe_name) or any(
+        str(t).endswith((".NS", ".BO")) for t in tickers[:3]
+    )
+    bench = benchmark_ticker_for(
+        tickers[0] if tickers else ("RELIANCE.NS" if is_nse_uni else "AAPL")
+    )
+    index_dd = _index_drawdown_52w(bench)
+    index_hist = fetch_daily_history_min_bars(bench, 260)
+    index_closes = index_hist["Close"] if index_hist is not None and not index_hist.empty else None
+    vix_closes = _fetch_vix_closes(is_nse_uni)
+
+    candidates: list[dict] = []
+    skip_log: list[str] = []
 
     for i, ticker in enumerate(tickers):
         if progress_cb:
             progress_cb(i + 1, total, ticker)
-
-        data = _fetch(
-            ticker,
-            interval_key,
-            include_weekly=require_weekly_confirm,
-            weekly_macd_confirm=weekly_macd_confirm,
-        )
-        if not data:
-            continue
-        hist, pe_raw, vol_ratio, rsi, rsi_prev, ex = data
-
-        if not _passes_advanced_filters(
-            ex,
-            sector_filter,
-            require_macd_bullish,
-            require_bb_touch_lower,
-            require_weekly_confirm=require_weekly_confirm,
-            weekly_macd_confirm=weekly_macd_confirm,
-            exclude_earnings_within_days=exclude_earnings_within_days,
-            skip_bearish_divergence_buy=skip_bearish_divergence_buy,
-            buy_side_screening=True,
-            min_rs_vs_bench=min_rs_vs_bench,
-            require_stoch_cross_up=require_stoch_cross_up,
-            require_stoch_cross_down=False,
-        ):
-            continue
-
         try:
-            stk = yf.Ticker(ticker)
-            info = stk.info or {}
-        except Exception:
-            info = {}
+            data = _fetch(
+                ticker,
+                interval_key,
+                include_weekly=require_weekly_confirm,
+                weekly_macd_confirm=weekly_macd_confirm,
+            )
+            if not data:
+                skip_log.append(f"{ticker}: no_price_data")
+                continue
+            hist, pe_raw, vol_ratio, rsi, rsi_prev, ex = data
 
-        fund = extract_healthy_dip_fundamentals(info)
-        roe = fund.get("roe_pct")
-        de = fund.get("debt_equity")
-        if roe is not None and roe < float(min_roe_pct):
-            continue
-        if roe is None:
-            continue
-        if de is not None and de > float(max_debt_equity):
-            continue
-
-        pe = get_pe(stk)
-        if pe is None or pe <= 0 or pe > min(float(max_pe), float(pe_cap)):
-            continue
-
-        if apply_pb_filter and max_price_to_book is not None:
-            pb = fund.get("price_to_book")
-            if pb is not None and pb > float(max_price_to_book):
+            if not _passes_advanced_filters(
+                ex,
+                sector_filter,
+                require_macd_bullish,
+                require_bb_touch_lower,
+                require_weekly_confirm=require_weekly_confirm,
+                weekly_macd_confirm=weekly_macd_confirm,
+                exclude_earnings_within_days=exclude_earnings_within_days,
+                skip_bearish_divergence_buy=skip_bearish_divergence_buy,
+                buy_side_screening=True,
+                min_rs_vs_bench=min_rs_vs_bench,
+                require_stoch_cross_up=require_stoch_cross_up,
+                require_stoch_cross_down=False,
+            ):
+                skip_log.append(f"{ticker}: advanced_filter")
                 continue
 
-        if apply_peg_filter and max_peg is not None:
-            peg = fund.get("peg_ratio")
-            if peg is not None and peg > 0 and peg > float(max_peg):
+            try:
+                stk = yf.Ticker(ticker)
+                info = stk.info or {}
+            except Exception:
+                info = {}
+
+            fund = extract_healthy_dip_fundamentals(info)
+            roe = fund.get("roe_pct")
+            de = fund.get("debt_equity")
+            if roe is None or roe < float(cfg["min_roe_pct"]):
+                skip_log.append(f"{ticker}: roe")
+                continue
+            if de is not None and de > float(cfg["max_debt_equity"]):
+                skip_log.append(f"{ticker}: debt_high")
                 continue
 
-        if apply_interest_coverage and min_interest_coverage is not None:
-            ic = fund.get("interest_coverage")
-            # Only filter when Yahoo reports coverage; skip gate if missing.
-            if ic is not None and ic < float(min_interest_coverage):
+            opm = fund.get("operating_margin_pct")
+            if opm is not None and opm < float(cfg["min_operating_margin_pct"]):
+                skip_log.append(f"{ticker}: opm")
                 continue
 
-        price = float(hist["Close"].iloc[-1])
-        wk_high = fund.get("week52_high")
-        if wk_high is None or wk_high <= 0:
-            long_hist = fetch_daily_history_min_bars(ticker, 252)
-            if not long_hist.empty:
-                wk_high = float(long_hist["High"].max())
-        drawdown = drawdown_pct_from_52w_high(price, wk_high)
-        if drawdown is None:
+            pe = get_pe(stk)
+            if pe is None or pe <= 0 or pe > min(float(cfg["max_pe"]), float(pe_cap)):
+                skip_log.append(f"{ticker}: pe")
+                continue
+
+            if cfg["apply_pb_filter"] and cfg.get("max_price_to_book") is not None:
+                pb = fund.get("price_to_book")
+                if pb is not None and pb > float(cfg["max_price_to_book"]):
+                    skip_log.append(f"{ticker}: pb")
+                    continue
+
+            if cfg["apply_peg_filter"] and cfg.get("max_peg") is not None:
+                peg = fund.get("peg_ratio")
+                if peg is not None and peg > 0 and peg > float(cfg["max_peg"]):
+                    skip_log.append(f"{ticker}: peg")
+                    continue
+
+            if cfg["apply_interest_coverage"] and cfg.get("min_interest_coverage") is not None:
+                ic = fund.get("interest_coverage")
+                if ic is not None and ic < float(cfg["min_interest_coverage"]):
+                    skip_log.append(f"{ticker}: interest_coverage")
+                    continue
+
+            if cfg.get("require_qtr_profit_not_falling", True):
+                eqg = fund.get("earnings_quarterly_growth_pct")
+                if eqg is not None and eqg < 0:
+                    skip_log.append(f"{ticker}: qtr_profit_falling")
+                    continue
+
+            sales_3y = fund.get("revenue_growth_pct")
+            is_nse = ticker.endswith(".NS") or ticker.endswith(".BO")
+            if is_nse and cfg.get("apply_promoter_gates", True):
+                disp = ticker.replace(".NS", "").replace(".BO", "")
+                gov = _nse_governance(disp)
+                if gov.get("sales_growth_3y_pct") is not None:
+                    sales_3y = gov["sales_growth_3y_pct"]
+                pledged = gov.get("pledged_pct")
+                pchg = gov.get("promoter_change_pct")
+                if pledged is None and pchg is None:
+                    _log.warning(
+                        "%s: promoter pledge/change unavailable — skipping governance gates",
+                        ticker,
+                    )
+                else:
+                    if pledged is not None and pledged > float(cfg["max_pledged_pct"]):
+                        skip_log.append(f"{ticker}: pledge_high")
+                        continue
+                    if pchg is not None and pchg < float(cfg["min_promoter_change_pct"]):
+                        skip_log.append(f"{ticker}: promoter_selling")
+                        continue
+            if sales_3y is not None and sales_3y < float(cfg["min_sales_growth_3y_pct"]):
+                skip_log.append(f"{ticker}: sales_growth")
+                continue
+
+            price = float(hist["Close"].iloc[-1])
+            wk_high = fund.get("week52_high")
+            long_hist = fetch_daily_history_min_bars(ticker, 260)
+            if wk_high is None or wk_high <= 0:
+                if not long_hist.empty:
+                    wk_high = float(long_hist["High"].max())
+            drawdown = drawdown_pct_from_52w_high(price, wk_high)
+            if drawdown is None:
+                skip_log.append(f"{ticker}: no_drawdown")
+                continue
+            if drawdown < float(cfg["drawdown_min_pct"]) or drawdown > float(cfg["drawdown_max_pct"]):
+                skip_log.append(f"{ticker}: drawdown_band")
+                continue
+
+            if rsi > float(cfg["rsi_max"]):
+                skip_log.append(f"{ticker}: rsi")
+                continue
+
+            pct_vs_ma200: Optional[float] = None
+            ohlcv = long_hist if not long_hist.empty else hist
+            if len(ohlcv) >= 200:
+                ma200 = float(ohlcv["Close"].rolling(200).mean().iloc[-1])
+                if ma200 > 0:
+                    pct_vs_ma200 = pct_vs_ma(price, ma200)
+            if cfg["require_near_ma200"]:
+                if pct_vs_ma200 is None or pct_vs_ma200 > float(cfg["ma200_tolerance_pct"]):
+                    skip_log.append(f"{ticker}: ma200")
+                    continue
+
+            sector = ""
+            if isinstance(ex, dict):
+                sector = str(ex.get("sector") or "")
+            if not sector:
+                try:
+                    sec, _ind = get_sector_industry(stk)
+                    sector = sec or ""
+                except Exception:
+                    sector = ""
+
+            candidates.append(
+                {
+                    "ticker": ticker,
+                    "hist": hist,
+                    "ohlcv": ohlcv if len(ohlcv) >= len(hist) else hist,
+                    "pe": pe,
+                    "vol_ratio": vol_ratio,
+                    "rsi": rsi,
+                    "rsi_prev": rsi_prev,
+                    "ex": dict(ex),
+                    "roe": roe,
+                    "de": de,
+                    "drawdown": drawdown,
+                    "pct_vs_ma200": pct_vs_ma200,
+                    "price": price,
+                    "sector": sector,
+                    "opm": opm,
+                    "sales_3y": sales_3y,
+                }
+            )
+        except Exception as exc:
+            skip_log.append(f"{ticker}: error:{exc}")
+            _log.warning("Healthy Dip skip %s: %s", ticker, exc)
             continue
-        if drawdown < float(drawdown_min_pct) or drawdown > float(drawdown_max_pct):
-            continue
 
-        if rsi > float(rsi_max):
-            continue
+    if skip_log:
+        _log.info("Healthy Dip skips (%d): %s", len(skip_log), "; ".join(skip_log[:40]))
 
-        pct_vs_ma200: Optional[float] = None
-        long_hist = fetch_daily_history_min_bars(ticker, 205)
-        if not long_hist.empty and len(long_hist) >= 200:
-            ma200 = float(long_hist["Close"].rolling(200).mean().iloc[-1])
-            if ma200 > 0:
-                pct_vs_ma200 = pct_vs_ma(price, ma200)
-        if require_near_ma200:
-            if pct_vs_ma200 is None:
-                continue
-            if pct_vs_ma200 > float(ma200_tolerance_pct):
-                continue
+    sector_dds: dict[str, list[float]] = {}
+    for c in candidates:
+        sec = str(c.get("sector") or "Unknown")
+        sector_dds.setdefault(sec, []).append(float(c["drawdown"]))
+    sector_med = {s: float(np.median(v)) for s, v in sector_dds.items() if v}
 
-        rg = fund.get("revenue_growth_pct")
-        note_bits = [
-            f"ROE {roe:.0f}%",
-            f"D/E {de:.2f}" if de is not None else "D/E n/a",
-            f"{drawdown:.0f}% below 52w high",
-            f"RSI {rsi:.0f}",
-        ]
-        if pct_vs_ma200 is not None:
-            note_bits.append(f"{pct_vs_ma200:+.1f}% vs 200-DMA")
-        if rg is not None:
-            note_bits.append(f"rev growth {rg:.0f}%")
-        note = (
-            "Quality name in a dip zone — confirm *why* price fell (temporary vs structural). "
-            + " · ".join(note_bits)
-            + ". Consider 2–3 tranche entries over weeks."
+    state_to_label = {
+        "Confirmed": "BUY",
+        "Basing": "CAUTIOUS BUY",
+        "Falling": "HOLD-WAIT",
+        "Failed": "AVOID",
+    }
+
+    for c in candidates:
+        ticker = c["ticker"]
+        drawdown = float(c["drawdown"])
+        sec = str(c.get("sector") or "Unknown")
+        stock_weak = False
+        med = sector_med.get(sec)
+        if med is not None and drawdown >= med + float(cfg["stock_vs_sector_dd_extra_pct"]):
+            if index_dd is None or drawdown >= float(index_dd) + float(cfg["stock_vs_index_dd_extra_pct"]):
+                stock_weak = True
+
+        bottom = None
+        if enable_bottom_confirmation:
+            try:
+                bottom = score_bottom_confirmation(
+                    c["ohlcv"],
+                    index_closes=index_closes,
+                    vix_closes=vix_closes,
+                    cfg=cfg,
+                )
+            except Exception as exc:
+                _log.warning("Bottom score failed for %s: %s", ticker, exc)
+
+        state = bottom.state if bottom else "Falling"
+        score = bottom.score if bottom else 0.0
+        groups = ",".join(bottom.groups_hit) if bottom else ""
+
+        atr = c["ex"].get("atr14")
+        if atr is None:
+            try:
+                atr_v = compute_atr(c["ohlcv"]["High"], c["ohlcv"]["Low"], c["ohlcv"]["Close"], 14)
+                atr = float(atr_v) if atr_v is not None else 0.0
+            except Exception:
+                atr = 0.0
+        swing = _swing_low(c["ohlcv"]["Low"], 20)
+        risk = layer3_risk_fields(
+            float(c["price"]),
+            float(swing),
+            float(atr or 0),
+            cfg=cfg,
+            capital=cfg.get("default_capital"),
         )
+        if risk.get("drop_wide_stop"):
+            skip_log.append(f"{ticker}: stop_too_wide")
+            continue
 
-        ex = dict(ex)
-        ex["pct_vs_ma200"] = pct_vs_ma200
+        inv = risk.get("invalidation")
+        note_bits = [
+            f"state={state}",
+            f"score={score:.0f}",
+            f"ROE {c['roe']:.0f}%",
+            f"D/E {c['de']:.2f}" if c["de"] is not None else "D/E n/a",
+            f"{drawdown:.0f}% below 52w high",
+            f"RSI {c['rsi']:.0f}",
+        ]
+        if stock_weak:
+            note_bits.append("stock-specific weakness vs sector/index")
+        if groups:
+            note_bits.append(f"groups:{groups}")
+        if risk.get("tranche_note"):
+            note_bits.append(str(risk["tranche_note"]))
+        note = "Healthy dip · " + " · ".join(note_bits)
+
+        ex = dict(c["ex"])
+        ex["pct_vs_ma200"] = c["pct_vs_ma200"]
         ex["drawdown_52w_pct"] = drawdown
-        ex["roe_pct"] = roe
-        ex["debt_equity"] = de
+        ex["roe_pct"] = c["roe"]
+        ex["debt_equity"] = c["de"]
+        ex["bottom_state"] = state
+        ex["bottom_score"] = score
+        ex["bottom_groups_hit"] = groups
+        ex["invalidation"] = inv
+        ex["stop_pct_layer3"] = risk.get("stop_pct")
+        ex["position_size"] = risk.get("position_size")
+        ex["tranche_note"] = risk.get("tranche_note")
+        ex["stock_specific_weakness"] = stock_weak
+        ex["operating_margin_pct"] = c.get("opm")
+        ex["sales_growth_3y_pct"] = c.get("sales_3y")
+        ex["sector"] = sec or ex.get("sector")
 
         rank = _healthy_dip_rank_score(
-            drawdown, rsi, roe, drawdown_min_pct, drawdown_max_pct,
+            drawdown,
+            float(c["rsi"]),
+            c["roe"],
+            float(cfg["drawdown_min_pct"]),
+            float(cfg["drawdown_max_pct"]),
+            bottom_score=score,
         )
-        results.append((
-            rank,
-            _build_result(
-                ticker,
-                hist,
-                pe,
-                vol_ratio,
-                rsi,
-                rsi_prev,
-                scenario_id="healthy_dip",
-                signal_label="BUY",
-                timeframe="Position · 3–12 months",
-                note=note,
-                sl_lookback=20,
-                target_ratios=(1.0, 2.0, 3.0),
-                extras=ex,
-                bar_interval=interval_key,
-            ),
-        ))
+        res = _build_result(
+            ticker,
+            c["hist"],
+            float(c["pe"]),
+            float(c["vol_ratio"]),
+            float(c["rsi"]),
+            float(c["rsi_prev"]),
+            scenario_id="healthy_dip",
+            signal_label=state_to_label.get(state, "HOLD-WAIT"),
+            timeframe="Position · 3–12 months",
+            note=note,
+            sl_lookback=20,
+            target_ratios=(1.0, 2.0, 3.0),
+            extras=ex,
+            bar_interval=interval_key,
+        )
+        if inv is not None and inv < res.price:
+            res.stop_loss = float(inv)
+            res.risk_pct = float(risk["stop_pct"] or res.risk_pct)
+        results.append((rank, res))
 
     results.sort(key=lambda pair: pair[0], reverse=True)
-    return [r for _, r in results]
-# Any PE · Vol ≥2× · RSI >75
-# ─────────────────────────────────────────────────────────────
+    out: list[SignalResult] = []
+    seen: set[str] = set()
+    for _, r in results:
+        if r.raw_ticker in seen:
+            continue
+        seen.add(r.raw_ticker)
+        out.append(r)
+    return out
 
 def scan_overbought_exit(
     universe_name: str,
