@@ -1,0 +1,115 @@
+{
+  "generated_at": "2026-09-20T05:07:56.141952Z",
+  "tickers": [
+    "RELIANCE.NS",
+    "TCS.NS",
+    "INFY.NS",
+    "HDFCBANK.NS",
+    "ICICIBANK.NS",
+    "SBIN.NS",
+    "BHARTIARTL.NS",
+    "ITC.NS",
+    "LT.NS",
+    "AXISBANK.NS",
+    "KOTAKBANK.NS",
+    "HINDUNILVR.NS",
+    "ASIANPAINT.NS",
+    "MARUTI.NS",
+    "SUNPHARMA.NS",
+    "TITAN.NS",
+    "BAJFINANCE.NS",
+    "WIPRO.NS",
+    "ULTRACEMCO.NS",
+    "NESTLEIND.NS"
+  ],
+  "n_events_baseline": 229,
+  "n_events_confirmed": 3,
+  "table": [
+    {
+      "group": "Confirmed",
+      "n": 3,
+      "pct_new_low_20d": 66.7,
+      "median_extra_dd_pct": 2.27,
+      "median_ret_5d": 3.32,
+      "median_ret_10d": 6.24,
+      "median_ret_20d": 3.58
+    },
+    {
+      "group": "All healthy dips (baseline)",
+      "n": 229,
+      "pct_new_low_20d": 82.1,
+      "median_extra_dd_pct": 4.02,
+      "median_ret_5d": 0.4,
+      "median_ret_10d": 0.37,
+      "median_ret_20d": 1.29
+    },
+    {
+      "group": "Confirmed \u00b7 covid_2020",
+      "n": 1,
+      "pct_new_low_20d": 0.0,
+      "median_extra_dd_pct": 0.0,
+      "median_ret_5d": 11.34,
+      "median_ret_10d": 9.85,
+      "median_ret_20d": 8.56
+    },
+    {
+      "group": "Baseline \u00b7 covid_2020",
+      "n": 42,
+      "pct_new_low_20d": 78.6,
+      "median_extra_dd_pct": 8.92,
+      "median_ret_5d": 1.15,
+      "median_ret_10d": -1.46,
+      "median_ret_20d": 2.38
+    },
+    {
+      "group": "Confirmed \u00b7 bear_2022",
+      "n": 1,
+      "pct_new_low_20d": 100.0,
+      "median_extra_dd_pct": 6.54,
+      "median_ret_5d": 3.32,
+      "median_ret_10d": -1.66,
+      "median_ret_20d": -4.99
+    },
+    {
+      "group": "Baseline \u00b7 bear_2022",
+      "n": 80,
+      "pct_new_low_20d": 81.2,
+      "median_extra_dd_pct": 6.0,
+      "median_ret_5d": -0.1,
+      "median_ret_10d": 0.0,
+      "median_ret_20d": 1.06
+    },
+    {
+      "group": "Confirmed \u00b7 recent_2024_25",
+      "n": 1,
+      "pct_new_low_20d": 100.0,
+      "median_extra_dd_pct": 2.27,
+      "median_ret_5d": 0.03,
+      "median_ret_10d": 6.24,
+      "median_ret_20d": 3.58
+    },
+    {
+      "group": "Baseline \u00b7 recent_2024_25",
+      "n": 107,
+      "pct_new_low_20d": 84.1,
+      "median_extra_dd_pct": 2.77,
+      "median_ret_5d": 0.55,
+      "median_ret_10d": 1.07,
+      "median_ret_20d": 1.56
+    }
+  ],
+  "limitations": [
+    "Yahoo history excludes most delisted names -> survivorship bias.",
+    "Backtest health gate uses drawdown band only; Yahoo fundamentals are not point-in-time.",
+    "Sample is 20 large-cap NSE names; not the full Nifty 500.",
+    "Thresholds are coarse; results are descriptive, not optimized.",
+    "Market breadth unavailable - regime uses index>50DMA + India VIX only."
+  ],
+  "interpretation": [
+    "pct_new_low_20d: how often price undercuts the signal low within 20 sessions.",
+    "median_extra_dd_pct: median further drawdown from signal price.",
+    "Forward returns are raw (not excess); compare Confirmed vs baseline.",
+    "If Confirmed shows lower new-low rate and better forward returns, Layer 2 adds value.",
+    "Small N or mixed regimes means do not treat this as proof of edge."
+  ]
+}

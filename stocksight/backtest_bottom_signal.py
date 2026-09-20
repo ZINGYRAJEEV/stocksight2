@@ -111,29 +111,31 @@ def _new_low_and_extra_dd(lows: pd.Series, closes: pd.Series, i: int, horizon: i
 
 
 def _passes_health_gate(info: dict, price: float, hist: pd.DataFrame, cfg: dict) -> bool:
-    fund = extract_healthy_dip_fundamentals(info)
-    roe = fund.get("roe_pct")
-    if roe is None or roe < float(cfg["min_roe_pct"]):
-        return False
-    de = fund.get("debt_equity")
-    if de is not None and de > float(cfg["max_debt_equity"]):
-        return False
-    opm = fund.get("operating_margin_pct")
-    if opm is not None and opm < float(cfg["min_operating_margin_pct"]):
-        return False
-    sales = fund.get("revenue_growth_pct")
-    if sales is not None and sales < float(cfg["min_sales_growth_3y_pct"]):
-        return False
-    wk_high = fund.get("week52_high")
-    if wk_high is None or wk_high <= 0:
-        # trailing 252 high from hist up to signal (point-in-time price path)
-        wk_high = float(hist["High"].iloc[-252:].max()) if len(hist) >= 60 else float(hist["High"].max())
+    """
+    Historical health gate is drawdown-band only.
+
+    Yahoo `info` is current (not point-in-time), so applying today's ROE/OPM
+    to 2020/2022 bars would falsely exclude names that were healthy then.
+    Fundamentals are noted as a live-scan filter, not a backtest filter.
+    """
+    wk_high = float(hist["High"].iloc[-252:].max()) if len(hist) >= 60 else float(hist["High"].max())
     dd = drawdown_pct_from_52w_high(price, wk_high)
     if dd is None:
         return False
     if dd < float(cfg["drawdown_min_pct"]) or dd > float(cfg["drawdown_max_pct"]):
         return False
     return True
+
+
+def _tz_naive_index(obj: pd.DataFrame | pd.Series) -> pd.DataFrame | pd.Series:
+    """Strip timezone from DatetimeIndex for safe comparisons."""
+    if obj is None or getattr(obj, "empty", False):
+        return obj
+    idx = obj.index
+    if isinstance(idx, pd.DatetimeIndex) and idx.tz is not None:
+        obj = obj.copy()
+        obj.index = idx.tz_localize(None)
+    return obj
 
 
 def _month_ends(start: str, end: str) -> list[pd.Timestamp]:
@@ -234,21 +236,25 @@ def main() -> None:
         apply_interest_coverage=False,
     )
 
-    print("Loading index / VIX…")
-    idx = yf.Ticker(INDEX).history(start="2019-01-01", auto_adjust=True)["Close"].astype(float)
+    print("Loading index / VIX...")
+    idx = _tz_naive_index(
+        yf.Ticker(INDEX).history(start="2019-01-01", auto_adjust=True)["Close"].astype(float)
+    )
     try:
-        vix = yf.Ticker(VIX).history(start="2019-01-01", auto_adjust=True)["Close"].astype(float)
+        vix = _tz_naive_index(
+            yf.Ticker(VIX).history(start="2019-01-01", auto_adjust=True)["Close"].astype(float)
+        )
     except Exception:
         vix = None
         print("WARNING: India VIX unavailable")
 
     all_events: list[SignalEvent] = []
     for t in TICKERS:
-        print(f"  {t}…")
+        print(f"  {t}...")
         try:
-            hist = yf.Ticker(t).history(start="2019-01-01", auto_adjust=True)
+            hist = _tz_naive_index(yf.Ticker(t).history(start="2019-01-01", auto_adjust=True))
             if hist is None or hist.empty:
-                print(f"    skip — no history")
+                print("    skip - no history")
                 continue
             info = yf.Ticker(t).info or {}
             ev = evaluate_ticker(t, hist, idx, vix, info, cfg)
@@ -284,11 +290,11 @@ def main() -> None:
         "n_events_confirmed": len(confirmed),
         "table": df.to_dict(orient="records"),
         "limitations": [
-            "Yahoo history excludes most delisted names → survivorship bias.",
-            "Fundamentals use current Yahoo info, not point-in-time filings.",
+            "Yahoo history excludes most delisted names -> survivorship bias.",
+            "Backtest health gate uses drawdown band only; Yahoo fundamentals are not point-in-time.",
             "Sample is 20 large-cap NSE names; not the full Nifty 500.",
             "Thresholds are coarse; results are descriptive, not optimized.",
-            "Market breadth unavailable — regime uses index>50DMA + India VIX only.",
+            "Market breadth unavailable - regime uses index>50DMA + India VIX only.",
         ],
         "interpretation": [
             "pct_new_low_20d: how often price undercuts the signal low within 20 sessions.",
