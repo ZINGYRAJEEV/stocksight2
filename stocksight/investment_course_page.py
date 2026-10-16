@@ -483,13 +483,14 @@ def render_investment_course_page() -> None:
         with c1:
             st.markdown("#### Universe")
             scope_key = f"{key}_uni_scope"
-            ensure_session_choice(scope_key, ["By sector", "Broad market"], "By sector")
+            scan_scopes = ["By sector", "NSE market", "US stocks"]
+            ensure_session_choice(scope_key, scan_scopes, "By sector")
             uni_scope = st.radio(
-                "Scan scope",
-                ["By sector", "Broad market"],
+                "Market universe",
+                scan_scopes,
                 horizontal=True,
                 key=scope_key,
-                help="Prefer **By sector** — smaller lists scan faster and are easier to research.",
+                help="Choose sector baskets, NSE universes, or US stock universes.",
             )
 
             if uni_scope == "By sector" and SECTOR_SCAN_SOURCES:
@@ -511,24 +512,29 @@ def render_investment_course_page() -> None:
                 )
             else:
                 uni_key = f"{key}_universe"
-                market_sources = BROAD_SCAN_SOURCES or nse_scan_sources(SCAN_SOURCES)
-                # Always surface full NSE at the top of Broad market.
-                all_nse = "All NSE equities (~2300) - very slow"
-                market_sources = [all_nse] + [s for s in market_sources if s != all_nse]
-                market_sources.extend(s for s in US_SCAN_SOURCES if s not in market_sources)
+                if uni_scope == "US stocks":
+                    market_sources = list(US_SCAN_SOURCES)
+                    market_label = "US stock universe"
+                    default_source = market_sources[0]
+                else:
+                    market_sources = BROAD_SCAN_SOURCES or nse_scan_sources(SCAN_SOURCES)
+                    # Always surface full NSE at the top of the NSE market dropdown.
+                    all_nse = "All NSE equities (~2300) - very slow"
+                    market_sources = [all_nse] + [s for s in market_sources if s != all_nse]
+                    market_label = "NSE stock universe"
+                    default_source = market_sources[1] if len(market_sources) > 1 else market_sources[0]
                 ensure_session_choice(
                     uni_key,
                     market_sources,
-                    market_sources[1] if len(market_sources) > 1 else market_sources[0],
+                    default_source,
                 )
                 universe = st.selectbox(
-                    "Stock universe",
+                    market_label,
                     market_sources,
                     key=uni_key,
                     format_func=lambda s: f"{s} ({universe_ticker_count(s)})",
                     help=(
-                        "Choose an NSE or US universe. Full NSE scans are slow; "
-                        "curated lists and index universes are quicker."
+                        "Choose a curated list or index universe. Full NSE scans are slow."
                     ),
                 )
                 if not is_us_source(universe):
