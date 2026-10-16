@@ -1,0 +1,72 @@
+streamlit run Overview.py
+
+
+
+----->
+
+email id ::---> 
+aadhaar card sign
+
+
+<-----
+
+
+
+--->
+Recent
+Sales
+OPM
+Profit after tax
+Market Capitalization
+Sales latest quarter
+Profit after tax latest quarter
+YOY Quarterly sales growth
+YOY Quarterly profit growth
+Price to Earning
+Dividend yield
+Price to book value
+Return on capital employed
+Return on assets
+Debt to equity
+Return on equity
+EPS
+Debt
+Promoter holding
+Change in promoter holding
+Earnings yield
+Pledged percentage
+Industry PE
+Sales growth
+Profit growth
+Current price
+Price to Sales
+Price to Free Cash Flow
+EVEBITDA
+Enterprise Value
+Current ratio
+Interest Coverage Ratio
+PEG Ratio
+Return over 3months
+Return over 6months 
+
+Return on invested capital > 25 and
+Earnings yield > 15 and
+Book value > 0 AND
+Market Capitalization > 15
+
+ FII Buying
+Change in FII holding  > 1% AND
+(FII holding - Change in FII holding ) < 5%
+
+Low on 10 year average earnings
+Market Capitalization /  Average Earnings 10Year < 15 AND
+Average dividend payout 3years > 20 AND
+Debt to equity < .2 AND
+Average return on capital employed 7Years > 20
+
+ Companies creating new high
+Current price > High price * .85 AND
+Market Capitalization > 100
+
+run ollama 
+ollama run qwen3:4b

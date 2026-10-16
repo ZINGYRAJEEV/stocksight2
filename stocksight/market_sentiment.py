@@ -49,6 +49,25 @@ class SentimentVerdict:
     warnings: list[str] = field(default_factory=list)
 
 
+@dataclass
+class GlobalGauges:
+    """Cross-market tape (Yahoo) — context for the dual mood screen."""
+
+    usd_inr_pct: Optional[float] = None
+    usd_inr_last: Optional[float] = None
+    dxy_pct: Optional[float] = None
+    dxy_last: Optional[float] = None
+    us10y_last: Optional[float] = None
+    us10y_pct: Optional[float] = None
+    crude_pct: Optional[float] = None
+    gold_pct: Optional[float] = None
+    detail: str = ""
+
+
+_GAUGE_CACHE: tuple[float, GlobalGauges] | None = None
+_GAUGE_TTL = 300
+
+
 # ─────────────────────────────────────────────────────────────
 # Macro fetch (cached per market)
 # ─────────────────────────────────────────────────────────────
@@ -206,6 +225,82 @@ def market_from_universe(universe_name: str = "") -> str:
     if any(x in u for x in ("S&P", "NYSE", "NASDAQ", "US", "NYSE")):
         return "US"
     return "NSE"
+
+
+def vix_bucket(level: Optional[float], *, india: bool = False) -> str:
+    """Plain-language VIX regime (India VIX and CBOE VIX use similar bands)."""
+    if level is None:
+        return "n/a"
+    # India VIX often prints a bit higher than US VIX in quiet markets
+    calm, elevated, stress = (12.0, 16.0, 20.0) if india else (13.0, 18.0, 22.0)
+    if level < calm:
+        return "calm"
+    if level < elevated:
+        return "normal"
+    if level < stress:
+        return "elevated"
+    return "stress"
+
+
+def mood_emoji(tone: str) -> str:
+    t = (tone or "Neutral").title()
+    if t == "Bullish":
+        return "🟢"
+    if t == "Bearish":
+        return "🔴"
+    return "🟡"
+
+
+def cross_market_read(india_tone: str, us_tone: str) -> str:
+    """One-line implication when both tapes are visible."""
+    i = (india_tone or "Neutral").title()
+    u = (us_tone or "Neutral").title()
+    if i == "Bullish" and u == "Bullish":
+        return "Both tapes constructive — risk-on; still size by stock-level setups."
+    if i == "Bearish" and u == "Bearish":
+        return "Both tapes defensive — prefer wait / hedges; avoid chasing dips blindly."
+    if u == "Bearish" and i != "Bearish":
+        return "US weak vs India — next India session often follows overnight SPY/QQQ."
+    if u == "Bullish" and i == "Bearish":
+        return "US firmer than India — India may be stock/FII specific, not a global crash."
+    if i == "Bullish" and u == "Neutral":
+        return "India leading a quiet US tape — don't assume US will confirm tomorrow."
+    return "Mixed / neutral — trade individual setups; don't lean on a single market call."
+
+
+def get_global_gauges(*, force_refresh: bool = False) -> GlobalGauges:
+    """USD-INR, DXY, US 10Y, crude, gold — Yahoo only, 5-minute cache."""
+    global _GAUGE_CACHE
+    now = time.time()
+    if _GAUGE_CACHE and not force_refresh and (now - _GAUGE_CACHE[0]) < _GAUGE_TTL:
+        return _GAUGE_CACHE[1]
+
+    g = GlobalGauges()
+    g.usd_inr_pct = _day_change_pct("USDINR=X")
+    g.usd_inr_last = _last_close("USDINR=X")
+    g.dxy_pct = _day_change_pct("DX-Y.NYB")
+    g.dxy_last = _last_close("DX-Y.NYB")
+    g.us10y_last = _last_close("^TNX")
+    g.us10y_pct = _day_change_pct("^TNX")
+    g.crude_pct = _day_change_pct("CL=F")
+    g.gold_pct = _day_change_pct("GC=F")
+
+    bits: list[str] = []
+    if g.usd_inr_last is not None:
+        ch = f" {g.usd_inr_pct:+.1f}%" if g.usd_inr_pct is not None else ""
+        bits.append(f"USD/INR {g.usd_inr_last:.2f}{ch}")
+    if g.dxy_last is not None:
+        ch = f" {g.dxy_pct:+.1f}%" if g.dxy_pct is not None else ""
+        bits.append(f"DXY {g.dxy_last:.1f}{ch}")
+    if g.us10y_last is not None:
+        bits.append(f"US 10Y {g.us10y_last:.2f}%")
+    if g.crude_pct is not None:
+        bits.append(f"Crude {g.crude_pct:+.1f}%")
+    if g.gold_pct is not None:
+        bits.append(f"Gold {g.gold_pct:+.1f}%")
+    g.detail = " · ".join(bits) if bits else "Global gauges limited"
+    _GAUGE_CACHE = (now, g)
+    return g
 
 
 # ─────────────────────────────────────────────────────────────
