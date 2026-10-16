@@ -292,6 +292,127 @@ class TestUSUniverse(unittest.TestCase):
         fetch_profile.assert_not_called()
 
 
+class TestEuropeUniverse(unittest.TestCase):
+    def test_europe_curated_source_resolves_eurozone_tickers(self):
+        from investment_course_screener import (
+            EUROPE_SCAN_SOURCES,
+            resolve_investment_course_tickers,
+        )
+        from multibagger import (
+            CURATED_EUROPE_LABEL,
+            is_europe_source,
+            resolve_scan_tickers,
+        )
+
+        tickers = resolve_scan_tickers(CURATED_EUROPE_LABEL)
+
+        self.assertTrue(is_europe_source(CURATED_EUROPE_LABEL))
+        self.assertIn(CURATED_EUROPE_LABEL, EUROPE_SCAN_SOURCES)
+        self.assertGreaterEqual(len(tickers), 20)
+        self.assertTrue(
+            all(raw.endswith((".DE", ".PA", ".AS", ".MI", ".MC", ".BR")) for _, raw in tickers)
+        )
+        self.assertEqual(
+            resolve_investment_course_tickers(CURATED_EUROPE_LABEL), tickers
+        )
+
+    def test_yahoo_profile_preserves_euro_currency_and_cap(self):
+        from investment_course_screener import _yahoo_us_profile
+
+        statements = pd.DataFrame(
+            [
+                [172.8, 140.0, 120.0, 100.0],
+                [17.28, 14.0, 12.0, 10.0],
+            ],
+            index=["Total Revenue", "Net Income"],
+            columns=["2025-12-31", "2024-12-31", "2023-12-31", "2022-12-31"],
+        )
+        stock = SimpleNamespace(
+            info={"currency": "EUR", "marketCap": 800_000_000_000, "currentPrice": 250},
+            financials=statements,
+            fast_info={},
+        )
+
+        profile = _yahoo_us_profile(stock, default_currency="EUR")
+
+        self.assertEqual(profile["currency"], "EUR")
+        self.assertEqual(profile["market_cap_native_bn"], 800.0)
+        self.assertEqual(profile["market_cap_eur_bn"], 800.0)
+        self.assertIsNone(profile["market_cap_usd_bn"])
+        self.assertEqual(profile["market_cap_display"], "€800.00B")
+
+    def test_europe_ticker_runs_through_yahoo_scan_path(self):
+        import investment_course_screener as course
+        from multibagger import CURATED_EUROPE_LABEL
+
+        statements = pd.DataFrame(
+            [
+                [172.8, 140.0, 120.0, 100.0],
+                [17.28, 14.0, 12.0, 10.0],
+            ],
+            index=["Total Revenue", "Net Income"],
+            columns=["2025-12-31", "2024-12-31", "2023-12-31", "2022-12-31"],
+        )
+        stock = SimpleNamespace(
+            info={
+                "currency": "EUR",
+                "marketCap": 800_000_000_000,
+                "currentPrice": 250,
+                "trailingPE": 25,
+            },
+            financials=statements,
+            fast_info={},
+        )
+        dma = {
+            "_dma_ok": True,
+            "_dma_price": None,
+            "ma50": None,
+            "ma200": None,
+            "pct_vs_50dma": None,
+            "pct_vs_200dma": None,
+        }
+
+        with (
+            patch.object(
+                course,
+                "resolve_investment_course_tickers",
+                return_value=[("Test Europe Co", "TEST.DE")],
+            ),
+            patch.object(course.yf, "Ticker", return_value=stock),
+            patch.object(course, "get_sector_industry", return_value=("Technology", "Software")),
+            patch.object(course, "_attach_dma", return_value=dma),
+            patch.object(course, "research_links", return_value={}),
+            patch.object(course, "fetch_screener_company_html") as fetch_html,
+            patch.object(course, "fetch_screener_value_profile") as fetch_profile,
+        ):
+            outcome = course.scan_investment_course(
+                CURATED_EUROPE_LABEL,
+                filters=course.InvestmentCourseFilters(
+                    include_wealth=False,
+                    need_pe_history=False,
+                    screener_delay_sec=0,
+                ),
+            )
+            filtered = course.scan_investment_course(
+                CURATED_EUROPE_LABEL,
+                filters=course.InvestmentCourseFilters(
+                    mode="workflow_a_fast",
+                    min_market_cap_eur_bn=900.0,
+                    include_wealth=False,
+                    need_pe_history=False,
+                    screener_delay_sec=0,
+                ),
+            )
+
+        self.assertEqual(len(outcome.hits), 1)
+        self.assertEqual(outcome.hits[0].raw_ticker, "TEST.DE")
+        self.assertEqual(outcome.hits[0].currency, "EUR")
+        self.assertEqual(outcome.hits[0].market_cap_display, "€800.00B")
+        self.assertEqual(filtered.hits, [])
+        fetch_html.assert_not_called()
+        fetch_profile.assert_not_called()
+
+
 class TestDataQualityGates(unittest.TestCase):
     def test_psb_style_missing_cagr_dropped(self):
         from investment_course_screener import InvestmentCourseFilters, passes_data_quality_gates

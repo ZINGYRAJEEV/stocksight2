@@ -58,6 +58,7 @@ US_UNIVERSES = [k for k in UNIVERSES if any(x in k for x in ("NYSE", "NASDAQ", "
 
 CURATED_NSE_LABEL = "Curated NSE (ROCE export names)"
 CURATED_US_LABEL = "Curated US (mega/large-cap)"
+CURATED_EUROPE_LABEL = "Curated Europe (EUR large-cap)"
 
 # Curated high-ROCE NSE names (verify symbols on NSE).
 CURATED_MULTIBAGGER: list[dict[str, str]] = [
@@ -104,6 +105,31 @@ CURATED_MULTIBAGGER_US: list[dict[str, str]] = [
     {"label": "Berkshire Hathaway B", "ticker": "BRK-B"},
 ]
 
+CURATED_MULTIBAGGER_EUROPE: list[dict[str, str]] = [
+    {"label": "ASML", "ticker": "ASML.AS"},
+    {"label": "SAP", "ticker": "SAP.DE"},
+    {"label": "Siemens", "ticker": "SIE.DE"},
+    {"label": "Allianz", "ticker": "ALV.DE"},
+    {"label": "Airbus", "ticker": "AIR.PA"},
+    {"label": "LVMH", "ticker": "MC.PA"},
+    {"label": "L'Oreal", "ticker": "OR.PA"},
+    {"label": "TotalEnergies", "ticker": "TTE.PA"},
+    {"label": "Sanofi", "ticker": "SAN.PA"},
+    {"label": "Schneider Electric", "ticker": "SU.PA"},
+    {"label": "Air Liquide", "ticker": "AI.PA"},
+    {"label": "Dassault Systemes", "ticker": "DSY.PA"},
+    {"label": "Deutsche Telekom", "ticker": "DTE.DE"},
+    {"label": "Infineon", "ticker": "IFX.DE"},
+    {"label": "Adidas", "ticker": "ADS.DE"},
+    {"label": "ING Group", "ticker": "INGA.AS"},
+    {"label": "Adyen", "ticker": "ADYEN.AS"},
+    {"label": "Enel", "ticker": "ENEL.MI"},
+    {"label": "Ferrari", "ticker": "RACE.MI"},
+    {"label": "Iberdrola", "ticker": "IBE.MC"},
+    {"label": "Banco Santander", "ticker": "SAN.MC"},
+    {"label": "AB InBev", "ticker": "ABI.BR"},
+]
+
 _THEME_LABELS = theme_scan_source_labels()
 _NSE_BASE = [k for k in NSE_UNIVERSES if k not in _THEME_LABELS]
 SCAN_SOURCES = (
@@ -111,6 +137,7 @@ SCAN_SOURCES = (
     + _THEME_LABELS
     + _NSE_BASE
     + [CURATED_US_LABEL]
+    + [CURATED_EUROPE_LABEL]
     + US_UNIVERSES
 )
 
@@ -125,6 +152,11 @@ def is_us_source(scan_source: str) -> bool:
     if scan_source == CURATED_US_LABEL:
         return True
     return scan_source in US_UNIVERSES
+
+
+def is_europe_source(scan_source: str) -> bool:
+    """True for the curated euro-denominated European universe."""
+    return scan_source == CURATED_EUROPE_LABEL
 
 
 def is_nse_source(scan_source: str) -> bool:
@@ -375,6 +407,11 @@ def resolve_scan_tickers(scan_source: str) -> list[tuple[str, str]]:
             if t:
                 out_us.append((str(row.get("label") or t), t))
         return out_us
+    if scan_source == CURATED_EUROPE_LABEL:
+        return [
+            (str(row["label"]), str(row["ticker"]))
+            for row in CURATED_MULTIBAGGER_EUROPE
+        ]
 
     tickers = get_universe_tickers(scan_source)
     out_uni: list[tuple[str, str]] = []

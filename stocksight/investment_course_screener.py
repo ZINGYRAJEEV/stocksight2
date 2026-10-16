@@ -18,8 +18,10 @@ import yfinance as yf
 try:
     from .multibagger import (
         CURATED_US_LABEL,
+        CURATED_EUROPE_LABEL,
         SCAN_SOURCES,
         US_UNIVERSES,
+        is_europe_source,
         is_us_source,
         resolve_scan_tickers,
     )
@@ -34,8 +36,10 @@ try:
 except ImportError:
     from multibagger import (
         CURATED_US_LABEL,
+        CURATED_EUROPE_LABEL,
         SCAN_SOURCES,
         US_UNIVERSES,
+        is_europe_source,
         is_us_source,
         resolve_scan_tickers,
     )
@@ -78,6 +82,8 @@ for _s in [_ALL_NSE_LABEL, *nse_scan_sources(SCAN_SOURCES)]:
 if _ALL_NSE_LABEL not in BROAD_SCAN_SOURCES:
     BROAD_SCAN_SOURCES.insert(0, _ALL_NSE_LABEL)
 US_SCAN_SOURCES = [CURATED_US_LABEL, *US_UNIVERSES]
+EUROPE_SCAN_SOURCES = [CURATED_EUROPE_LABEL]
+EUROPE_CURRENCY = "EUR"
 
 
 def resolve_investment_course_tickers(scan_source: str) -> list[tuple[str, str]]:
@@ -96,8 +102,8 @@ def universe_ticker_count(scan_source: str) -> int:
     return len(resolve_investment_course_tickers(scan_source))
 
 
-def _yahoo_us_profile(stock: yf.Ticker) -> dict:
-    """Build Investment Course inputs from Yahoo Finance for a US-listed company."""
+def _yahoo_us_profile(stock: yf.Ticker, *, default_currency: str = "USD") -> dict:
+    """Build Investment Course inputs from Yahoo Finance using native quote currency."""
     try:
         info = stock.info or {}
     except Exception:
@@ -162,13 +168,19 @@ def _yahoo_us_profile(stock: yf.Ticker) -> dict:
     if price is not None and not math.isfinite(price):
         price = None
 
+    currency = str(
+        info.get("currency") or info.get("financialCurrency") or default_currency
+    ).upper()
     market_cap_bn = market_cap / 1_000_000_000 if market_cap and market_cap > 0 else None
     market_cap_display = "—"
     if market_cap_bn is not None:
+        symbol = {"USD": "$", "EUR": "€", "GBP": "£", "CHF": "CHF "}.get(
+            currency, f"{currency} "
+        )
         market_cap_display = (
-            f"${market_cap_bn / 1_000:.2f}T"
+            f"{symbol}{market_cap_bn / 1_000:.2f}T"
             if market_cap_bn >= 1_000
-            else f"${market_cap_bn:.2f}B"
+            else f"{symbol}{market_cap_bn:.2f}B"
         )
 
     return {
@@ -180,9 +192,11 @@ def _yahoo_us_profile(stock: yf.Ticker) -> dict:
         "price": price,
         "roce_pct": growth_pct("returnOnCapitalEmployed", "returnOnEquity"),
         "market_cap_cr": None,
-        "market_cap_usd_bn": market_cap_bn,
+        "market_cap_usd_bn": market_cap_bn if currency == "USD" else None,
+        "market_cap_eur_bn": market_cap_bn if currency == "EUR" else None,
+        "market_cap_native_bn": market_cap_bn,
         "market_cap_display": market_cap_display,
-        "currency": "USD",
+        "currency": currency,
     }
 
 META = {
@@ -252,8 +266,10 @@ class InvestmentCourseFilters:
     min_fy_points: int = 3
     min_market_cap_cr: float = 500.0
     min_market_cap_usd_bn: float = 0.0
+    min_market_cap_eur_bn: float = 0.0
     volume_min_market_cap_cr: float = 50.0
     volume_min_market_cap_usd_bn: float = 0.0
+    volume_min_market_cap_eur_bn: float = 0.0
     max_debt_equity: float = 2.0
     min_roce_pct: float = 0.0
     vol_mult: float = 5.0
@@ -891,6 +907,8 @@ def scan_investment_course(
     mode = flt.mode if flt.mode in SCAN_MODES else "step0_categorize"
     universe = resolve_investment_course_tickers(scan_source)
     us_market = is_us_source(scan_source)
+    europe_market = is_europe_source(scan_source)
+    yahoo_market = us_market or europe_market
     if not universe:
         return ScanChunkResult(hits=[], next_index=0, total=0, done=True)
 
@@ -918,7 +936,7 @@ def scan_investment_course(
         label, raw = universe[i]
         if progress_cb:
             progress_cb(i + 1, total, raw)
-        if not us_market and not (raw.endswith(".NS") or raw.endswith(".BO")):
+        if not yahoo_market and not (raw.endswith(".NS") or raw.endswith(".BO")):
             continue
 
         disp = raw.replace(".NS", "").replace(".BO", "")
@@ -933,10 +951,17 @@ def scan_investment_course(
                 if vol_ratio < flt.vol_mult or week_ret <= flt.min_week_return_pct:
                     continue
 
-                if us_market:
-                    profile = _yahoo_us_profile(yf.Ticker(raw))
-                    mcap = profile.get("market_cap_usd_bn")
-                    min_mcap = flt.volume_min_market_cap_usd_bn
+                if yahoo_market:
+                    profile = _yahoo_us_profile(
+                        yf.Ticker(raw),
+                        default_currency=EUROPE_CURRENCY if europe_market else "USD",
+                    )
+                    if europe_market:
+                        mcap = profile.get("market_cap_eur_bn")
+                        min_mcap = flt.volume_min_market_cap_eur_bn
+                    else:
+                        mcap = profile.get("market_cap_usd_bn")
+                        min_mcap = flt.volume_min_market_cap_usd_bn
                 else:
                     profile = fetch_screener_value_profile(disp)
                     mcap = profile.get("market_cap_cr")
@@ -997,7 +1022,7 @@ def scan_investment_course(
                         peg=peg,
                         peg_verdict=peg_verdict(peg),
                         roce_pct=profile.get("roce_pct"),
-                        market_cap_cr=None if us_market else mcap,
+                        market_cap_cr=None if yahoo_market else mcap,
                         market_cap_display=(profile.get("market_cap_display") or _mcap_display(mcap)),
                         week_return_pct=week_ret,
                         vol_ratio=vol_ratio,
@@ -1012,19 +1037,22 @@ def scan_investment_course(
                         **dma_pack,
                     )
                 )
-                if flt.screener_delay_sec > 0:
+                if not yahoo_market and flt.screener_delay_sec > 0:
                     time.sleep(flt.screener_delay_sec)
                 continue
 
-            if us_market:
+            if yahoo_market:
                 stock = yf.Ticker(raw)
                 html = ""
-                profile = _yahoo_us_profile(stock)
+                profile = _yahoo_us_profile(
+                    stock,
+                    default_currency=EUROPE_CURRENCY if europe_market else "USD",
+                )
             else:
                 stock = yf.Ticker(raw)
                 html = fetch_screener_company_html(disp)
                 profile = None
-            if not us_market and flt.screener_delay_sec > 0:
+            if not yahoo_market and flt.screener_delay_sec > 0:
                 time.sleep(flt.screener_delay_sec)
             if profile is None:
                 profile = fetch_screener_value_profile(disp, html=html or "")
@@ -1036,7 +1064,12 @@ def scan_investment_course(
             sales_ttm = profile.get("sales_growth_ttm_pct")
             profit_ttm = profile.get("profit_growth_ttm_pct")
             pe = profile.get("pe")
-            mcap = profile.get("market_cap_usd_bn") if us_market else profile.get("market_cap_cr")
+            if europe_market:
+                mcap = profile.get("market_cap_eur_bn")
+            elif us_market:
+                mcap = profile.get("market_cap_usd_bn")
+            else:
+                mcap = profile.get("market_cap_cr")
             roce = profile.get("roce_pct")
             price = profile.get("price")
 
@@ -1056,7 +1089,7 @@ def scan_investment_course(
             fy_med = None
             pct_vs = None
             n_fy = 0
-            if not us_market and flt.need_pe_history and _needs_pe_history(mode, cat):
+            if not yahoo_market and flt.need_pe_history and _needs_pe_history(mode, cat):
                 try:
                     _pts, meta = build_pe_history(disp, raw, html=html or "")
                     fy_med = meta.get("fy_median_pe") or meta.get("median_pe")
@@ -1073,7 +1106,7 @@ def scan_investment_course(
 
             peg = _peg(pe, profit)
             notes = [rationale]
-            if us_market:
+            if yahoo_market:
                 notes.append("Yahoo Finance annual statements; historical P/E median unavailable")
             if peg is not None:
                 notes.append(f"PEG {peg:.2f}")
@@ -1081,7 +1114,12 @@ def scan_investment_course(
                 notes.append(f"P/E {pe:.1f} vs FY med {fy_med:.1f} ({pct_vs:+.1f}%)")
             notes.append(f"Quick-Fire {ck_score}/{ck_max}")
 
-            min_mcap = flt.min_market_cap_usd_bn if us_market else flt.min_market_cap_cr
+            if europe_market:
+                min_mcap = flt.min_market_cap_eur_bn
+            elif us_market:
+                min_mcap = flt.min_market_cap_usd_bn
+            else:
+                min_mcap = flt.min_market_cap_cr
             if mode != "step0_categorize" and mcap is not None and mcap < min_mcap:
                 continue
             if flt.min_roce_pct > 0 and (roce is None or roce < flt.min_roce_pct):
@@ -1188,7 +1226,7 @@ def scan_investment_course(
                     peg=peg,
                     peg_verdict=peg_verdict(peg),
                     roce_pct=roce,
-                    market_cap_cr=None if us_market else mcap,
+                    market_cap_cr=None if yahoo_market else mcap,
                     market_cap_display=(profile.get("market_cap_display") or _mcap_display(mcap)),
                     opm_latest_pct=qf.get("opm_latest_pct"),
                     opm_delta_pp=qf.get("opm_delta_pp"),

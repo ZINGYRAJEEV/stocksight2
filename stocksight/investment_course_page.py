@@ -24,12 +24,14 @@ from investment_course_screener import (
     SCAN_SOURCES,
     SECTOR_SCAN_SOURCES,
     US_SCAN_SOURCES,
+    EUROPE_SCAN_SOURCES,
     InvestmentCourseFilters,
     group_results_by_sector,
     resolve_investment_course_tickers,
     result_to_row,
     scan_investment_course,
     sort_investment_course,
+    is_europe_source,
     is_us_source,
     universe_ticker_count,
 )
@@ -65,6 +67,12 @@ from ui_components import (
 
 
 VALUATION_RULEBOOK_PAGE = "stocksight/pages/Valuation Rulebook.py"
+
+
+def _currency_symbol(currency: str) -> str:
+    return {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£", "CHF": "CHF "}.get(
+        str(currency or "INR").upper(), f"{currency} "
+    )
 
 
 def _rules_panel() -> None:
@@ -113,7 +121,7 @@ def _story_panel() -> None:
 
 def _render_selected_wealth(r) -> None:
     """Wealth / Rulebook panel for the clicked scan row."""
-    currency_symbol = "$" if getattr(r, "currency", "INR") == "USD" else "₹"
+    currency_symbol = _currency_symbol(getattr(r, "currency", "INR"))
     if not r or not (r.wealth_verdict or r.model_target):
         st.info(
             "No Valuation Rulebook snapshot for this name "
@@ -197,7 +205,7 @@ def _render_post_scan_workflow(r) -> None:
     if not r:
         return
 
-    currency_symbol = "$" if getattr(r, "currency", "INR") == "USD" else "₹"
+    currency_symbol = _currency_symbol(getattr(r, "currency", "INR"))
     ticker = str(r.ticker)
     links = enrich_research_links(r.links or {}, r.ticker, r.label or r.ticker)
     prefix = f"invc_ps_{ticker}"
@@ -483,14 +491,14 @@ def render_investment_course_page() -> None:
         with c1:
             st.markdown("#### Universe")
             scope_key = f"{key}_uni_scope"
-            scan_scopes = ["By sector", "NSE market", "US stocks"]
+            scan_scopes = ["By sector", "NSE market", "US stocks", "Europe"]
             ensure_session_choice(scope_key, scan_scopes, "By sector")
             uni_scope = st.radio(
                 "Market universe",
                 scan_scopes,
                 horizontal=True,
                 key=scope_key,
-                help="Choose sector baskets, NSE universes, or US stock universes.",
+                help="Choose sector baskets or NSE, US, and European stock universes.",
             )
 
             if uni_scope == "By sector" and SECTOR_SCAN_SOURCES:
@@ -516,6 +524,10 @@ def render_investment_course_page() -> None:
                     market_sources = list(US_SCAN_SOURCES)
                     market_label = "US stock universe"
                     default_source = market_sources[0]
+                elif uni_scope == "Europe":
+                    market_sources = list(EUROPE_SCAN_SOURCES)
+                    market_label = "European stock universe"
+                    default_source = market_sources[0]
                 else:
                     market_sources = BROAD_SCAN_SOURCES or nse_scan_sources(SCAN_SOURCES)
                     # Always surface full NSE at the top of the NSE market dropdown.
@@ -537,7 +549,7 @@ def render_investment_course_page() -> None:
                         "Choose a curated list or index universe. Full NSE scans are slow."
                     ),
                 )
-                if not is_us_source(universe):
+                if uni_scope == "NSE market":
                     st.caption(
                         "💡 Full list = **All NSE equities (~2300) - very slow** (first row in this dropdown)."
                     )
@@ -557,9 +569,12 @@ def render_investment_course_page() -> None:
                 else:
                     st.caption(f"**{n_uni}** tickers in this broad list.")
 
-                if is_us_source(universe) and mode in ("buy_candidates", "stalwarts_discount"):
+                if (is_us_source(universe) or is_europe_source(universe)) and mode in (
+                    "buy_candidates",
+                    "stalwarts_discount",
+                ):
                     st.info(
-                        "US scans use Yahoo Finance fundamentals. Historical FY median P/E is not "
+                        "US and Europe scans use Yahoo Finance fundamentals. Historical FY median P/E is not "
                         "available here, so Stalwart discount matches are omitted; Buy candidates "
                         "can still include PEG-qualified Fast Growers."
                     )
@@ -617,32 +632,44 @@ def render_investment_course_page() -> None:
         with c3:
             st.markdown("#### Size, Quick-Fire & volume")
             us_market = is_us_source(universe)
-            if us_market:
+            europe_market = is_europe_source(universe)
+            if us_market or europe_market:
                 min_mcap = 500.0
-                min_mcap_usd = st.slider(
-                    "Min market cap ($B)", 0.0, 5000.0, 0.0, 5.0, key=f"{key}_mcap_usd"
+                currency_key = "eur" if europe_market else "usd"
+                min_mcap_foreign = st.slider(
+                    f"Min market cap ({'€' if europe_market else '$'}B)",
+                    0.0,
+                    5000.0,
+                    0.0,
+                    5.0,
+                    key=f"{key}_mcap_{currency_key}",
                 )
+                min_mcap_usd = min_mcap_foreign if us_market else 0.0
+                min_mcap_eur = min_mcap_foreign if europe_market else 0.0
             else:
                 min_mcap = st.slider(
                     "Min market cap (₹ Cr)", 100.0, 5000.0, 500.0, 50.0, key=f"{key}_mcap"
                 )
                 min_mcap_usd = 0.0
+                min_mcap_eur = 0.0
             min_qf = st.slider("Min Quick-Fire score (0 = off)", 0, 8, 0, 1, key=f"{key}_qf")
             require_qf = st.checkbox(
                 "Workflow A: require strong Quick-Fire",
                 value=False,
                 key=f"{key}_req_qf",
             )
-            if us_market:
+            if us_market or europe_market:
                 vol_mcap = 50.0
-                vol_mcap_usd = st.slider(
-                    "Volume min market cap ($B)",
+                vol_mcap_foreign = st.slider(
+                    f"Volume min market cap ({'€' if europe_market else '$'}B)",
                     0.0,
                     1000.0,
                     0.0,
                     5.0,
-                    key=f"{key}_vmcap_usd",
+                    key=f"{key}_vmcap_{currency_key}",
                 )
+                vol_mcap_usd = vol_mcap_foreign if us_market else 0.0
+                vol_mcap_eur = vol_mcap_foreign if europe_market else 0.0
             else:
                 vol_mcap = st.slider(
                     "Volume mode min mcap (₹ Cr)",
@@ -653,6 +680,7 @@ def render_investment_course_page() -> None:
                     key=f"{key}_vmcap",
                 )
                 vol_mcap_usd = 0.0
+                vol_mcap_eur = 0.0
             vol_mult = st.slider("Volume multiple (1w vs 1y)", 2.0, 10.0, 5.0, 0.5, key=f"{key}_vmult")
             min_wret = st.slider("Min 1-week return %", 1.0, 20.0, 5.0, 0.5, key=f"{key}_wret")
 
@@ -711,8 +739,10 @@ def render_investment_course_page() -> None:
         min_fy_points=min_fy,
         min_market_cap_cr=min_mcap,
         min_market_cap_usd_bn=min_mcap_usd,
+        min_market_cap_eur_bn=min_mcap_eur,
         volume_min_market_cap_cr=vol_mcap,
         volume_min_market_cap_usd_bn=vol_mcap_usd,
+        volume_min_market_cap_eur_bn=vol_mcap_eur,
         min_roce_pct=min_roce,
         vol_mult=vol_mult,
         min_week_return_pct=min_wret,
@@ -1104,9 +1134,12 @@ def render_investment_course_page() -> None:
 
     # Build a master df (all filtered results) for detail / PE panels
     df = _df_for(results, "all")
-    currency_symbol = "$" if is_us_source(last_uni) else "₹"
-    currency_format = "$%.2f" if currency_symbol == "$" else "₹%.0f"
-    price_format = "$%.2f" if currency_symbol == "$" else "₹%.2f"
+    result_currency = (
+        "USD" if is_us_source(last_uni) else "EUR" if is_europe_source(last_uni) else "INR"
+    )
+    currency_symbol = _currency_symbol(result_currency)
+    currency_format = f"{currency_symbol}%.2f" if result_currency != "INR" else "₹%.0f"
+    price_format = f"{currency_symbol}%.2f"
 
     col_cfg = filter_column_config(
         df if not df.empty else pd.DataFrame([{"Ticker": ""}]),
