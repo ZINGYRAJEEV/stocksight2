@@ -8,6 +8,7 @@ Educational only; inspired by course notes — not affiliated with Financially F
 from __future__ import annotations
 
 import time
+import math
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 from urllib.parse import quote_plus
@@ -15,7 +16,13 @@ from urllib.parse import quote_plus
 import yfinance as yf
 
 try:
-    from .multibagger import SCAN_SOURCES, resolve_scan_tickers
+    from .multibagger import (
+        CURATED_US_LABEL,
+        SCAN_SOURCES,
+        US_UNIVERSES,
+        is_us_source,
+        resolve_scan_tickers,
+    )
     from .theme_baskets import nse_scan_sources
     from .pe_history import build_pe_history
     from .screener import fetch_price_history, get_sector_industry, get_stock_links, hist_series
@@ -25,7 +32,13 @@ try:
         fetch_screener_value_profile,
     )
 except ImportError:
-    from multibagger import SCAN_SOURCES, resolve_scan_tickers
+    from multibagger import (
+        CURATED_US_LABEL,
+        SCAN_SOURCES,
+        US_UNIVERSES,
+        is_us_source,
+        resolve_scan_tickers,
+    )
     from theme_baskets import nse_scan_sources
     from pe_history import build_pe_history
     from screener import fetch_price_history, get_sector_industry, get_stock_links, hist_series
@@ -64,10 +77,11 @@ for _s in [_ALL_NSE_LABEL, *nse_scan_sources(SCAN_SOURCES)]:
     BROAD_SCAN_SOURCES.append(_s)
 if _ALL_NSE_LABEL not in BROAD_SCAN_SOURCES:
     BROAD_SCAN_SOURCES.insert(0, _ALL_NSE_LABEL)
+US_SCAN_SOURCES = [CURATED_US_LABEL, *US_UNIVERSES]
 
 
 def resolve_investment_course_tickers(scan_source: str) -> list[tuple[str, str]]:
-    """Resolve broad NSE/curated lists or sector baskets into (label, raw) pairs."""
+    """Resolve NSE, US, or sector universes into (label, raw) pairs."""
     if scan_source in SECTOR_SCAN_SOURCES:
         out: list[tuple[str, str]] = []
         for t in SECTOR_SCAN_SOURCES[scan_source]:
@@ -80,6 +94,96 @@ def resolve_investment_course_tickers(scan_source: str) -> list[tuple[str, str]]
 
 def universe_ticker_count(scan_source: str) -> int:
     return len(resolve_investment_course_tickers(scan_source))
+
+
+def _yahoo_us_profile(stock: yf.Ticker) -> dict:
+    """Build Investment Course inputs from Yahoo Finance for a US-listed company."""
+    try:
+        info = stock.info or {}
+    except Exception:
+        info = {}
+
+    try:
+        statements = stock.financials
+    except Exception:
+        statements = None
+
+    def statement_cagr(row_names: tuple[str, ...]) -> Optional[float]:
+        if statements is None or getattr(statements, "empty", True):
+            return None
+        matching_row = next(
+            (row for row in statements.index if str(row).casefold() in row_names),
+            None,
+        )
+        if matching_row is None:
+            return None
+        dated_values = []
+        try:
+            row_values = statements.loc[matching_row]
+            for date, raw_value in row_values.items():
+                value = float(raw_value)
+                if math.isfinite(value):
+                    dated_values.append((str(date), value))
+        except (TypeError, ValueError, AttributeError):
+            return None
+        dated_values.sort(key=lambda item: item[0], reverse=True)
+        if len(dated_values) < 4:
+            return None
+        latest, oldest = dated_values[0][1], dated_values[3][1]
+        if latest <= 0 or oldest <= 0:
+            return None
+        return round(((latest / oldest) ** (1.0 / 3.0) - 1.0) * 100.0, 2)
+
+    def info_number(*keys: str) -> Optional[float]:
+        for key in keys:
+            try:
+                value = float(info.get(key))
+                if math.isfinite(value):
+                    return value
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def growth_pct(*keys: str) -> Optional[float]:
+        value = info_number(*keys)
+        if value is None:
+            return None
+        return round(value * 100.0 if abs(value) <= 1.0 else value, 2)
+
+    revenue_growth = statement_cagr(("total revenue", "operating revenue", "revenue"))
+    profit_growth = statement_cagr(("net income", "net income common stockholders"))
+    market_cap = info_number("marketCap")
+    price = info_number("currentPrice", "regularMarketPrice")
+    if price is None:
+        try:
+            price = float(stock.fast_info.get("last_price"))
+        except (TypeError, ValueError, AttributeError):
+            price = None
+    if price is not None and not math.isfinite(price):
+        price = None
+
+    market_cap_bn = market_cap / 1_000_000_000 if market_cap and market_cap > 0 else None
+    market_cap_display = "—"
+    if market_cap_bn is not None:
+        market_cap_display = (
+            f"${market_cap_bn / 1_000:.2f}T"
+            if market_cap_bn >= 1_000
+            else f"${market_cap_bn:.2f}B"
+        )
+
+    return {
+        "sales_growth_3y_pct": revenue_growth,
+        "profit_growth_3y_pct": profit_growth,
+        "sales_growth_ttm_pct": growth_pct("revenueGrowth"),
+        "profit_growth_ttm_pct": growth_pct("earningsGrowth"),
+        "pe": info_number("trailingPE"),
+        "price": price,
+        "roce_pct": growth_pct("returnOnCapitalEmployed", "returnOnEquity"),
+        "market_cap_cr": None,
+        "market_cap_usd_bn": market_cap_bn,
+        "market_cap_display": market_cap_display,
+        "currency": "USD",
+    }
 
 META = {
     "id": "investment_course",
@@ -147,7 +251,9 @@ class InvestmentCourseFilters:
     max_pct_vs_fy_median: float = 0.0
     min_fy_points: int = 3
     min_market_cap_cr: float = 500.0
+    min_market_cap_usd_bn: float = 0.0
     volume_min_market_cap_cr: float = 50.0
+    volume_min_market_cap_usd_bn: float = 0.0
     max_debt_equity: float = 2.0
     min_roce_pct: float = 0.0
     vol_mult: float = 5.0
@@ -199,6 +305,7 @@ class InvestmentCourseResult:
     net_profit_yoy_pct: Optional[float]
     checklist_score: int
     checklist_max: int
+    currency: str = "INR"
     checklist_flags: list[str] = field(default_factory=list)
     week_return_pct: Optional[float] = None
     vol_ratio: Optional[float] = None
@@ -469,8 +576,11 @@ def research_links(disp: str, raw: str, company_name: str = "") -> dict:
     links = get_stock_links(raw)
     slug = disp.strip().upper()
     q = quote_plus(company_name or slug)
-    links["Screener.in"] = f"https://www.screener.in/company/{slug}/consolidated/"
-    links["Screener Concalls"] = f"https://www.screener.in/company/{slug}/consolidated/#documents"
+    if raw.endswith((".NS", ".BO")):
+        links["Screener.in"] = f"https://www.screener.in/company/{slug}/consolidated/"
+        links["Screener Concalls"] = f"https://www.screener.in/company/{slug}/consolidated/#documents"
+    else:
+        links["Yahoo Finance"] = f"https://finance.yahoo.com/quote/{quote_plus(raw)}/"
     links["Trendlyne"] = f"https://trendlyne.com/search/?q={q}"
     links["Tijori Finance"] = f"https://www.tijorifinance.com/search/?q={q}"
     links["Value Pickr"] = f"https://forum.valuepickr.com/search?q={q}"
@@ -780,6 +890,7 @@ def scan_investment_course(
     flt = filters or InvestmentCourseFilters()
     mode = flt.mode if flt.mode in SCAN_MODES else "step0_categorize"
     universe = resolve_investment_course_tickers(scan_source)
+    us_market = is_us_source(scan_source)
     if not universe:
         return ScanChunkResult(hits=[], next_index=0, total=0, done=True)
 
@@ -807,7 +918,7 @@ def scan_investment_course(
         label, raw = universe[i]
         if progress_cb:
             progress_cb(i + 1, total, raw)
-        if not (raw.endswith(".NS") or raw.endswith(".BO")):
+        if not us_market and not (raw.endswith(".NS") or raw.endswith(".BO")):
             continue
 
         disp = raw.replace(".NS", "").replace(".BO", "")
@@ -822,9 +933,15 @@ def scan_investment_course(
                 if vol_ratio < flt.vol_mult or week_ret <= flt.min_week_return_pct:
                     continue
 
-                profile = fetch_screener_value_profile(disp)
-                mcap = profile.get("market_cap_cr")
-                if mcap is not None and mcap < flt.volume_min_market_cap_cr:
+                if us_market:
+                    profile = _yahoo_us_profile(yf.Ticker(raw))
+                    mcap = profile.get("market_cap_usd_bn")
+                    min_mcap = flt.volume_min_market_cap_usd_bn
+                else:
+                    profile = fetch_screener_value_profile(disp)
+                    mcap = profile.get("market_cap_cr")
+                    min_mcap = flt.volume_min_market_cap_cr
+                if mcap is not None and mcap < min_mcap:
                     continue
 
                 stock = yf.Ticker(raw)
@@ -880,8 +997,8 @@ def scan_investment_course(
                         peg=peg,
                         peg_verdict=peg_verdict(peg),
                         roce_pct=profile.get("roce_pct"),
-                        market_cap_cr=mcap,
-                        market_cap_display=_mcap_display(mcap),
+                        market_cap_cr=None if us_market else mcap,
+                        market_cap_display=(profile.get("market_cap_display") or _mcap_display(mcap)),
                         week_return_pct=week_ret,
                         vol_ratio=vol_ratio,
                         score=_course_score(cat, peg, None, sales, profit) + float(vol_ratio or 0) * 2,
@@ -889,6 +1006,7 @@ def scan_investment_course(
                         next_steps=_next_steps(cat),
                         pass_notes=notes,
                         links=links,
+                        currency=profile.get("currency", "INR"),
                         **qf_fields,
                         **wealth,
                         **dma_pack,
@@ -898,10 +1016,18 @@ def scan_investment_course(
                     time.sleep(flt.screener_delay_sec)
                 continue
 
-            html = fetch_screener_company_html(disp)
-            if flt.screener_delay_sec > 0:
+            if us_market:
+                stock = yf.Ticker(raw)
+                html = ""
+                profile = _yahoo_us_profile(stock)
+            else:
+                stock = yf.Ticker(raw)
+                html = fetch_screener_company_html(disp)
+                profile = None
+            if not us_market and flt.screener_delay_sec > 0:
                 time.sleep(flt.screener_delay_sec)
-            profile = fetch_screener_value_profile(disp, html=html or "")
+            if profile is None:
+                profile = fetch_screener_value_profile(disp, html=html or "")
             if not profile:
                 continue
 
@@ -910,11 +1036,10 @@ def scan_investment_course(
             sales_ttm = profile.get("sales_growth_ttm_pct")
             profit_ttm = profile.get("profit_growth_ttm_pct")
             pe = profile.get("pe")
-            mcap = profile.get("market_cap_cr")
+            mcap = profile.get("market_cap_usd_bn") if us_market else profile.get("market_cap_cr")
             roce = profile.get("roce_pct")
             price = profile.get("price")
 
-            stock = yf.Ticker(raw)
             sector, industry = get_sector_industry(stock)
             cat, rationale = classify_category(sales, profit, sector=sector or "", industry=industry or "")
 
@@ -931,7 +1056,7 @@ def scan_investment_course(
             fy_med = None
             pct_vs = None
             n_fy = 0
-            if flt.need_pe_history and _needs_pe_history(mode, cat):
+            if not us_market and flt.need_pe_history and _needs_pe_history(mode, cat):
                 try:
                     _pts, meta = build_pe_history(disp, raw, html=html or "")
                     fy_med = meta.get("fy_median_pe") or meta.get("median_pe")
@@ -948,13 +1073,16 @@ def scan_investment_course(
 
             peg = _peg(pe, profit)
             notes = [rationale]
+            if us_market:
+                notes.append("Yahoo Finance annual statements; historical P/E median unavailable")
             if peg is not None:
                 notes.append(f"PEG {peg:.2f}")
             if pct_vs is not None and fy_med is not None and pe is not None:
                 notes.append(f"P/E {pe:.1f} vs FY med {fy_med:.1f} ({pct_vs:+.1f}%)")
             notes.append(f"Quick-Fire {ck_score}/{ck_max}")
 
-            if mode != "step0_categorize" and mcap is not None and mcap < flt.min_market_cap_cr:
+            min_mcap = flt.min_market_cap_usd_bn if us_market else flt.min_market_cap_cr
+            if mode != "step0_categorize" and mcap is not None and mcap < min_mcap:
                 continue
             if flt.min_roce_pct > 0 and (roce is None or roce < flt.min_roce_pct):
                 if mode != "step0_categorize":
@@ -1060,8 +1188,8 @@ def scan_investment_course(
                     peg=peg,
                     peg_verdict=peg_verdict(peg),
                     roce_pct=roce,
-                    market_cap_cr=mcap,
-                    market_cap_display=_mcap_display(mcap),
+                    market_cap_cr=None if us_market else mcap,
+                    market_cap_display=(profile.get("market_cap_display") or _mcap_display(mcap)),
                     opm_latest_pct=qf.get("opm_latest_pct"),
                     opm_delta_pp=qf.get("opm_delta_pp"),
                     interest_latest=qf.get("interest_latest"),
@@ -1080,6 +1208,7 @@ def scan_investment_course(
                     next_steps=_next_steps(cat),
                     pass_notes=notes,
                     links=links,
+                    currency=profile.get("currency", "INR"),
                     **wealth,
                     **dma_pack,
                 )
@@ -1189,7 +1318,7 @@ def result_to_row(r: InvestmentCourseResult, rank: int) -> dict:
         "Wealth": wealth_label,
         "Wealth score": r.wealth_score,
         "Strong wealth": "Yes" if r.is_strong_wealth else "—",
-        "Model target ₹": r.model_target,
+        "Model target": r.model_target,
         "Upside %": r.upside_pct,
         "Implied CAGR %": r.implied_cagr_pct,
         "Max buy @15%": r.max_buy_15pct,

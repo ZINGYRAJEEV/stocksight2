@@ -23,12 +23,14 @@ from investment_course_screener import (
     SCAN_MODES,
     SCAN_SOURCES,
     SECTOR_SCAN_SOURCES,
+    US_SCAN_SOURCES,
     InvestmentCourseFilters,
     group_results_by_sector,
     resolve_investment_course_tickers,
     result_to_row,
     scan_investment_course,
     sort_investment_course,
+    is_us_source,
     universe_ticker_count,
 )
 from pe_history_ui import render_pe_history_panel
@@ -111,6 +113,7 @@ def _story_panel() -> None:
 
 def _render_selected_wealth(r) -> None:
     """Wealth / Rulebook panel for the clicked scan row."""
+    currency_symbol = "$" if getattr(r, "currency", "INR") == "USD" else "₹"
     if not r or not (r.wealth_verdict or r.model_target):
         st.info(
             "No Valuation Rulebook snapshot for this name "
@@ -132,8 +135,8 @@ def _render_selected_wealth(r) -> None:
   </div>
   <div style='color:#e2e8f0;margin-top:6px;font-size:0.95rem;'>
     Stance: <b>{stance}</b>
-    · Target <b>₹{(r.model_target or 0):,.0f}</b>
-    · vs LTP ₹{(r.price or 0):,.0f}
+    · Target <b>{currency_symbol}{(r.model_target or 0):,.2f}</b>
+    · vs LTP {currency_symbol}{(r.price or 0):,.2f}
     · Upside <b>{(r.upside_pct or 0):+.1f}%</b>
     · Implied CAGR <b>{(r.implied_cagr_pct or 0):.1f}%</b>
   </div>
@@ -146,11 +149,11 @@ def _render_selected_wealth(r) -> None:
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Wealth score", f"{r.wealth_score}/100" if r.wealth_score is not None else "—")
-    c2.metric("Model target", f"₹{r.model_target:,.0f}" if r.model_target else "—")
+    c2.metric("Model target", f"{currency_symbol}{r.model_target:,.2f}" if r.model_target else "—")
     c3.metric("Upside", f"{r.upside_pct:+.1f}%" if r.upside_pct is not None else "—")
     c4.metric(
         "Max buy @15% CAGR",
-        f"₹{r.max_buy_15pct:,.0f}" if r.max_buy_15pct else "—",
+        f"{currency_symbol}{r.max_buy_15pct:,.2f}" if r.max_buy_15pct else "—",
     )
 
     if r.is_strong_wealth:
@@ -194,6 +197,7 @@ def _render_post_scan_workflow(r) -> None:
     if not r:
         return
 
+    currency_symbol = "$" if getattr(r, "currency", "INR") == "USD" else "₹"
     ticker = str(r.ticker)
     links = enrich_research_links(r.links or {}, r.ticker, r.label or r.ticker)
     prefix = f"invc_ps_{ticker}"
@@ -335,7 +339,7 @@ def _render_post_scan_workflow(r) -> None:
             m1, m2, m3, m4 = st.columns(4)
             m1.metric(
                 "Stress target",
-                f"₹{stress['model_target']:,.0f}" if stress.get("model_target") else "—",
+                f"{currency_symbol}{stress['model_target']:,.2f}" if stress.get("model_target") else "—",
             )
             m2.metric(
                 "Stress upside",
@@ -349,7 +353,7 @@ def _render_post_scan_workflow(r) -> None:
             )
             m4.metric(
                 "Max buy @15%",
-                f"₹{stress['max_buy_15pct']:,.0f}" if stress.get("max_buy_15pct") else "—",
+                f"{currency_symbol}{stress['max_buy_15pct']:,.2f}" if stress.get("max_buy_15pct") else "—",
             )
 
             st.caption(
@@ -357,7 +361,7 @@ def _render_post_scan_workflow(r) -> None:
                 f"**{ass.get('growth_pct', '—')}%** · "
                 f"OPM {ass.get('base_opm_pct', '—')}% → **{ass.get('opm_pct', '—')}%** · "
                 f"P/E {ass.get('base_fair_pe', '—')} → **{ass.get('fair_pe', '—')}** · "
-                f"entry ₹{ass.get('entry_price', '—')} · "
+                f"entry {currency_symbol}{ass.get('entry_price', '—')} · "
                 f"below max-buy@15%: {'Yes' if ass.get('still_below_max_buy_15') else 'No'}"
             )
 
@@ -365,7 +369,7 @@ def _render_post_scan_workflow(r) -> None:
             with c_base:
                 st.markdown("**Scan (defaults)**")
                 st.write(
-                    f"Target ₹{(r.model_target or 0):,.0f} · "
+                    f"Target {currency_symbol}{(r.model_target or 0):,.2f} · "
                     f"upside {(r.upside_pct or 0):+.1f}% · "
                     f"CAGR {(r.implied_cagr_pct or 0):.1f}% · "
                     f"{'Strong wealth' if r.is_strong_wealth else (r.wealth_verdict or '—')}"
@@ -373,7 +377,7 @@ def _render_post_scan_workflow(r) -> None:
             with c_stress:
                 st.markdown("**Stress case**")
                 st.write(
-                    f"Target ₹{(stress.get('model_target') or 0):,.0f} · "
+                    f"Target {currency_symbol}{(stress.get('model_target') or 0):,.2f} · "
                     f"upside {(stress.get('upside_pct') or 0):+.1f}% · "
                     f"CAGR {(stress.get('implied_cagr_pct') or 0):.1f}% · "
                     f"{stress.get('wealth_verdict') or '—'}"
@@ -507,27 +511,30 @@ def render_investment_course_page() -> None:
                 )
             else:
                 uni_key = f"{key}_universe"
-                nse_sources = BROAD_SCAN_SOURCES or nse_scan_sources(SCAN_SOURCES)
+                market_sources = BROAD_SCAN_SOURCES or nse_scan_sources(SCAN_SOURCES)
                 # Always surface full NSE at the top of Broad market.
                 all_nse = "All NSE equities (~2300) - very slow"
-                if all_nse not in nse_sources:
-                    nse_sources = [all_nse] + list(nse_sources)
-                else:
-                    nse_sources = [all_nse] + [s for s in nse_sources if s != all_nse]
-                ensure_session_choice(uni_key, nse_sources, nse_sources[1] if len(nse_sources) > 1 else nse_sources[0])
+                market_sources = [all_nse] + [s for s in market_sources if s != all_nse]
+                market_sources.extend(s for s in US_SCAN_SOURCES if s not in market_sources)
+                ensure_session_choice(
+                    uni_key,
+                    market_sources,
+                    market_sources[1] if len(market_sources) > 1 else market_sources[0],
+                )
                 universe = st.selectbox(
-                    "Stock universe (NSE)",
-                    nse_sources,
+                    "Stock universe",
+                    market_sources,
                     key=uni_key,
                     format_func=lambda s: f"{s} ({universe_ticker_count(s)})",
                     help=(
-                        "First option = full NSE (~2300). "
-                        "Prefer Curated / Nifty 50 / sector baskets for normal scans."
+                        "Choose an NSE or US universe. Full NSE scans are slow; "
+                        "curated lists and index universes are quicker."
                     ),
                 )
-                st.caption(
-                    "💡 Full list = **All NSE equities (~2300) - very slow** (first row in this dropdown)."
-                )
+                if not is_us_source(universe):
+                    st.caption(
+                        "💡 Full list = **All NSE equities (~2300) - very slow** (first row in this dropdown)."
+                    )
                 n_uni = universe_ticker_count(universe)
                 if "All NSE" in universe:
                     if n_uni <= 0:
@@ -543,6 +550,13 @@ def render_investment_course_page() -> None:
                         )
                 else:
                     st.caption(f"**{n_uni}** tickers in this broad list.")
+
+                if is_us_source(universe) and mode in ("buy_candidates", "stalwarts_discount"):
+                    st.info(
+                        "US scans use Yahoo Finance fundamentals. Historical FY median P/E is not "
+                        "available here, so Stalwart discount matches are omitted; Buy candidates "
+                        "can still include PEG-qualified Fast Growers."
+                    )
 
             include_wealth = st.checkbox(
                 "Load Valuation Rulebook on each match",
@@ -596,14 +610,43 @@ def render_investment_course_page() -> None:
             min_fy = st.slider("Min FY PE points", 2, 10, 3, 1, key=f"{key}_fy")
         with c3:
             st.markdown("#### Size, Quick-Fire & volume")
-            min_mcap = st.slider("Min market cap (₹ Cr)", 100.0, 5000.0, 500.0, 50.0, key=f"{key}_mcap")
+            us_market = is_us_source(universe)
+            if us_market:
+                min_mcap = 500.0
+                min_mcap_usd = st.slider(
+                    "Min market cap ($B)", 0.0, 5000.0, 0.0, 5.0, key=f"{key}_mcap_usd"
+                )
+            else:
+                min_mcap = st.slider(
+                    "Min market cap (₹ Cr)", 100.0, 5000.0, 500.0, 50.0, key=f"{key}_mcap"
+                )
+                min_mcap_usd = 0.0
             min_qf = st.slider("Min Quick-Fire score (0 = off)", 0, 8, 0, 1, key=f"{key}_qf")
             require_qf = st.checkbox(
                 "Workflow A: require strong Quick-Fire",
                 value=False,
                 key=f"{key}_req_qf",
             )
-            vol_mcap = st.slider("Volume mode min mcap (₹ Cr)", 50.0, 1000.0, 50.0, 25.0, key=f"{key}_vmcap")
+            if us_market:
+                vol_mcap = 50.0
+                vol_mcap_usd = st.slider(
+                    "Volume min market cap ($B)",
+                    0.0,
+                    1000.0,
+                    0.0,
+                    5.0,
+                    key=f"{key}_vmcap_usd",
+                )
+            else:
+                vol_mcap = st.slider(
+                    "Volume mode min mcap (₹ Cr)",
+                    50.0,
+                    1000.0,
+                    50.0,
+                    25.0,
+                    key=f"{key}_vmcap",
+                )
+                vol_mcap_usd = 0.0
             vol_mult = st.slider("Volume multiple (1w vs 1y)", 2.0, 10.0, 5.0, 0.5, key=f"{key}_vmult")
             min_wret = st.slider("Min 1-week return %", 1.0, 20.0, 5.0, 0.5, key=f"{key}_wret")
 
@@ -661,7 +704,9 @@ def render_investment_course_page() -> None:
         max_pct_vs_fy_median=max_pct,
         min_fy_points=min_fy,
         min_market_cap_cr=min_mcap,
+        min_market_cap_usd_bn=min_mcap_usd,
         volume_min_market_cap_cr=vol_mcap,
+        volume_min_market_cap_usd_bn=vol_mcap_usd,
         min_roce_pct=min_roce,
         vol_mult=vol_mult,
         min_week_return_pct=min_wret,
@@ -1053,16 +1098,19 @@ def render_investment_course_page() -> None:
 
     # Build a master df (all filtered results) for detail / PE panels
     df = _df_for(results, "all")
+    currency_symbol = "$" if is_us_source(last_uni) else "₹"
+    currency_format = "$%.2f" if currency_symbol == "$" else "₹%.0f"
+    price_format = "$%.2f" if currency_symbol == "$" else "₹%.2f"
 
     col_cfg = filter_column_config(
         df if not df.empty else pd.DataFrame([{"Ticker": ""}]),
         {
             "Score": st.column_config.NumberColumn(format="%.1f"),
             "Wealth score": st.column_config.NumberColumn(format="%d"),
-            "Model target ₹": st.column_config.NumberColumn(format="₹%.0f"),
+            "Model target": st.column_config.NumberColumn(format=currency_format),
             "Upside %": st.column_config.NumberColumn(format="%+.1f"),
             "Implied CAGR %": st.column_config.NumberColumn(format="%.1f"),
-            "Max buy @15%": st.column_config.NumberColumn(format="₹%.0f"),
+            "Max buy @15%": st.column_config.NumberColumn(format=currency_format),
             "Sales 3Y %": st.column_config.NumberColumn(format="%.1f"),
             "Profit 3Y %": st.column_config.NumberColumn(format="%.1f"),
             "Sales TTM %": st.column_config.NumberColumn(format="%.1f"),
@@ -1077,11 +1125,11 @@ def render_investment_course_page() -> None:
             "ROCE %": st.column_config.NumberColumn(format="%.1f"),
             "1w ret %": st.column_config.NumberColumn(format="%+.1f"),
             "Vol ratio": st.column_config.NumberColumn(format="%.1f"),
-            "50-DMA": st.column_config.NumberColumn(format="₹%.2f"),
+            "50-DMA": st.column_config.NumberColumn(format=price_format),
             "vs 50-DMA %": st.column_config.NumberColumn(format="%+.1f"),
-            "200-DMA": st.column_config.NumberColumn(format="₹%.2f"),
+            "200-DMA": st.column_config.NumberColumn(format=price_format),
             "vs 200-DMA %": st.column_config.NumberColumn(format="%+.1f"),
-            "Price": st.column_config.NumberColumn(format="₹%.2f"),
+            "Price": st.column_config.NumberColumn(format=price_format),
             "Sector": st.column_config.TextColumn(width="medium"),
             "Wealth": st.column_config.TextColumn(width="medium"),
             "Verdict": st.column_config.TextColumn(width="medium"),

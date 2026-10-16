@@ -6,6 +6,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
+
 from investment_course_analysis import (
     STORY_CHECKS,
     category_research_items,
@@ -190,6 +192,104 @@ class TestSectorUniverse(unittest.TestCase):
         self.assertGreaterEqual(len(tickers), 5)
         self.assertTrue(all(r.endswith(".NS") for _, r in tickers))
         self.assertEqual(universe_ticker_count(bank_key), len(tickers))
+
+
+class TestUSUniverse(unittest.TestCase):
+    def test_curated_us_universe_resolves_us_tickers(self):
+        from investment_course_screener import (
+            US_SCAN_SOURCES,
+            resolve_investment_course_tickers,
+        )
+        from multibagger import CURATED_US_LABEL
+
+        self.assertIn(CURATED_US_LABEL, US_SCAN_SOURCES)
+        tickers = resolve_investment_course_tickers(CURATED_US_LABEL)
+        self.assertTrue(tickers)
+        self.assertTrue(all(not raw.endswith((".NS", ".BO")) for _, raw in tickers))
+
+    def test_yahoo_profile_calculates_us_growth_and_market_cap(self):
+        from investment_course_screener import _yahoo_us_profile
+
+        statements = pd.DataFrame(
+            [
+                [172.8, 140.0, 120.0, 100.0],
+                [17.28, 14.0, 12.0, 10.0],
+            ],
+            index=["Total Revenue", "Net Income"],
+            columns=["2025-12-31", "2024-12-31", "2023-12-31", "2022-12-31"],
+        )
+        stock = SimpleNamespace(
+            info={
+                "marketCap": 2_500_000_000_000,
+                "currentPrice": 225.0,
+                "trailingPE": 30.0,
+                "returnOnEquity": 0.2,
+                "revenueGrowth": 0.15,
+                "earningsGrowth": 0.18,
+            },
+            financials=statements,
+            fast_info={},
+        )
+
+        profile = _yahoo_us_profile(stock)
+
+        self.assertEqual(profile["sales_growth_3y_pct"], 20.0)
+        self.assertEqual(profile["profit_growth_3y_pct"], 20.0)
+        self.assertEqual(profile["sales_growth_ttm_pct"], 15.0)
+        self.assertEqual(profile["pe"], 30.0)
+        self.assertEqual(profile["market_cap_usd_bn"], 2500.0)
+        self.assertEqual(profile["market_cap_display"], "$2.50T")
+        self.assertEqual(profile["currency"], "USD")
+
+    def test_us_ticker_runs_through_yahoo_scan_path(self):
+        import investment_course_screener as course
+        from multibagger import CURATED_US_LABEL
+
+        statements = pd.DataFrame(
+            [
+                [172.8, 140.0, 120.0, 100.0],
+                [17.28, 14.0, 12.0, 10.0],
+            ],
+            index=["Total Revenue", "Net Income"],
+            columns=["2025-12-31", "2024-12-31", "2023-12-31", "2022-12-31"],
+        )
+        stock = SimpleNamespace(
+            info={"marketCap": 100_000_000_000, "currentPrice": 200, "trailingPE": 25},
+            financials=statements,
+            fast_info={},
+        )
+        dma = {
+            "_dma_ok": True,
+            "_dma_price": None,
+            "ma50": None,
+            "ma200": None,
+            "pct_vs_50dma": None,
+            "pct_vs_200dma": None,
+        }
+
+        with (
+            patch.object(course, "resolve_investment_course_tickers", return_value=[("Test Co", "TEST")]),
+            patch.object(course.yf, "Ticker", return_value=stock),
+            patch.object(course, "get_sector_industry", return_value=("Technology", "Software")),
+            patch.object(course, "_attach_dma", return_value=dma),
+            patch.object(course, "research_links", return_value={}),
+            patch.object(course, "fetch_screener_company_html") as fetch_html,
+            patch.object(course, "fetch_screener_value_profile") as fetch_profile,
+        ):
+            outcome = course.scan_investment_course(
+                CURATED_US_LABEL,
+                filters=course.InvestmentCourseFilters(
+                    include_wealth=False,
+                    need_pe_history=False,
+                    screener_delay_sec=0,
+                ),
+            )
+
+        self.assertEqual(len(outcome.hits), 1)
+        self.assertEqual(outcome.hits[0].raw_ticker, "TEST")
+        self.assertEqual(outcome.hits[0].currency, "USD")
+        fetch_html.assert_not_called()
+        fetch_profile.assert_not_called()
 
 
 class TestDataQualityGates(unittest.TestCase):
