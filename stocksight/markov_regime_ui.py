@@ -107,6 +107,28 @@ def _state_cell_style(series: pd.Series) -> list[str]:
     return styles
 
 
+def _risk_status_cell_style(series: pd.Series) -> list[str]:
+    """Traffic-light styling for the first-view trade decision."""
+    styles: list[str] = []
+    for value in series:
+        text = str(value)
+        if text.startswith("Eligible") or "ELIGIBLE" in text:
+            styles.append("background-color: #dcfce7; color: #166534; font-weight: 700;")
+        elif text.startswith("Caution") or "CAUTION" in text:
+            styles.append("background-color: #fef9c3; color: #854d0e; font-weight: 700;")
+        else:
+            styles.append("background-color: #fee2e2; color: #991b1b; font-weight: 700;")
+    return styles
+
+
+def _risk_decision(status: str) -> str:
+    if status.startswith("Eligible"):
+        return "✅ ELIGIBLE"
+    if status.startswith("Caution"):
+        return "⚠️ CAUTION"
+    return "⛔ AVOID LONG"
+
+
 def results_to_dataframe(results: list[MarkovRegimeResult]) -> pd.DataFrame:
     rows = []
     for i, r in enumerate(results, start=1):
@@ -120,6 +142,9 @@ def results_to_dataframe(results: list[MarkovRegimeResult]) -> pd.DataFrame:
             {
                 "S.No.": i,
                 "Ticker": r.ticker,
+                "Trade decision": _risk_decision(r.risk_status),
+                "Why / warning": " | ".join(r.risk_flags) if r.risk_flags else "Risk plan passes price and volatility checks",
+                "Risk status": r.risk_status,
                 "Raw": r.raw_ticker,
                 "Current state": r.current_state,
                 "20d return %": r.cum_return_20d_pct,
@@ -135,7 +160,6 @@ def results_to_dataframe(results: list[MarkovRegimeResult]) -> pd.DataFrame:
                 "Walk-fwd acc": r.walk_forward_acc,
                 "Position hint": r.position_hint,
                 "Action": r.action,
-                "Risk status": r.risk_status,
                 "Warnings": " | ".join(r.risk_flags) if r.risk_flags else "None",
                 "Last price": r.last_price,
                 "ATR %": r.atr_pct,
@@ -169,6 +193,8 @@ def markov_regime_table(
         return None
 
     col_cfg = {
+        "Trade decision": st.column_config.TextColumn(width="medium", help="Risk-layer verdict derived from the same calculations shown in the deep dive."),
+        "Why / warning": st.column_config.TextColumn(width="large", help="First reversal-risk warning, if present."),
         "Current state": st.column_config.TextColumn(width="small"),
         "20d return %": st.column_config.NumberColumn(format="%+.2f"),
         "Signal (1d)": st.column_config.NumberColumn(format="%+.3f"),
@@ -198,6 +224,9 @@ def markov_regime_table(
     }
 
     styler = df.style.apply(_state_cell_style, subset=["Current state"])  # type: ignore[union-attr]
+    for col in ("Trade decision", "Risk status"):
+        if col in df.columns:
+            styler = styler.apply(_risk_status_cell_style, subset=[col])  # type: ignore[union-attr]
     for col in ("Signal (1d)", "Signal (Nd)", "Signal"):
         if col in df.columns:
             styler = styler.apply(_signal_cell_style, subset=[col])  # type: ignore[union-attr]
