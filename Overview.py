@@ -60,6 +60,7 @@ def _import_navigation_pages():
         "page_oversold_bounce",
         "page_portfolio",
         "page_finance_hub",
+        "page_market_report",
         "page_buyback_screener",
         "page_bulk_order",
         "page_nse_intraday_intel",
@@ -152,6 +153,7 @@ try:
     page_oversold_bounce = _nav["page_oversold_bounce"]
     page_portfolio = _nav["page_portfolio"]
     page_finance_hub = _nav["page_finance_hub"]
+    page_market_report = _nav["page_market_report"]
     page_buyback_screener = _nav["page_buyback_screener"]
     page_bulk_order = _nav["page_bulk_order"]
     page_nse_intraday_intel = _nav["page_nse_intraday_intel"]
@@ -229,6 +231,7 @@ NAV_PAGES = {
         st.Page(page_scan_history, title="Scan History", icon="🗂️"),
         st.Page(page_portfolio, title="Portfolio", icon="💼"),
         st.Page(page_finance_hub, title="Finance Hub", icon="📊"),
+        st.Page(page_market_report, title="U.S. Market Report", icon="🇺🇸"),
         st.Page(page_buyback_screener, title="Buyback Screener", icon="💰"),
         st.Page(page_bulk_order, title="Bulk Order", icon="📦"),
         st.Page(page_pre_investigation, title="Pre-Investigation Links", icon="🔎"),

@@ -1,0 +1,3 @@
+from market_report_page import render_market_report_page
+
+render_market_report_page()
