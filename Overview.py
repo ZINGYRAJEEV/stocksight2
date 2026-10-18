@@ -61,6 +61,7 @@ def _import_navigation_pages():
         "page_portfolio",
         "page_finance_hub",
         "page_market_report",
+        "page_india_market_report",
         "page_buyback_screener",
         "page_bulk_order",
         "page_nse_intraday_intel",
@@ -154,6 +155,7 @@ try:
     page_portfolio = _nav["page_portfolio"]
     page_finance_hub = _nav["page_finance_hub"]
     page_market_report = _nav["page_market_report"]
+    page_india_market_report = _nav["page_india_market_report"]
     page_buyback_screener = _nav["page_buyback_screener"]
     page_bulk_order = _nav["page_bulk_order"]
     page_nse_intraday_intel = _nav["page_nse_intraday_intel"]
@@ -224,6 +226,8 @@ except st.errors.StreamlitAPIException:
 NAV_PAGES = {
     "": [
         st.Page(render_overview, title="Overview", icon="📊", default=True),
+        st.Page(page_market_report, title="U.S. Market Report", icon="🇺🇸"),
+        st.Page(page_india_market_report, title="India Market Report (Nifty)", icon="🇮🇳"),
         st.Page(page_stocksight, title="StockSight (Main Screener)", icon="📈"),
         st.Page(page_live_nse_screener, title="Live NSE Screener", icon="📡"),
         st.Page(page_popular_screens, title="Popular Screens", icon="📋"),
@@ -231,7 +235,6 @@ NAV_PAGES = {
         st.Page(page_scan_history, title="Scan History", icon="🗂️"),
         st.Page(page_portfolio, title="Portfolio", icon="💼"),
         st.Page(page_finance_hub, title="Finance Hub", icon="📊"),
-        st.Page(page_market_report, title="U.S. Market Report", icon="🇺🇸"),
         st.Page(page_buyback_screener, title="Buyback Screener", icon="💰"),
         st.Page(page_bulk_order, title="Bulk Order", icon="📦"),
         st.Page(page_pre_investigation, title="Pre-Investigation Links", icon="🔎"),

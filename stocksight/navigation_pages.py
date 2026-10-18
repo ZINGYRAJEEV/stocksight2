@@ -39,6 +39,12 @@ def page_market_report() -> None:
     exec_stocksight_page("U.S. Market Report.py")
 
 
+def page_india_market_report() -> None:
+    from stocksight_page_loader import exec_stocksight_page
+
+    exec_stocksight_page("India Market Report.py")
+
+
 def page_breakout_momentum() -> None:
     from stocksight_page_loader import exec_stocksight_page
 
@@ -382,6 +388,7 @@ __all__ = [
     "page_portfolio",
     "page_finance_hub",
     "page_market_report",
+    "page_india_market_report",
     "page_breakout_momentum",
     "page_oversold_bounce",
     "page_extreme_oversold",

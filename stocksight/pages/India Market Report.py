@@ -1,0 +1,3 @@
+from india_market_report_page import render_india_market_report_page
+
+render_india_market_report_page()
