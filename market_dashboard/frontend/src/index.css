@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #e7edf8; background: #0B0E14; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: #0B0E14; }
+.card { @apply rounded-2xl border border-[#1E2638] bg-[#121824] shadow-[0_16px_40px_rgba(0,0,0,.16)]; }
+.label { @apply text-[11px] font-semibold uppercase tracking-[.14em] text-slate-500; }
+.positive { @apply text-emerald-400; }
+.negative { @apply text-rose-400; }
