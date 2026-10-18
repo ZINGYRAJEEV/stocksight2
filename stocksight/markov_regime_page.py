@@ -87,6 +87,18 @@ def render_markov_regime_page() -> None:
             )
             require_hmm = st.checkbox("Require HMM agreement", value=False, key=f"{key}_hmm")
 
+    with st.expander("Risk plan (sizing, ATR stop and reversal warnings)", expanded=True):
+        st.caption("Sizing is capped by both the planned loss at the stop and the maximum allocation. It is educational, not an order ticket.")
+        r1, r2, r3, r4 = st.columns(4)
+        with r1:
+            account_value = st.number_input("Account value", min_value=100.0, value=5000.0, step=100.0, key=f"{key}_account")
+        with r2:
+            risk_per_trade = st.slider("Risk per trade %", 0.25, 2.0, 1.0, 0.25, key=f"{key}_risk")
+        with r3:
+            max_position = st.slider("Max position %", 5.0, 30.0, 20.0, 1.0, key=f"{key}_maxpos")
+        with r4:
+            atr_multiple = st.slider("ATR stop multiple", 1.5, 3.5, 2.5, 0.25, key=f"{key}_atr")
+
     flt = MarkovRegimeFilters(
         lookback_days=int(lookback),
         bull_threshold_pct=float(bull_thr),
@@ -95,6 +107,10 @@ def render_markov_regime_page() -> None:
         min_signal=float(min_signal),
         require_hmm_agree=bool(require_hmm),
         signal_side=str(signal_side),
+        account_value=float(account_value),
+        risk_per_trade_pct=float(risk_per_trade),
+        max_position_pct=float(max_position),
+        atr_stop_multiple=float(atr_multiple),
     )
 
     if st.button(f"🎲 RUN {META['nav_title'].upper()} SCAN", type="primary", key=f"{key}_run"):

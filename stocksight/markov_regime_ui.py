@@ -135,6 +135,18 @@ def results_to_dataframe(results: list[MarkovRegimeResult]) -> pd.DataFrame:
                 "Walk-fwd acc": r.walk_forward_acc,
                 "Position hint": r.position_hint,
                 "Action": r.action,
+                "Risk status": r.risk_status,
+                "Warnings": " | ".join(r.risk_flags) if r.risk_flags else "None",
+                "Last price": r.last_price,
+                "ATR %": r.atr_pct,
+                "RSI(14)": r.rsi_14,
+                "Above 20d MA %": r.extension_ma20_pct,
+                "Stop": r.stop_price,
+                "1R target": r.target_1r,
+                "2R target": r.target_2r,
+                "Suggested shares": r.suggested_shares,
+                "Position value": r.suggested_position_value,
+                "Planned risk": r.planned_risk_amount,
                 "Stationary Bull %": r.stationary_bull,
                 "Stationary Bear %": r.stationary_bear,
                 **{f"link_{k}": v for k, v in (r.links or {}).items()},
@@ -170,6 +182,18 @@ def markov_regime_table(
         "HMM agrees": st.column_config.TextColumn(width="small"),
         "Position hint": st.column_config.TextColumn(width="medium"),
         "Action": st.column_config.TextColumn(width="medium"),
+        "Risk status": st.column_config.TextColumn(width="large"),
+        "Warnings": st.column_config.TextColumn(width="large"),
+        "Last price": st.column_config.NumberColumn(format="%.2f"),
+        "ATR %": st.column_config.NumberColumn(format="%.1f%%"),
+        "RSI(14)": st.column_config.NumberColumn(format="%.0f"),
+        "Above 20d MA %": st.column_config.NumberColumn(format="%+.1f%%"),
+        "Stop": st.column_config.NumberColumn(format="%.2f"),
+        "1R target": st.column_config.NumberColumn(format="%.2f"),
+        "2R target": st.column_config.NumberColumn(format="%.2f"),
+        "Suggested shares": st.column_config.NumberColumn(format="%d"),
+        "Position value": st.column_config.NumberColumn(format="%.2f"),
+        "Planned risk": st.column_config.NumberColumn(format="%.2f"),
         "Raw": None,
     }
 
@@ -200,6 +224,26 @@ def render_matrix_detail(result: MarkovRegimeResult) -> None:
     with c3:
         st.metric("Walk-forward acc", f"{result.walk_forward_acc:.0%}" if result.walk_forward_acc else "—")
         st.metric("Position", result.position_hint)
+
+    st.markdown("**Risk plan (review before placing an order)**")
+    r1, r2, r3, r4 = st.columns(4)
+    with r1:
+        st.metric("Last price", f"{result.last_price:.2f}")
+        st.metric("ATR(14)", f"{result.atr_14:.2f} ({result.atr_pct:.1f}%)")
+    with r2:
+        st.metric("Initial ATR stop", f"{result.stop_price:.2f}")
+        st.metric("1R / 2R targets", f"{result.target_1r:.2f} / {result.target_2r:.2f}")
+    with r3:
+        st.metric("Suggested size", f"{result.suggested_shares} shares")
+        st.metric("Position value", f"{result.suggested_position_value:.2f}")
+    with r4:
+        st.metric("RSI / above 20d MA", f"{result.rsi_14:.0f} / {result.extension_ma20_pct:+.1f}%")
+        st.metric("Planned loss at stop", f"{result.planned_risk_amount:.2f}")
+    if result.risk_flags:
+        st.warning(result.risk_status + ": " + " • ".join(result.risk_flags))
+    else:
+        st.success(result.risk_status)
+    st.caption("Stops are not guaranteed fills: overnight gaps and earnings can exceed the planned loss. Reassess or exit when the signal turns negative or HMM disagrees for two closes.")
 
     st.markdown("**3×3 transition matrix (% — rows sum to 100)**")
     st.dataframe(transition_matrix_df(result.matrix_flat), use_container_width=True)

@@ -54,6 +54,10 @@ class MarkovRegimeFilters:
     min_signal: float = 0.05
     require_hmm_agree: bool = False
     signal_side: str = "any"  # long | short | any
+    account_value: float = 5000.0
+    risk_per_trade_pct: float = 1.0
+    max_position_pct: float = 20.0
+    atr_stop_multiple: float = 2.5
 
 
 @dataclass
@@ -78,6 +82,22 @@ class MarkovRegimeResult:
     walk_forward_acc: float
     position_hint: str
     action: str
+    last_price: float = 0.0
+    atr_14: float = 0.0
+    atr_pct: float = 0.0
+    rsi_14: float = 0.0
+    ma20: float = 0.0
+    ma50: float = 0.0
+    extension_ma20_pct: float = 0.0
+    extension_ma50_pct: float = 0.0
+    stop_price: float = 0.0
+    target_1r: float = 0.0
+    target_2r: float = 0.0
+    suggested_shares: int = 0
+    suggested_position_value: float = 0.0
+    planned_risk_amount: float = 0.0
+    risk_status: str = ""
+    risk_flags: list[str] = field(default_factory=list)
     matrix_flat: list[float] = field(default_factory=list)
     links: dict[str, str] = field(default_factory=dict)
 
@@ -255,11 +275,73 @@ def _action_text(signal: float, state: str) -> str:
     return f"Watch: weak signal in {state} — matrix near stationary mix"
 
 
+def _risk_plan(hist: pd.DataFrame, signal: float, flt: MarkovRegimeFilters) -> dict[str, object]:
+    """Turn daily OHLC data into a bounded, educational trade-risk plan."""
+    close = pd.to_numeric(hist["Close"], errors="coerce").dropna()
+    if close.empty:
+        return {}
+    high = pd.to_numeric(hist.get("High", close), errors="coerce").reindex(close.index).fillna(close)
+    low = pd.to_numeric(hist.get("Low", close), errors="coerce").reindex(close.index).fillna(close)
+    previous = close.shift(1)
+    true_range = pd.concat([high - low, (high - previous).abs(), (low - previous).abs()], axis=1).max(axis=1)
+    atr = float(true_range.rolling(14).mean().iloc[-1]) if len(true_range) >= 14 else 0.0
+    price = float(close.iloc[-1])
+    ma20 = float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else price
+    ma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else price
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rsi = float((100 - (100 / (1 + rs))).iloc[-1]) if len(close) >= 14 and pd.notna(rs.iloc[-1]) else 50.0
+    extension20 = ((price / ma20) - 1) * 100 if ma20 else 0.0
+    extension50 = ((price / ma50) - 1) * 100 if ma50 else 0.0
+    atr_pct = (atr / price) * 100 if price else 0.0
+
+    stop = price - (flt.atr_stop_multiple * atr) if atr > 0 else 0.0
+    per_share_risk = price - stop
+    base_risk = max(0.0, flt.account_value * flt.risk_per_trade_pct / 100)
+    signal_scale = min(1.0, abs(signal) / 0.35) if signal > 0 else 0.0
+    planned_risk = base_risk * signal_scale
+    shares_by_risk = int(planned_risk / per_share_risk) if per_share_risk > 0 else 0
+    shares_by_cap = int((flt.account_value * flt.max_position_pct / 100) / price) if price > 0 else 0
+    shares = max(0, min(shares_by_risk, shares_by_cap))
+
+    flags: list[str] = []
+    if signal < 0.20:
+        flags.append("Signal below +0.20 entry threshold")
+    if extension20 > 12:
+        flags.append(f"Extended {extension20:.1f}% above 20-day MA")
+    if extension50 > 25:
+        flags.append(f"Extended {extension50:.1f}% above 50-day MA")
+    if rsi > 75:
+        flags.append(f"RSI {rsi:.0f}: overbought / avoid chasing")
+    if atr_pct > 6:
+        flags.append(f"ATR {atr_pct:.1f}%: high daily volatility")
+    if ma20 and price < ma20:
+        flags.append("Price below 20-day MA")
+    if not flags and signal >= 0.20:
+        status = "Eligible - risk plan passes price and volatility checks"
+    elif signal > 0:
+        status = "Caution - bullish model, but reversal-risk guardrails are active"
+    else:
+        status = "Avoid long - model signal is not bullish"
+    return {
+        "last_price": round(price, 2), "atr_14": round(atr, 2), "atr_pct": round(atr_pct, 2),
+        "rsi_14": round(rsi, 1), "ma20": round(ma20, 2), "ma50": round(ma50, 2),
+        "extension_ma20_pct": round(extension20, 1), "extension_ma50_pct": round(extension50, 1),
+        "stop_price": round(stop, 2), "target_1r": round(price + per_share_risk, 2),
+        "target_2r": round(price + 2 * per_share_risk, 2), "suggested_shares": shares,
+        "suggested_position_value": round(shares * price, 2), "planned_risk_amount": round(planned_risk, 2),
+        "risk_status": status, "risk_flags": flags,
+    }
+
+
 def _analyze_from_closes(
     raw: str,
     closes: pd.Series,
     flt: MarkovRegimeFilters,
     *,
+    hist: Optional[pd.DataFrame] = None,
     include_walk_forward: bool = False,
 ) -> Optional[MarkovRegimeResult]:
     if closes is None or len(closes) < flt.lookback_days + 40:
@@ -298,6 +380,7 @@ def _analyze_from_closes(
     wf = _walk_forward_accuracy(closes, flt) if include_walk_forward else 0.0
 
     disp = raw.replace(".NS", "").replace(".BO", "")
+    risk = _risk_plan(hist if hist is not None else pd.DataFrame({"Close": closes}), sig_use, flt)
     return MarkovRegimeResult(
         ticker=disp,
         raw_ticker=raw,
@@ -319,6 +402,7 @@ def _analyze_from_closes(
         walk_forward_acc=round(wf, 3),
         position_hint=_position_hint(sig_use),
         action=_action_text(sig_use, cur_state),
+        **risk,
         matrix_flat=[round(float(x) * 100, 2) for x in mat.flatten()],
         links=get_stock_links(raw),
     )
@@ -336,7 +420,9 @@ def analyze_ticker_markov(
     hist = fetch_price_history(raw, "1d")
     if hist is None or hist.empty or "Close" not in hist.columns:
         return None
-    return _analyze_from_closes(raw, hist["Close"], flt, include_walk_forward=include_walk_forward)
+    return _analyze_from_closes(
+        raw, hist["Close"], flt, hist=hist, include_walk_forward=include_walk_forward
+    )
 
 
 def scan_markov_regime(
