@@ -13,6 +13,7 @@ from multibagger import (
     SCAN_SOURCES,
     MultibaggerFilters,
     ProvenMultibaggerFilters,
+    is_europe_source,
     is_us_source,
     scan_multibagger,
     scan_proven_multibaggers,
@@ -47,7 +48,7 @@ def render_multibagger_page() -> None:
         "Use **ROCE leaders** preset first, then **Small-cap strict** if needed.",
     )
     st.caption(
-        "Columns: **Qtr Sales Var %**, **Qtr Profit Var %**, **ROCE %**, **Mar Cap** (₹ Cr for NSE, $ B for US) — Yahoo proxies."
+        "Columns: **Qtr Sales Var %**, **Qtr Profit Var %**, **ROCE %**, and market cap in the listing currency — Yahoo proxies."
     )
 
     st.markdown("""
@@ -115,6 +116,7 @@ Table columns from Yahoo Finance where data exists
         with c3:
             st.markdown("#### Filters")
             us_universe = is_us_source(universe)
+            europe_universe = is_europe_source(universe)
             min_sales = st.slider(
                 "Min Qtr Sales Var %",
                 0.0,
@@ -144,17 +146,25 @@ Table columns from Yahoo Finance where data exists
                 value=small_cap,
                 key=f"{key}_mcap_on",
             )
-            if us_universe:
-                max_cap_usd_bn = st.slider(
-                    "Max market cap ($ billion)",
+            if us_universe or europe_universe:
+                currency_symbol = "€" if europe_universe else "$"
+                cap_key = "eur" if europe_universe else "usd"
+                cap_limit = st.slider(
+                    f"Max market cap ({currency_symbol} billion)",
                     1.0,
                     5000.0,
-                    float(DEFAULT_FILTERS["max_market_cap_usd_bn"]),
+                    float(
+                        DEFAULT_FILTERS["max_market_cap_eur_bn"]
+                        if europe_universe
+                        else DEFAULT_FILTERS["max_market_cap_usd_bn"]
+                    ),
                     1.0,
-                    key=f"{key}_cap_usd",
+                    key=f"{key}_cap_{cap_key}",
                     disabled=not apply_mcap,
-                    help="US universe — caps measured in USD billions (e.g. AAPL ≈ $3 T, COST ≈ $400 B).",
+                    help=f"International universe — caps use the listing currency ({currency_symbol}B).",
                 )
+                max_cap_usd_bn = cap_limit if us_universe else float(DEFAULT_FILTERS["max_market_cap_usd_bn"])
+                max_cap_eur_bn = cap_limit if europe_universe else float(DEFAULT_FILTERS["max_market_cap_eur_bn"])
                 max_cap = float(DEFAULT_FILTERS["max_market_cap_cr"])
             else:
                 max_cap = st.slider(
@@ -167,6 +177,7 @@ Table columns from Yahoo Finance where data exists
                     disabled=not apply_mcap,
                 )
                 max_cap_usd_bn = float(DEFAULT_FILTERS["max_market_cap_usd_bn"])
+                max_cap_eur_bn = float(DEFAULT_FILTERS["max_market_cap_eur_bn"])
             apply_de = st.checkbox(
                 "Apply debt/equity filter",
                 value=small_cap,
@@ -196,6 +207,7 @@ Table columns from Yahoo Finance where data exists
         max_debt_equity=max_de,
         max_market_cap_cr=max_cap,
         max_market_cap_usd_bn=max_cap_usd_bn,
+        max_market_cap_eur_bn=max_cap_eur_bn,
         min_roce_pct=min_roce,
         apply_mcap_filter=apply_mcap,
         apply_de_filter=apply_de,
@@ -264,6 +276,7 @@ Table columns from Yahoo Finance where data exists
                 "Mar Cap": r.market_cap_display or "",
                 "Mar Cap Rs.Cr.": r.market_cap_cr,
                 "Mar Cap $B": r.market_cap_usd_bn,
+                "Mar Cap €B": r.market_cap_eur_bn,
                 "Div Yld %": r.div_yield_pct,
                 "Qtr Profit Var %": r.qtr_profit_var_pct,
                 "Qtr Sales Var %": r.qtr_sales_var_pct,
@@ -406,6 +419,7 @@ def render_proven_multibaggers_section() -> None:
                 help="NSE: Curated, Nifty 50, Nifty 500. US: Curated mega/large-cap or S&P 500.",
             )
             us_universe = is_us_source(universe)
+            europe_universe = is_europe_source(universe)
             lookback_years = st.slider(
                 "Lookback (years)",
                 3, 10, 5, 1,
@@ -439,13 +453,17 @@ def render_proven_multibaggers_section() -> None:
             )
         with c3:
             st.markdown("**Quality floors**")
-            if us_universe:
-                min_mcap_usd_bn = st.slider(
-                    "Min market cap ($ billion)",
+            if us_universe or europe_universe:
+                currency_symbol = "€" if europe_universe else "$"
+                cap_key = "eur" if europe_universe else "usd"
+                min_cap = st.slider(
+                    f"Min market cap ({currency_symbol} billion)",
                     0.0, 500.0, 1.0, 0.5,
-                    key=f"{key}_mcap_usd",
-                    help="US universe — filter out micro-caps. 1 = $1 B floor.",
+                    key=f"{key}_mcap_{cap_key}",
+                    help=f"Filter out micro-caps using native {currency_symbol} billions.",
                 )
+                min_mcap_usd_bn = min_cap if us_universe else 0.0
+                min_mcap_eur_bn = min_cap if europe_universe else 0.0
                 min_mcap = 0.0
             else:
                 min_mcap = st.slider(
@@ -455,6 +473,7 @@ def render_proven_multibaggers_section() -> None:
                     help="Filter out micro-cap noise / illiquid names.",
                 )
                 min_mcap_usd_bn = 1.0
+                min_mcap_eur_bn = 1.0
 
     run = st.button("▶  SCAN PROVEN MULTIBAGGERS", use_container_width=True, key=f"{key}_scan")
 
@@ -468,6 +487,7 @@ def render_proven_multibaggers_section() -> None:
             require_above_ma200=bool(require_above_ma),
             min_market_cap_cr=float(min_mcap),
             min_market_cap_usd_bn=float(min_mcap_usd_bn),
+            min_market_cap_eur_bn=float(min_mcap_eur_bn),
         )
         prog = st.progress(0, text="Initialising…")
 
@@ -542,6 +562,7 @@ def render_proven_multibaggers_section() -> None:
             "Mar Cap": r.market_cap_display or "",
             "Mar Cap Rs.Cr.": r.market_cap_cr,
             "Mar Cap $B": r.market_cap_usd_bn,
+            "Mar Cap €B": r.market_cap_eur_bn,
             "52w High": r.week52_high,
             "Fit Score": r.fit_score,
         }

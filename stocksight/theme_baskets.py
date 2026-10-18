@@ -156,7 +156,7 @@ def is_nse_scan_source(label: str) -> bool:
     s = str(label)
     if is_theme_scan_source(s):
         return True
-    if "Curated" in s and "US" not in s:
+    if "Curated" in s and "US" not in s and "Europe" not in s:
         return True
     return "NSE" in s
 
@@ -169,7 +169,10 @@ def nse_scan_sources(sources: Iterable[str]) -> list[str]:
     """
     src = list(sources)
     themes = [t for t in theme_scan_source_labels() if t in src]
-    curated = [s for s in src if "Curated" in s and "US" not in s]
+    curated = [
+        s for s in src
+        if "Curated" in s and "US" not in s and "Europe" not in s
+    ]
     nse_rest = [
         s
         for s in src

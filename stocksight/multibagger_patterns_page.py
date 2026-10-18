@@ -7,8 +7,12 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from multibagger import CURATED_NSE_LABEL, SCAN_SOURCES
-from theme_baskets import nse_scan_sources
+from multibagger import (
+    CURATED_NSE_LABEL,
+    EQUITY_SCAN_SOURCES,
+    is_europe_source,
+    is_us_source,
+)
 from multibagger_patterns_screener import (
     META,
     RANK_OPTIONS,
@@ -90,14 +94,14 @@ def render_multibagger_patterns_page() -> None:
     key = "mbp"
     render_screener_session_panel(key_prefix=f"{key}_screener")
     session_key = f"{key}_results"
-    nse_sources = nse_scan_sources(SCAN_SOURCES)
+    equity_sources = EQUITY_SCAN_SOURCES
 
     with st.container(border=True):
         c1, c2, c3 = st.columns([1.0, 1.05, 1.05])
         with c1:
             st.markdown("#### Universe")
             uni_key = f"{key}_universe"
-            ensure_session_choice(uni_key, nse_sources, nse_sources[0])
+            ensure_session_choice(uni_key, equity_sources, equity_sources[0])
             quick_cols = st.columns(4)
             quick_map = [
                 ("Curated", CURATED_NSE_LABEL),
@@ -110,7 +114,9 @@ def render_multibagger_patterns_page() -> None:
                     if st.button(lbl, key=f"{key}_q_{lbl}", use_container_width=True):
                         st.session_state[uni_key] = uni
                         st.rerun()
-            universe = st.selectbox("Stock universe (NSE)", nse_sources, key=uni_key)
+            universe = st.selectbox(
+                "Stock universe (NSE / US / Europe)", equity_sources, key=uni_key
+            )
             max_res = st.slider("Max results", 10, 120, 50, 5, key=f"{key}_max")
         with c2:
             st.markdown("#### Acceleration (Screener YoY)")
@@ -128,8 +134,34 @@ def render_multibagger_patterns_page() -> None:
     with st.container(border=True):
         f1, f2, f3 = st.columns(3)
         with f1:
-            min_mcap = st.slider("Min mcap (₹ Cr)", 100.0, 3000.0, 200.0, 50.0, key=f"{key}_mcap_min")
-            max_mcap = st.slider("Max mcap (₹ Cr)", 1000.0, 50_000.0, 25_000.0, 500.0, key=f"{key}_mcap_max")
+            us_market = is_us_source(universe)
+            europe_market = is_europe_source(universe)
+            if us_market or europe_market:
+                symbol = "€" if europe_market else "$"
+                currency_key = "eur" if europe_market else "usd"
+                min_cap = st.slider(
+                    f"Min market cap ({symbol}B)", 0.0, 1000.0, 0.0, 0.5,
+                    key=f"{key}_mcap_min_{currency_key}",
+                )
+                max_cap = st.slider(
+                    f"Max market cap ({symbol}B)", 1.0, 5000.0, 100.0, 1.0,
+                    key=f"{key}_mcap_max_{currency_key}",
+                )
+                min_mcap = 0.0
+                max_mcap = 25_000.0
+                min_mcap_usd_bn = min_cap if us_market else 0.0
+                max_mcap_usd_bn = max_cap if us_market else 100.0
+                min_mcap_eur_bn = min_cap if europe_market else 0.0
+                max_mcap_eur_bn = max_cap if europe_market else 100.0
+            else:
+                min_mcap = st.slider(
+                    "Min mcap (₹ Cr)", 100.0, 3000.0, 200.0, 50.0, key=f"{key}_mcap_min"
+                )
+                max_mcap = st.slider(
+                    "Max mcap (₹ Cr)", 1000.0, 50_000.0, 25_000.0, 500.0, key=f"{key}_mcap_max"
+                )
+                min_mcap_usd_bn = min_mcap_eur_bn = 0.0
+                max_mcap_usd_bn = max_mcap_eur_bn = 100.0
         with f2:
             asset_light = st.checkbox("Prefer asset-light only", value=False, key=f"{key}_al")
             tailwind_only = st.checkbox("Require sector tailwind tag", value=False, key=f"{key}_tw")
@@ -143,7 +175,7 @@ def render_multibagger_patterns_page() -> None:
     render_watchlist_panel(f"{key}_wl")
 
     scan_progress = st.empty()
-    run = st.button("▶  SCAN NOW (Screener + Yahoo)", use_container_width=True, key=f"{key}_scan")
+    run = st.button("▶  SCAN NOW (Yahoo / Screener)", use_container_width=True, key=f"{key}_scan")
 
     flt = MultibaggerPatternFilters(
         min_sales_yoy_pct=min_sales,
@@ -154,6 +186,10 @@ def render_multibagger_patterns_page() -> None:
         min_opm_expansion_pp=min_opm_d,
         max_market_cap_cr=max_mcap,
         min_market_cap_cr=min_mcap,
+        min_market_cap_usd_bn=min_mcap_usd_bn,
+        max_market_cap_usd_bn=max_mcap_usd_bn,
+        min_market_cap_eur_bn=min_mcap_eur_bn,
+        max_market_cap_eur_bn=max_mcap_eur_bn,
         min_roce_pct=min_roce,
         max_pe=max_pe,
         prefer_asset_light=asset_light,
@@ -162,10 +198,10 @@ def render_multibagger_patterns_page() -> None:
     )
 
     if run:
-        prog = scan_progress.progress(0, text="Fetching Screener.in + Yahoo…")
+        prog = scan_progress.progress(0, text="Fetching annual financials…")
 
         def cb(i, t, s):
-            prog.progress(int(i / max(t, 1) * 100), text=f"{s} — Screener P&L & cash flow… ({i}/{t})")
+            prog.progress(int(i / max(t, 1) * 100), text=f"{s} — annual financials… ({i}/{t})")
 
         hits = scan_multibagger_patterns(universe, flt, progress_cb=cb, max_results=int(max_res))
         st.session_state[session_key] = hits
@@ -247,7 +283,9 @@ def render_multibagger_patterns_page() -> None:
             "CFO/PAT": st.column_config.NumberColumn(format="%.2f"),
             "OPM %": st.column_config.NumberColumn(format="%.1f"),
             "OPM Δ 3Y pp": st.column_config.NumberColumn(format="%.1f"),
-            "Price": st.column_config.NumberColumn(format="₹%.2f"),
+            "Price": st.column_config.NumberColumn(
+                format=("€%.2f" if is_europe_source(last_uni) else "$%.2f" if is_us_source(last_uni) else "₹%.2f")
+            ),
             "P/E": st.column_config.NumberColumn(format="%.2f"),
             "1Y return %": st.column_config.NumberColumn(format="%+.1f"),
             "Below 52w %": st.column_config.NumberColumn(format="%.1f"),

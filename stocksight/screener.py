@@ -23,6 +23,8 @@ _NSE_FII_CACHE: tuple[float, Optional[str]] = (0.0, None)
 
 NIFTY_BENCHMARK = "^NSEI"
 SPY_BENCHMARK = "SPY"
+EUROPE_BENCHMARK = "VGK"
+EUROPE_TICKER_SUFFIXES = (".DE", ".PA", ".AS", ".MI", ".MC", ".BR")
 
 
 # ─────────────────────────────────────────────
@@ -204,6 +206,32 @@ SP500 = [
     "CDT", "CDW",
 ]
 
+EUROPE_LARGE_CAP_LABEL = "Curated Europe (EUR large-cap)"
+EUROPE_LARGE_CAP_UNIVERSE: list[tuple[str, str]] = [
+    ("ASML", "ASML.AS"),
+    ("SAP", "SAP.DE"),
+    ("Siemens", "SIE.DE"),
+    ("Allianz", "ALV.DE"),
+    ("Airbus", "AIR.PA"),
+    ("LVMH", "MC.PA"),
+    ("L'Oreal", "OR.PA"),
+    ("TotalEnergies", "TTE.PA"),
+    ("Sanofi", "SAN.PA"),
+    ("Schneider Electric", "SU.PA"),
+    ("Air Liquide", "AI.PA"),
+    ("Dassault Systemes", "DSY.PA"),
+    ("Deutsche Telekom", "DTE.DE"),
+    ("Infineon", "IFX.DE"),
+    ("Adidas", "ADS.DE"),
+    ("ING Group", "INGA.AS"),
+    ("Adyen", "ADYEN.AS"),
+    ("Enel", "ENEL.MI"),
+    ("Ferrari", "RACE.MI"),
+    ("Iberdrola", "IBE.MC"),
+    ("Banco Santander", "SAN.MC"),
+    ("AB InBev", "ABI.BR"),
+]
+
 UNIVERSES = {
     "Nifty 50 (NSE)": NIFTY_50,
     "Nifty 500 (NSE)": NIFTY_50 + NIFTY_500_EXTRA,
@@ -211,6 +239,7 @@ UNIVERSES = {
     "Nifty 500 + Small/Mid Movers (NSE)": NIFTY_50 + NIFTY_500_EXTRA + NSE_SMALLMID_EXTRA,
     "All NSE equities (~2300) - very slow": [],  # lazy — see get_universe_tickers()
     "S&P 500 (NYSE)": SP500,
+    EUROPE_LARGE_CAP_LABEL: [ticker for _, ticker in EUROPE_LARGE_CAP_UNIVERSE],
 }
 
 # Theme idea baskets (curated) — keep after core indexes
@@ -273,6 +302,15 @@ def get_stock_links(raw_ticker: str) -> dict:
     is_nse = raw_ticker.endswith(".NS")
     is_bse = raw_ticker.endswith(".BO")
     clean = raw_ticker.replace(".NS", "").replace(".BO", "")
+    if not (is_nse or is_bse):
+        clean = next(
+            (
+                raw_ticker[: -len(suffix)]
+                for suffix in EUROPE_TICKER_SUFFIXES
+                if raw_ticker.upper().endswith(suffix)
+            ),
+            clean,
+        )
 
     if is_nse:
         return {
@@ -287,6 +325,22 @@ def get_stock_links(raw_ticker: str) -> dict:
             "Google Finance": f"https://www.google.com/finance/quote/{clean}:BOM",
             "Moneycontrol":   f"https://www.moneycontrol.com/india/stockpricequote/search?q={clean}",
             "TradingView":    f"https://www.tradingview.com/symbols/BSE-{clean}/",
+        }
+    europe_exchanges = {
+        ".DE": ("ETR", "XETR"),
+        ".PA": ("EPA", "EURONEXT"),
+        ".AS": ("AMS", "EURONEXT"),
+        ".MI": ("BIT", "MIL"),
+        ".MC": ("BME", "BME"),
+        ".BR": ("EBR", "EURONEXT"),
+    }
+    suffix = next((item for item in europe_exchanges if raw_ticker.upper().endswith(item)), None)
+    if suffix:
+        google_exchange, tv_exchange = europe_exchanges[suffix]
+        return {
+            "Yahoo Finance": f"https://finance.yahoo.com/quote/{raw_ticker}",
+            "Google Finance": f"https://www.google.com/finance/quote/{clean}:{google_exchange}",
+            "TradingView": f"https://www.tradingview.com/symbols/{tv_exchange}-{clean}/",
         }
     return {
         "Yahoo Finance":  f"https://finance.yahoo.com/quote/{clean}",
@@ -551,7 +605,12 @@ def relative_strength_vs_benchmark(
 
 
 def benchmark_ticker_for(raw_ticker: str) -> str:
-    return NIFTY_BENCHMARK if str(raw_ticker).upper().endswith((".NS", ".BO")) else SPY_BENCHMARK
+    raw = str(raw_ticker).upper()
+    if raw.endswith((".NS", ".BO")):
+        return NIFTY_BENCHMARK
+    if raw.endswith(EUROPE_TICKER_SUFFIXES):
+        return EUROPE_BENCHMARK
+    return SPY_BENCHMARK
 
 
 def fetch_nse_fii_dii_equity_snapshot(ttl_seconds: int = 3600) -> Optional[str]:
@@ -2062,7 +2121,7 @@ def screen_stocks(
     min_bar = min_bars_for_screen(interval_key)
     sector_needle = (sector_filter or "").strip().lower()
 
-    bench_sym = NIFTY_BENCHMARK if "NSE" in str(universe_name).upper() else SPY_BENCHMARK
+    bench_sym = benchmark_ticker_for(tickers[0] if tickers else "^NSEI")
     bench_hist = fetch_price_history(bench_sym, interval_key)
 
     for i, ticker in enumerate(tickers):

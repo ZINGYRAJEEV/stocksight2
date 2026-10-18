@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from multibagger import currency_for_ticker
+
 from screener import (
     UNIVERSES,
     benchmark_ticker_for,
@@ -104,6 +106,7 @@ class Stage2MomentumResult:
     warnings: list[str] = field(default_factory=list)
     links: dict[str, str] = field(default_factory=dict)
     badge: str = ""
+    currency: str = "USD"
 
 
 @dataclass
@@ -643,6 +646,7 @@ def scan_stage2_momentum(
                 warnings=warnings,
                 links=get_stock_links(raw),
                 badge=badge,
+                currency=currency_for_ticker(raw),
             )
         )
 

@@ -16,9 +16,12 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+from multibagger import CURATED_EUROPE_LABEL
 from screener import UNIVERSES, compute_rsi, compute_volume_ratio, get_pe, get_stock_links
 
-SCAN_SOURCES = ["Curated watchlist"] + list(UNIVERSES.keys())
+SCAN_SOURCES = ["Curated watchlist"] + [
+    source for source in UNIVERSES if source != CURATED_EUROPE_LABEL
+]
 
 warnings.filterwarnings("ignore")
 
@@ -496,7 +499,7 @@ def resolve_watchlist(archetype_id: str, scan_source: str) -> list[dict]:
     universe = set(UNIVERSES.get(scan_source, []))
     if not universe:
         return wl
-    return [e for e in wl if e["ticker"] in universe]
+        return [e for e in wl if e["ticker"] in universe]
 
 
 def passes_scan_filters(row: HighProfitResult, filters: HighProfitScanFilters) -> bool:

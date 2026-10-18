@@ -24,6 +24,8 @@ import yfinance as yf
 
 try:
     from .screener import (
+        EUROPE_LARGE_CAP_LABEL,
+        EUROPE_LARGE_CAP_UNIVERSE,
         UNIVERSES,
         compute_rsi,
         get_pe,
@@ -35,6 +37,8 @@ try:
     )
 except ImportError:
     from screener import (
+        EUROPE_LARGE_CAP_LABEL,
+        EUROPE_LARGE_CAP_UNIVERSE,
         UNIVERSES,
         compute_rsi,
         get_pe,
@@ -47,18 +51,19 @@ except ImportError:
 
 INR_PER_CRORE = 10_000_000.0
 USD_PER_BILLION = 1_000_000_000.0
+EUROPE_TICKER_SUFFIXES = (".DE", ".PA", ".AS", ".MI", ".MC", ".BR")
 
 try:
-    from .theme_baskets import is_nse_scan_source, theme_scan_source_labels
+    from .theme_baskets import is_nse_scan_source, nse_scan_sources, theme_scan_source_labels
 except ImportError:
-    from theme_baskets import is_nse_scan_source, theme_scan_source_labels
+    from theme_baskets import is_nse_scan_source, nse_scan_sources, theme_scan_source_labels
 
 NSE_UNIVERSES = [k for k in UNIVERSES if is_nse_scan_source(k)]
 US_UNIVERSES = [k for k in UNIVERSES if any(x in k for x in ("NYSE", "NASDAQ", "S&P", "Dow"))]
 
 CURATED_NSE_LABEL = "Curated NSE (ROCE export names)"
 CURATED_US_LABEL = "Curated US (mega/large-cap)"
-CURATED_EUROPE_LABEL = "Curated Europe (EUR large-cap)"
+CURATED_EUROPE_LABEL = EUROPE_LARGE_CAP_LABEL
 
 # Curated high-ROCE NSE names (verify symbols on NSE).
 CURATED_MULTIBAGGER: list[dict[str, str]] = [
@@ -106,28 +111,8 @@ CURATED_MULTIBAGGER_US: list[dict[str, str]] = [
 ]
 
 CURATED_MULTIBAGGER_EUROPE: list[dict[str, str]] = [
-    {"label": "ASML", "ticker": "ASML.AS"},
-    {"label": "SAP", "ticker": "SAP.DE"},
-    {"label": "Siemens", "ticker": "SIE.DE"},
-    {"label": "Allianz", "ticker": "ALV.DE"},
-    {"label": "Airbus", "ticker": "AIR.PA"},
-    {"label": "LVMH", "ticker": "MC.PA"},
-    {"label": "L'Oreal", "ticker": "OR.PA"},
-    {"label": "TotalEnergies", "ticker": "TTE.PA"},
-    {"label": "Sanofi", "ticker": "SAN.PA"},
-    {"label": "Schneider Electric", "ticker": "SU.PA"},
-    {"label": "Air Liquide", "ticker": "AI.PA"},
-    {"label": "Dassault Systemes", "ticker": "DSY.PA"},
-    {"label": "Deutsche Telekom", "ticker": "DTE.DE"},
-    {"label": "Infineon", "ticker": "IFX.DE"},
-    {"label": "Adidas", "ticker": "ADS.DE"},
-    {"label": "ING Group", "ticker": "INGA.AS"},
-    {"label": "Adyen", "ticker": "ADYEN.AS"},
-    {"label": "Enel", "ticker": "ENEL.MI"},
-    {"label": "Ferrari", "ticker": "RACE.MI"},
-    {"label": "Iberdrola", "ticker": "IBE.MC"},
-    {"label": "Banco Santander", "ticker": "SAN.MC"},
-    {"label": "AB InBev", "ticker": "ABI.BR"},
+    {"label": label, "ticker": ticker}
+    for label, ticker in EUROPE_LARGE_CAP_UNIVERSE
 ]
 
 _THEME_LABELS = theme_scan_source_labels()
@@ -140,6 +125,13 @@ SCAN_SOURCES = (
     + [CURATED_EUROPE_LABEL]
     + US_UNIVERSES
 )
+US_SCAN_SOURCES = [CURATED_US_LABEL, *US_UNIVERSES]
+EUROPE_SCAN_SOURCES = [CURATED_EUROPE_LABEL]
+EQUITY_SCAN_SOURCES = [
+    *nse_scan_sources(SCAN_SOURCES),
+    *US_SCAN_SOURCES,
+    *EUROPE_SCAN_SOURCES,
+]
 
 # Back-compat alias for any older session_state that stored the old curated key.
 LEGACY_CURATED_KEY = "Curated (ROCE export names)"
@@ -157,6 +149,15 @@ def is_us_source(scan_source: str) -> bool:
 def is_europe_source(scan_source: str) -> bool:
     """True for the curated euro-denominated European universe."""
     return scan_source == CURATED_EUROPE_LABEL
+
+
+def currency_for_ticker(raw_ticker: str, default: str = "USD") -> str:
+    raw = str(raw_ticker or "").upper()
+    if raw.endswith((".NS", ".BO")):
+        return "INR"
+    if raw.endswith(EUROPE_TICKER_SUFFIXES):
+        return "EUR"
+    return default
 
 
 def is_nse_source(scan_source: str) -> bool:
@@ -273,11 +274,11 @@ def format_market_cap(mcap_native: Optional[float], currency: str) -> str:
     return f"{sym}{v:,.0f}"
 
 
-def extract_multibagger_fundamentals(info: dict) -> dict:
+def extract_multibagger_fundamentals(info: dict, *, default_currency: str = "USD") -> dict:
     """Fundamental fields for multibagger filters (best-effort from Yahoo `info`).
 
-    Currency-aware: returns market cap in both INR-crore and USD-bn so callers can
-    apply the right threshold for NSE vs US universes.
+    Currency-aware: returns INR-crore for NSE and native-currency billions for
+    international listings.
     """
     qtr_sales = normalize_growth_pct(
         _gf(
@@ -304,15 +305,19 @@ def extract_multibagger_fundamentals(info: dict) -> dict:
 
     de = normalize_debt_equity(_gf(info, ("debtToEquity", "totalDebtToEquity")))
 
-    currency = _norm_currency(info.get("currency") or info.get("financialCurrency"))
+    currency = _norm_currency(
+        info.get("currency") or info.get("financialCurrency") or default_currency
+    )
     mcap_raw = _gf(info, ("marketCap", "market_cap"))
     mcap_cr: Optional[float] = None
     mcap_usd_bn: Optional[float] = None
+    mcap_eur_bn: Optional[float] = None
     if mcap_raw is not None and mcap_raw > 0:
         if currency == "INR":
             mcap_cr = market_cap_inr_to_cr(mcap_raw)
+        elif currency == "EUR":
+            mcap_eur_bn = market_cap_usd_to_bn(mcap_raw)
         else:
-            # Default to USD when currency isn't given (most US tickers report).
             mcap_usd_bn = market_cap_usd_to_bn(mcap_raw)
 
     roce = normalize_return_pct(
@@ -343,11 +348,17 @@ def extract_multibagger_fundamentals(info: dict) -> dict:
         "revenue_growth_pct": qtr_sales,
         "profit_growth_pct": qtr_profit,
         "debt_equity": de,
-        "currency": currency or "USD",
+        "currency": currency,
         "market_cap_native": mcap_raw,
         "market_cap_cr": mcap_cr,
         "market_cap_usd_bn": mcap_usd_bn,
-        "market_cap_display": format_market_cap(mcap_raw, currency or "USD"),
+        "market_cap_eur_bn": mcap_eur_bn,
+        "market_cap_native_bn": (
+            market_cap_usd_to_bn(mcap_raw)
+            if mcap_raw is not None and mcap_raw > 0 and currency != "INR"
+            else None
+        ),
+        "market_cap_display": format_market_cap(mcap_raw, currency),
         "roce_pct": roce_used,
         "roce_is_roe_proxy": roce is None and roe is not None,
         "div_yield_pct": div_yld,
@@ -362,6 +373,7 @@ class MultibaggerFilters:
     max_debt_equity: float = 0.5
     max_market_cap_cr: float = 5000.0
     max_market_cap_usd_bn: float = 100.0
+    max_market_cap_eur_bn: float = 100.0
     min_roce_pct: float = 15.0
     apply_mcap_filter: bool = False
     apply_de_filter: bool = False
@@ -388,6 +400,7 @@ class MultibaggerResult:
     currency: str = "INR"
     market_cap_native: Optional[float] = None
     market_cap_usd_bn: Optional[float] = None
+    market_cap_eur_bn: Optional[float] = None
     market_cap_display: str = ""
 
 
@@ -447,9 +460,13 @@ def _passes_filters(fund: dict, flt: MultibaggerFilters) -> bool:
             mcap = fund.get("market_cap_cr")
             if mcap is None or mcap >= flt.max_market_cap_cr:
                 return False
-        else:
+        elif currency == "USD":
             mcap_bn = fund.get("market_cap_usd_bn")
             if mcap_bn is None or mcap_bn >= flt.max_market_cap_usd_bn:
+                return False
+        else:
+            mcap_bn = fund.get("market_cap_eur_bn")
+            if mcap_bn is None or mcap_bn >= flt.max_market_cap_eur_bn:
                 return False
 
     return True
@@ -465,9 +482,12 @@ def _fit_score(fund: dict, flt: MultibaggerFilters) -> float:
     if currency == "INR":
         mcap = float(fund.get("market_cap_cr") or flt.max_market_cap_cr)
         cap_threshold = flt.max_market_cap_cr
-    else:
+    elif currency == "USD":
         mcap = float(fund.get("market_cap_usd_bn") or flt.max_market_cap_usd_bn)
         cap_threshold = flt.max_market_cap_usd_bn
+    else:
+        mcap = float(fund.get("market_cap_eur_bn") or flt.max_market_cap_eur_bn)
+        cap_threshold = flt.max_market_cap_eur_bn
 
     sales_s = min(sales / max(flt.min_qtr_sales_var_pct, 1.0), 3.0)
     prof_s = min(profit / max(flt.min_qtr_profit_var_pct, 1.0), 3.0)
@@ -490,6 +510,7 @@ class ProvenMultibaggerFilters:
     require_above_ma200: bool = True
     min_market_cap_cr: float = 500.0
     min_market_cap_usd_bn: float = 1.0
+    min_market_cap_eur_bn: float = 1.0
 
 
 @dataclass
@@ -514,6 +535,7 @@ class ProvenMultibaggerResult:
     currency: str = "INR"
     market_cap_native: Optional[float] = None
     market_cap_usd_bn: Optional[float] = None
+    market_cap_eur_bn: Optional[float] = None
     market_cap_display: str = ""
 
 
@@ -642,16 +664,21 @@ def scan_proven_multibaggers(
             if rsi_val is not None and (rsi_val < flt.rsi_min or rsi_val > flt.rsi_max):
                 continue
 
-            fund = extract_multibagger_fundamentals(info)
+            fund = extract_multibagger_fundamentals(
+                info, default_currency=currency_for_ticker(raw)
+            )
             currency = _norm_currency(fund.get("currency"))
             mcap_cr = fund.get("market_cap_cr")
             mcap_usd_bn = fund.get("market_cap_usd_bn")
+            mcap_eur_bn = fund.get("market_cap_eur_bn")
             if currency == "INR":
                 if mcap_cr is not None and mcap_cr < flt.min_market_cap_cr:
                     continue
-            else:
+            elif currency == "USD":
                 if mcap_usd_bn is not None and mcap_usd_bn < flt.min_market_cap_usd_bn:
                     continue
+            elif mcap_eur_bn is not None and mcap_eur_bn < flt.min_market_cap_eur_bn:
+                continue
 
             pe = get_pe(stock)
             sector, _ = get_sector_industry(stock)
@@ -679,13 +706,19 @@ def scan_proven_multibaggers(
                     currency=currency or "INR",
                     market_cap_native=fund.get("market_cap_native"),
                     market_cap_usd_bn=mcap_usd_bn,
+                    market_cap_eur_bn=mcap_eur_bn,
                     market_cap_display=fund.get("market_cap_display", ""),
                 )
             )
         except Exception:
             continue
 
-        if info_delay_sec > 0 and scan_source not in (CURATED_NSE_LABEL, CURATED_US_LABEL, LEGACY_CURATED_KEY):
+        if info_delay_sec > 0 and scan_source not in (
+            CURATED_NSE_LABEL,
+            CURATED_US_LABEL,
+            CURATED_EUROPE_LABEL,
+            LEGACY_CURATED_KEY,
+        ):
             time.sleep(info_delay_sec)
 
     return sorted(results, key=lambda x: x.past_return_pct, reverse=True)
@@ -731,7 +764,9 @@ def scan_multibagger(
             if not info.get("symbol") and not info.get("shortName"):
                 continue
 
-            fund = extract_multibagger_fundamentals(info)
+            fund = extract_multibagger_fundamentals(
+                info, default_currency=currency_for_ticker(raw)
+            )
             if not _passes_filters(fund, filters):
                 continue
 
@@ -771,13 +806,19 @@ def scan_multibagger(
                 currency=_norm_currency(fund.get("currency")) or "INR",
                 market_cap_native=fund.get("market_cap_native"),
                 market_cap_usd_bn=fund.get("market_cap_usd_bn"),
+                market_cap_eur_bn=fund.get("market_cap_eur_bn"),
                 market_cap_display=fund.get("market_cap_display", ""),
             )
             results.append(row)
         except Exception:
             continue
 
-        if info_delay_sec > 0 and scan_source not in (CURATED_NSE_LABEL, CURATED_US_LABEL, LEGACY_CURATED_KEY):
+        if info_delay_sec > 0 and scan_source not in (
+            CURATED_NSE_LABEL,
+            CURATED_US_LABEL,
+            CURATED_EUROPE_LABEL,
+            LEGACY_CURATED_KEY,
+        ):
             time.sleep(info_delay_sec)
 
     return sorted(results, key=lambda x: (x.roce_pct or 0.0), reverse=True)

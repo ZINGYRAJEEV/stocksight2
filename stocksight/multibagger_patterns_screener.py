@@ -21,6 +21,7 @@ try:
     from .multibagger import (
         INR_PER_CRORE,
         SCAN_SOURCES,
+        currency_for_ticker,
         extract_multibagger_fundamentals,
         is_nse_source,
         resolve_scan_tickers,
@@ -31,6 +32,7 @@ except ImportError:
     from multibagger import (
         INR_PER_CRORE,
         SCAN_SOURCES,
+        currency_for_ticker,
         extract_multibagger_fundamentals,
         is_nse_source,
         resolve_scan_tickers,
@@ -89,6 +91,10 @@ class MultibaggerPatternFilters:
     min_opm_expansion_pp: float = 0.0
     max_market_cap_cr: float = 25_000.0
     min_market_cap_cr: float = 200.0
+    min_market_cap_usd_bn: float = 0.0
+    max_market_cap_usd_bn: float = 100.0
+    min_market_cap_eur_bn: float = 0.0
+    max_market_cap_eur_bn: float = 100.0
     min_roce_pct: float = 12.0
     max_pe: float = 80.0
     prefer_asset_light: bool = False
@@ -117,6 +123,7 @@ class MultibaggerPatternResult:
     pe: Optional[float]
     market_cap_cr: Optional[float]
     market_cap_display: str
+    currency: str
     sales_yoy_pct: Optional[float]
     profit_yoy_pct: Optional[float]
     sales_cagr_3y_pct: Optional[float]
@@ -248,6 +255,69 @@ def fetch_screener_annuals(display_ticker: str) -> ScreenerAnnualSeries:
                 pass
     except Exception:
         pass
+    return out
+
+
+def _yahoo_annuals(stock: yf.Ticker) -> ScreenerAnnualSeries:
+    """Build annual revenue, profit, margin, and cash-flow series from Yahoo."""
+    out = ScreenerAnnualSeries(source="Yahoo Finance annual statements")
+
+    def _row(frame: pd.DataFrame, needles: tuple[str, ...]):
+        if frame is None or frame.empty:
+            return None
+        for name in frame.index:
+            if any(needle in str(name).casefold() for needle in needles):
+                return frame.loc[name]
+        return None
+
+    try:
+        statements = stock.financials
+        revenue = _row(statements, ("total revenue", "operating revenue", "revenue"))
+        profit = _row(statements, ("net income",))
+        operating_income = _row(statements, ("operating income",))
+        if revenue is not None:
+            for col, raw_value in revenue.items():
+                try:
+                    year = pd.Timestamp(col).year
+                    value = float(raw_value)
+                    if value > 0:
+                        out.sales.append((year, value))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+        if profit is not None:
+            for col, raw_value in profit.items():
+                try:
+                    value = float(raw_value)
+                    out.net_profit.append((pd.Timestamp(col).year, value))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+        if revenue is not None and operating_income is not None:
+            for col, raw_value in operating_income.items():
+                try:
+                    rev = float(revenue.get(col))
+                    op = float(raw_value)
+                    if rev > 0:
+                        out.opm_pct[pd.Timestamp(col).year] = round(op / rev * 100.0, 2)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+        out.sales.sort(key=lambda item: item[0])
+        out.net_profit.sort(key=lambda item: item[0])
+    except Exception:
+        pass
+
+    try:
+        cashflow = stock.cashflow
+        cfo = _row(cashflow, ("operating cash flow", "cash flow from continuing operating"))
+        if cfo is not None:
+            for col, raw_value in cfo.items():
+                try:
+                    out.cfo.append((pd.Timestamp(col).year, float(raw_value)))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+            out.cfo.sort(key=lambda item: item[0])
+    except Exception:
+        pass
+
     return out
 
 
@@ -402,7 +472,21 @@ def _passes(
     py = metrics.get("profit_yoy_pct")
     cfo_r = metrics.get("cfo_to_pat")
     opm_d = metrics.get("opm_delta_3y_pp")
-    mcap = metrics.get("market_cap_cr")
+    currency = metrics.get("currency")
+    if currency == "INR":
+        mcap = metrics.get("market_cap_cr")
+        min_mcap, max_mcap = flt.min_market_cap_cr, flt.max_market_cap_cr
+        mcap_note = f"Mcap ₹{mcap:,.0f} Cr" if mcap is not None else ""
+    elif currency == "USD":
+        mcap = metrics.get("market_cap_usd_bn")
+        min_mcap, max_mcap = flt.min_market_cap_usd_bn, flt.max_market_cap_usd_bn
+        mcap_note = f"Mcap ${mcap:.2f} B" if mcap is not None else ""
+    elif currency == "EUR":
+        mcap = metrics.get("market_cap_eur_bn")
+        min_mcap, max_mcap = flt.min_market_cap_eur_bn, flt.max_market_cap_eur_bn
+        mcap_note = f"Mcap €{mcap:.2f} B" if mcap is not None else ""
+    else:
+        return False, notes
     roce = metrics.get("roce_pct")
     pe = metrics.get("pe")
 
@@ -430,9 +514,9 @@ def _passes(
             notes.append(f"OPM +{opm_d:.1f} pp")
 
     if mcap is not None:
-        if mcap < flt.min_market_cap_cr or mcap > flt.max_market_cap_cr:
+        if mcap < min_mcap or mcap > max_mcap:
             return False, notes
-        notes.append(f"Mcap ₹{mcap:,.0f} Cr")
+        notes.append(mcap_note)
 
     if roce is None or roce < flt.min_roce_pct:
         return False, notes
@@ -476,9 +560,11 @@ def scan_multibagger_patterns(
 
         try:
             disp = raw.replace(".NS", "").replace(".BO", "")
-            screener = fetch_screener_annuals(disp)
-
             stock = yf.Ticker(raw)
+            if raw.endswith((".NS", ".BO")):
+                screener = fetch_screener_annuals(disp)
+            else:
+                screener = _yahoo_annuals(stock)
             try:
                 info = stock.info or {}
             except Exception:
@@ -486,7 +572,9 @@ def scan_multibagger_patterns(
             if not info.get("symbol") and not info.get("shortName"):
                 continue
 
-            fund = extract_multibagger_fundamentals(info)
+            fund = extract_multibagger_fundamentals(
+                info, default_currency=currency_for_ticker(raw)
+            )
             sector, industry = get_sector_industry(stock)
             price = float(info.get("regularMarketPrice") or info.get("currentPrice") or 0.0)
             if price <= 0:
@@ -554,6 +642,9 @@ def scan_multibagger_patterns(
                 "cfo_to_pat": cfo_ratio,
                 "opm_delta_3y_pp": opm_delta,
                 "market_cap_cr": fund.get("market_cap_cr"),
+                "market_cap_usd_bn": fund.get("market_cap_usd_bn"),
+                "market_cap_eur_bn": fund.get("market_cap_eur_bn"),
+                "currency": fund.get("currency") or currency_for_ticker(raw),
                 "roce_pct": fund.get("roce_pct"),
                 "pe": pe,
                 "asset_light": asset_light,
@@ -571,14 +662,15 @@ def scan_multibagger_patterns(
                 years_lbl = f"{screener.sales[0][0]}–{screener.sales[-1][0]}"
 
             links = get_stock_links(raw)
-            slug = disp
-            try:
-                from screener_buyback import resolve_screener_company_id
+            if raw.endswith((".NS", ".BO")):
+                slug = disp
+                try:
+                    from screener_buyback import resolve_screener_company_id
 
-                _, _, slug = resolve_screener_company_id(disp)
-            except Exception:
-                pass
-            links["Screener.in"] = f"https://www.screener.in/company/{slug}/consolidated/"
+                    _, _, slug = resolve_screener_company_id(disp)
+                except Exception:
+                    pass
+                links["Screener.in"] = f"https://www.screener.in/company/{slug}/consolidated/"
 
             results.append(
                 MultibaggerPatternResult(
@@ -591,6 +683,7 @@ def scan_multibagger_patterns(
                     pe=round(float(pe), 2) if pe is not None else None,
                     market_cap_cr=fund.get("market_cap_cr"),
                     market_cap_display=fund.get("market_cap_display") or "",
+                    currency=fund.get("currency") or currency_for_ticker(raw),
                     sales_yoy_pct=sales_yoy,
                     profit_yoy_pct=profit_yoy,
                     sales_cagr_3y_pct=sales_cagr,

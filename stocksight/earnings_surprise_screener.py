@@ -22,6 +22,7 @@ try:
     from .multibagger import (
         SCAN_SOURCES,
         extract_multibagger_fundamentals,
+        currency_for_ticker,
         normalize_debt_equity,
         normalize_growth_pct,
         resolve_scan_tickers,
@@ -39,6 +40,7 @@ except ImportError:
     from multibagger import (
         SCAN_SOURCES,
         extract_multibagger_fundamentals,
+        currency_for_ticker,
         normalize_debt_equity,
         normalize_growth_pct,
         resolve_scan_tickers,
@@ -106,6 +108,8 @@ class EarningsSurpriseFilters:
     max_peg: float = 2.5
     max_debt_equity: float = 1.0
     min_market_cap_cr: float = 300.0
+    min_market_cap_usd_bn: float = 0.0
+    min_market_cap_eur_bn: float = 0.0
     info_delay_sec: float = 0.12
     screener_delay_sec: float = 0.22
 
@@ -141,6 +145,7 @@ class EarningsSurpriseResult:
     links: dict = field(default_factory=dict)
     qoq_source: str = ""
     fundamentals_source: str = ""
+    currency: str = "INR"
 
 
 def _pick_row(df: pd.DataFrame, candidates: tuple[str, ...]) -> Optional[pd.Series]:
@@ -309,8 +314,19 @@ def _passes_filters(
             return False, notes
         notes.append(f"YoY sales {yoy_s:.1f}% · YoY profit {yoy_p:.1f}%")
 
-    mcap = fund.get("market_cap_cr")
-    if mcap is None or mcap < flt.min_market_cap_cr:
+    currency = fund.get("currency")
+    if currency == "INR":
+        mcap = fund.get("market_cap_cr")
+        min_mcap = flt.min_market_cap_cr
+    elif currency == "USD":
+        mcap = fund.get("market_cap_usd_bn")
+        min_mcap = flt.min_market_cap_usd_bn
+    elif currency == "EUR":
+        mcap = fund.get("market_cap_eur_bn")
+        min_mcap = flt.min_market_cap_eur_bn
+    else:
+        return False, notes
+    if mcap is None or mcap < min_mcap:
         return False, notes
 
     de = fund.get("debt_equity")
@@ -410,7 +426,9 @@ def scan_earnings_surprise(
             if not qoq:
                 continue
 
-            fund = extract_multibagger_fundamentals(info)
+            fund = extract_multibagger_fundamentals(
+                info, default_currency=currency_for_ticker(raw)
+            )
             if _is_indian_ticker(raw):
                 try:
                     from screener_in_data import enrich_fundamentals_from_screener
@@ -513,6 +531,7 @@ def scan_earnings_surprise(
                     links=links,
                     qoq_source=qoq_source,
                     fundamentals_source=fund_source,
+                    currency=fund.get("currency") or currency_for_ticker(raw),
                 )
             )
         except Exception:

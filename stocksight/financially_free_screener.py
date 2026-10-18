@@ -15,7 +15,12 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from multibagger import extract_multibagger_fundamentals, normalize_return_pct, resolve_scan_tickers
+from multibagger import (
+    currency_for_ticker,
+    extract_multibagger_fundamentals,
+    normalize_return_pct,
+    resolve_scan_tickers,
+)
 from screener import (
     benchmark_ticker_for,
     compute_rsi,
@@ -141,6 +146,7 @@ class FinanciallyFreeResult:
     roce_is_roe_proxy: bool = False
     fundamentals_source: str = ""
     links: dict = field(default_factory=dict)
+    currency: str = "INR"
 
 
 def _display_ticker(raw: str) -> str:
@@ -435,7 +441,9 @@ def scan_financially_free(
         if flt.require_above_21ema and not ema["above_21ema"]:
             continue
 
-        fund = extract_multibagger_fundamentals(info)
+        fund = extract_multibagger_fundamentals(
+            info, default_currency=currency_for_ticker(raw)
+        )
         disp = _display_ticker(raw)
         if raw.endswith(".NS") or raw.endswith(".BO"):
             try:
@@ -520,6 +528,7 @@ def scan_financially_free(
                     str(ema.get("exit_signal") or ""),
                 ),
                 links=get_stock_links(raw),
+                currency=fund.get("currency") or currency_for_ticker(raw),
             )
         )
 
@@ -576,7 +585,8 @@ def result_to_row(r: FinanciallyFreeResult, rank: int, stop_pct: float = 10.0) -
         "% below 52w high": r.pct_below_52w_high,
         "RSI (14)": r.rsi_14,
         "Monthly RSI": r.monthly_rsi_14,
-        "RS vs Nifty (pp)": r.rs_vs_nifty_pp,
+        "RS vs benchmark (pp)": r.rs_vs_nifty_pp,
+        "Currency": r.currency,
         "VCP score": r.vcp_score,
         "VCP grade": r.vcp_grade,
         "Trend passes": r.trend_pass,

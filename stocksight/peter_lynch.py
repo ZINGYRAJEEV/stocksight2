@@ -15,7 +15,11 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from multibagger import extract_multibagger_fundamentals, normalize_debt_equity
+from multibagger import (
+    currency_for_ticker,
+    extract_multibagger_fundamentals,
+    normalize_debt_equity,
+)
 from screener import (
     UNIVERSES,
     drawdown_pct_from_52w_high,
@@ -295,6 +299,9 @@ def _is_large_cap(fund: dict, currency: str) -> bool:
     if currency == "INR":
         mcap = fund.get("market_cap_cr")
         return mcap is not None and mcap >= 20_000
+    if currency == "EUR":
+        mcap = fund.get("market_cap_eur_bn")
+        return mcap is not None and mcap >= 50
     mcap = fund.get("market_cap_usd_bn")
     return mcap is not None and mcap >= 50
 
@@ -479,7 +486,9 @@ def analyze_ticker_lynch(raw: str, flt: LynchFilters) -> Optional[LynchResult]:
         info = stock.info or {}
         if not info.get("symbol") and not info.get("shortName"):
             return None
-        fund = extract_multibagger_fundamentals(info)
+        fund = extract_multibagger_fundamentals(
+            info, default_currency=currency_for_ticker(raw)
+        )
 
         hist, ltp, price_src = _fetch_lynch_price_data(raw, flt.data_source)
         if hist is None or hist.empty:

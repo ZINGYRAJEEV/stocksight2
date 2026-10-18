@@ -23,6 +23,7 @@ try:
         NSE_UNIVERSES,
         SCAN_SOURCES,
         _gf,
+        currency_for_ticker,
         extract_multibagger_fundamentals,
         normalize_debt_equity,
         normalize_growth_pct,
@@ -43,6 +44,7 @@ except ImportError:
         NSE_UNIVERSES,
         SCAN_SOURCES,
         _gf,
+        currency_for_ticker,
         extract_multibagger_fundamentals,
         normalize_debt_equity,
         normalize_growth_pct,
@@ -165,6 +167,8 @@ class BaseScreenThresholds:
     min_roce_pct: float = 20.0
     max_debt_equity: float = 0.5
     min_market_cap_cr: float = 500.0
+    min_market_cap_usd_bn: float = 0.0
+    min_market_cap_eur_bn: float = 0.0
     require_sales_acceleration: bool = True
     require_profit_beats_sales: bool = True
 
@@ -194,6 +198,9 @@ class VolumeLedFundamentals:
     roce_is_roe_proxy: bool = False
     debt_equity: Optional[float] = None
     market_cap_cr: Optional[float] = None
+    market_cap_usd_bn: Optional[float] = None
+    market_cap_eur_bn: Optional[float] = None
+    currency: str = "INR"
     inventory_turnover: Optional[float] = None
     roa_pct: Optional[float] = None
     price_to_book: Optional[float] = None
@@ -240,6 +247,7 @@ class VolumeLedResult:
     monthly_rsi_above_floor: bool = False
     monthly_rsi_crossed_70: bool = False
     monthly_rsi_score: float = 0.0
+    currency: str = "INR"
     pass_notes: list[str] = field(default_factory=list)
     fail_notes: list[str] = field(default_factory=list)
     links: dict = field(default_factory=dict)
@@ -371,8 +379,10 @@ def classify_sector_bucket(sector: str, industry: str = "") -> str:
     return "generic"
 
 
-def extract_volume_led_fundamentals(info: dict) -> VolumeLedFundamentals:
-    base = extract_multibagger_fundamentals(info)
+def extract_volume_led_fundamentals(
+    info: dict, *, default_currency: str = "USD"
+) -> VolumeLedFundamentals:
+    base = extract_multibagger_fundamentals(info, default_currency=default_currency)
 
     sales_1y = normalize_growth_pct(
         _gf(info, ("revenueGrowth", "revenue_growth"))
@@ -414,6 +424,9 @@ def extract_volume_led_fundamentals(info: dict) -> VolumeLedFundamentals:
         roce_is_roe_proxy=bool(base.get("roce_is_roe_proxy")),
         debt_equity=base.get("debt_equity"),
         market_cap_cr=base.get("market_cap_cr"),
+        market_cap_usd_bn=base.get("market_cap_usd_bn"),
+        market_cap_eur_bn=base.get("market_cap_eur_bn"),
+        currency=str(base.get("currency") or default_currency),
         inventory_turnover=inv_turn,
         roa_pct=roa,
         price_to_book=pb,
@@ -456,7 +469,7 @@ def evaluate_base_screen(
     qp = fund.qtr_profit_var_pct
     roce = fund.roce_pct
     de = fund.debt_equity
-    mcap = fund.market_cap_cr
+    currency = fund.currency
 
     if s3 is not None:
         checks.append(_check(s3 > thr.min_sales_growth_3y_pct, f"Sales 3Y {s3:.1f}% > {thr.min_sales_growth_3y_pct:.0f}%", hits=hits, fails=fails))
@@ -493,9 +506,26 @@ def evaluate_base_screen(
     else:
         hits.append("D/E — not reported (skipped)")
 
-    if mcap is not None:
-        checks.append(_check(mcap > thr.min_market_cap_cr, f"Mcap ₹{mcap:,.0f} Cr > {thr.min_market_cap_cr:.0f}", hits=hits, fails=fails))
+    if currency == "INR":
+        mcap = fund.market_cap_cr
+        threshold = thr.min_market_cap_cr
+        cap_label = f"Mcap ₹{mcap:,.0f} Cr > {threshold:.0f}" if mcap is not None else "Market cap — missing"
+    elif currency == "USD":
+        mcap = fund.market_cap_usd_bn
+        threshold = thr.min_market_cap_usd_bn
+        cap_label = f"Mcap ${mcap:.2f} B > {threshold:.2f}" if mcap is not None else "Market cap — missing"
+    elif currency == "EUR":
+        mcap = fund.market_cap_eur_bn
+        threshold = thr.min_market_cap_eur_bn
+        cap_label = f"Mcap €{mcap:.2f} B > {threshold:.2f}" if mcap is not None else "Market cap — missing"
     else:
+        mcap = None
+        threshold = 0.0
+        cap_label = "Market cap — missing"
+    if mcap is not None:
+        checks.append(_check(mcap > threshold, cap_label, hits=hits, fails=fails))
+    else:
+        checks.append(False)
         fails.append("Market cap — missing")
 
     total = 8
@@ -637,7 +667,9 @@ def scan_volume_led(
             if not info.get("symbol") and not info.get("shortName"):
                 continue
 
-            fund = extract_volume_led_fundamentals(info)
+            fund = extract_volume_led_fundamentals(
+                info, default_currency=currency_for_ticker(raw)
+            )
             base_pass, base_hits, base_total, pass_notes, fail_notes = evaluate_base_screen(fund, b_thr)
 
             sector, industry = get_sector_industry(stock)
@@ -679,7 +711,9 @@ def scan_volume_led(
                 if rsi_v is None or float(rsi_v) < float(m_thr.min_monthly_rsi):
                     continue
             disp = raw.replace(".NS", "").replace(".BO", "")
-            base_fund = extract_multibagger_fundamentals(info)
+            base_fund = extract_multibagger_fundamentals(
+                info, default_currency=currency_for_ticker(raw)
+            )
 
             results.append(
                 VolumeLedResult(
@@ -711,6 +745,7 @@ def scan_volume_led(
                     monthly_rsi_above_floor=bool(m_rsi.get("monthly_rsi_above_floor")),
                     monthly_rsi_crossed_70=bool(m_rsi.get("monthly_rsi_crossed_70")),
                     monthly_rsi_score=float(m_rsi.get("monthly_rsi_score") or 0.0),
+                    currency=fund.currency,
                     pass_notes=pass_notes + sec_pass_notes,
                     fail_notes=fail_notes + sec_fail_notes,
                     links=get_stock_links(raw),
@@ -797,6 +832,7 @@ def result_to_row(r: VolumeLedResult, rank: int) -> dict:
         "Base pass": "✅" if r.base_pass else "—",
         "Sector pass": overlay,
         "Price": r.price,
+        "Currency": r.currency,
         "PE": r.pe,
         "Mar Cap": r.market_cap_display or (f"₹{r.market_cap_cr:,.0f} Cr" if r.market_cap_cr else "—"),
         "Sales 1Y %": f.sales_growth_1y_pct,

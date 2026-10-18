@@ -26,7 +26,9 @@ from stock_analysis_framework import StockAnalysisFramework
 from multibagger import (
     CURATED_NSE_LABEL,
     CURATED_US_LABEL,
+    CURATED_EUROPE_LABEL,
     LEGACY_CURATED_KEY,
+    is_europe_source,
     is_nse_source,
     is_us_source,
 )
@@ -63,10 +65,16 @@ _VLM_QUICK_UNIVERSES_US: list[tuple[str, str]] = [
     ("S&P 500", "S&P 500 (NYSE)"),
 ]
 
+_VLM_QUICK_UNIVERSES_EUROPE: list[tuple[str, str]] = [
+    ("Curated Europe", CURATED_EUROPE_LABEL),
+]
+
 
 def _universe_sources_for_market(market: str) -> list[str]:
     if market == "US":
         return [s for s in SCAN_SOURCES if is_us_source(s)]
+    if market == "Europe":
+        return [s for s in SCAN_SOURCES if is_europe_source(s)]
     return [s for s in SCAN_SOURCES if is_nse_source(s)]
 
 
@@ -80,10 +88,14 @@ def _render_universe_picker(key: str) -> str:
 
     market = st.radio(
         "Market",
-        ["NSE", "US"],
+        ["NSE", "US", "Europe"],
         horizontal=True,
         key=market_key,
-        format_func=lambda m: "🇮🇳 NSE (India)" if m == "NSE" else "🇺🇸 US (NYSE/NASDAQ)",
+        format_func=lambda m: {
+            "NSE": "🇮🇳 NSE (India)",
+            "US": "🇺🇸 US (NYSE/NASDAQ)",
+            "Europe": "🇪🇺 Europe (EUR listings)",
+        }.get(m, m),
     )
 
     sources = _universe_sources_for_market(market)
@@ -91,7 +103,11 @@ def _render_universe_picker(key: str) -> str:
     if current not in sources:
         st.session_state[uni_key] = sources[0]
 
-    quick = _VLM_QUICK_UNIVERSES_US if market == "US" else _VLM_QUICK_UNIVERSES_NSE
+    quick = (
+        _VLM_QUICK_UNIVERSES_US if market == "US"
+        else _VLM_QUICK_UNIVERSES_EUROPE if market == "Europe"
+        else _VLM_QUICK_UNIVERSES_NSE
+    )
     st.caption("Quick universe")
     qcols = st.columns(len(quick))
     for col, (label, uni_name) in zip(qcols, quick):
@@ -107,7 +123,7 @@ def _render_universe_picker(key: str) -> str:
         key=uni_key,
         help=(
             "Curated lists scan fastest. Nifty 500 can take several minutes. "
-            "US names use the same growth rules; market-cap filter is in ₹ Cr (NSE-style)."
+            "US and Europe names use the same growth rules and market-cap thresholds in native billions."
         ),
     )
 
@@ -232,7 +248,22 @@ def render_volume_led_page() -> None:
             min_p3 = st.slider("Min profit growth 3Y %", 5.0, 60.0, 20.0, 1.0, key=f"{key}_p3")
             min_roce = st.slider("Min ROCE %", 10.0, 40.0, 20.0, 0.5, key=f"{key}_roce")
             max_de = st.slider("Max debt/equity", 0.0, 1.5, 0.5, 0.05, key=f"{key}_de")
-            min_mcap = st.slider("Min market cap (₹ Cr)", 100.0, 5000.0, 500.0, 50.0, key=f"{key}_mcap")
+            us_market = is_us_source(universe)
+            europe_market = is_europe_source(universe)
+            if us_market or europe_market:
+                symbol = "€" if europe_market else "$"
+                min_mcap_foreign = st.slider(
+                    f"Min market cap ({symbol}B)", 0.0, 1000.0, 0.0, 0.5,
+                    key=f"{key}_mcap_{'eur' if europe_market else 'usd'}",
+                )
+                min_mcap = 0.0
+                min_mcap_usd_bn = min_mcap_foreign if us_market else 0.0
+                min_mcap_eur_bn = min_mcap_foreign if europe_market else 0.0
+            else:
+                min_mcap = st.slider(
+                    "Min market cap (₹ Cr)", 100.0, 5000.0, 500.0, 50.0, key=f"{key}_mcap"
+                )
+                min_mcap_usd_bn = min_mcap_eur_bn = 0.0
         with c3:
             st.markdown("#### Sector overlay thresholds")
             auto_s1 = st.slider("Auto — min sales 1Y %", 10.0, 35.0, 18.0, 1.0, key=f"{key}_auto_s1")
@@ -284,6 +315,8 @@ def render_volume_led_page() -> None:
         min_roce_pct=min_roce,
         max_debt_equity=max_de,
         min_market_cap_cr=min_mcap,
+        min_market_cap_usd_bn=min_mcap_usd_bn,
+        min_market_cap_eur_bn=min_mcap_eur_bn,
     )
     sector_thr = SectorOverlayThresholds(
         auto_min_sales_1y_pct=auto_s1,

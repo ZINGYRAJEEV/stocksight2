@@ -132,6 +132,7 @@ def results_to_dataframe(results: list[Stage2MomentumResult]) -> pd.DataFrame:
             "Badge": r.badge,
             "Ticker": r.ticker,
             "Raw": r.raw_ticker,
+            "Currency": r.currency,
             "Stage": r.stage_label,
             "Rank score": r.rank_score,
             "Rank why": r.rank_why,
@@ -202,6 +203,13 @@ def stage2_results_table(
         "Stop plan": st.column_config.TextColumn("Stop plan", width="medium"),
         "Sell plan": st.column_config.TextColumn("Sell plan", width="large"),
         "Warnings": st.column_config.TextColumn("Warnings", width="large"),
+        "Price": st.column_config.NumberColumn(
+            format=(
+                "€%.2f" if results[0].currency == "EUR"
+                else "$%.2f" if results[0].currency == "USD"
+                else "₹%.2f"
+            )
+        ),
     }
     for col in df.columns:
         if col.startswith(("📊", "📈", "📉", "🔎")):

@@ -12,12 +12,14 @@ from earnings_surprise_screener import (
     RANK_BY_OPTIONS,
     EarningsSurpriseFilters,
     SCAN_SOURCES,
+    is_europe_source,
+    is_us_source,
     result_to_row,
     scan_earnings_surprise,
     sort_earnings_surprise_results,
 )
 from quality_gate import quality_gate_column_config
-from theme_baskets import nse_scan_sources
+from multibagger import EQUITY_SCAN_SOURCES
 from scan_history_store import append_scan_record
 from screener_session_ui import render_screener_session_panel
 from ui_components import (
@@ -101,13 +103,13 @@ def render_earnings_surprise_page() -> None:
         with c1:
             st.markdown("#### Universe")
             uni_key = f"{key}_universe"
-            nse_sources = nse_scan_sources(SCAN_SOURCES)
-            ensure_session_choice(uni_key, nse_sources, nse_sources[0])
+            sources = EQUITY_SCAN_SOURCES
+            ensure_session_choice(uni_key, sources, sources[0])
             universe = st.selectbox(
-                "Stock universe (NSE)",
-                nse_sources,
+                "Stock universe (NSE / US / Europe)",
+                sources,
                 key=uni_key,
-                help="Start with Curated or Nifty 50; Nifty 500 takes several minutes.",
+                help="Includes curated NSE, US, and EUR-listed European universes.",
             )
         with c2:
             st.markdown("#### Earnings jump (QoQ)")
@@ -129,7 +131,24 @@ def render_earnings_surprise_page() -> None:
         q1, q2, q3 = st.columns(3)
         with q1:
             min_roce = st.slider("Min ROCE %", 5.0, 35.0, 12.0, 0.5, key=f"{key}_roce")
-            min_mcap = st.slider("Min market cap (₹ Cr)", 100.0, 5000.0, 300.0, 50.0, key=f"{key}_mcap")
+            us_market = is_us_source(universe)
+            europe_market = is_europe_source(universe)
+            if us_market or europe_market:
+                symbol = "€" if europe_market else "$"
+                currency_key = "eur" if europe_market else "usd"
+                min_mcap_foreign = st.slider(
+                    f"Min market cap ({symbol}B)", 0.0, 1000.0, 0.0, 0.5,
+                    key=f"{key}_mcap_{currency_key}",
+                )
+                min_mcap = 0.0
+                min_mcap_usd_bn = min_mcap_foreign if us_market else 0.0
+                min_mcap_eur_bn = min_mcap_foreign if europe_market else 0.0
+            else:
+                min_mcap = st.slider(
+                    "Min market cap (₹ Cr)", 100.0, 5000.0, 300.0, 50.0, key=f"{key}_mcap"
+                )
+                min_mcap_usd_bn = 0.0
+                min_mcap_eur_bn = 0.0
         with q2:
             min_yoy_s = st.slider("Min YoY qtr sales %", 0.0, 40.0, 8.0, 1.0, key=f"{key}_yoy_s")
             min_yoy_p = st.slider("Min YoY qtr profit %", 0.0, 60.0, 12.0, 1.0, key=f"{key}_yoy_p")
@@ -161,6 +180,8 @@ def render_earnings_surprise_page() -> None:
         max_peg=max_peg,
         max_debt_equity=max_de,
         min_market_cap_cr=min_mcap,
+        min_market_cap_usd_bn=min_mcap_usd_bn,
+        min_market_cap_eur_bn=min_mcap_eur_bn,
     )
 
     if run:
@@ -261,7 +282,9 @@ def render_earnings_surprise_page() -> None:
             "Below 52w high %": st.column_config.NumberColumn(format="%.1f"),
             "1M return %": st.column_config.NumberColumn(format="%+.1f"),
             "3M return %": st.column_config.NumberColumn(format="%+.1f"),
-            "Price": st.column_config.NumberColumn(format="₹%.2f"),
+            "Price": st.column_config.NumberColumn(
+                format=("€%.2f" if is_europe_source(last_uni) else "$%.2f" if is_us_source(last_uni) else "₹%.2f")
+            ),
             "P/E": st.column_config.NumberColumn(format="%.2f"),
             "D/E": st.column_config.NumberColumn(format="%.3f"),
             "ROCE %": st.column_config.TextColumn("ROCE %"),

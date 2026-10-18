@@ -31,6 +31,7 @@ try:
         SCAN_SOURCES,
         extract_multibagger_fundamentals,
         resolve_scan_tickers,
+        currency_for_ticker,
     )
     from .screener import get_pe, get_sector_industry, get_stock_links, hist_series
 except ImportError:
@@ -44,6 +45,7 @@ except ImportError:
         SCAN_SOURCES,
         extract_multibagger_fundamentals,
         resolve_scan_tickers,
+        currency_for_ticker,
     )
     from screener import get_pe, get_sector_industry, get_stock_links, hist_series
 
@@ -86,7 +88,11 @@ class PEADFilters:
     min_sue: float = 1.0
     max_days_since_results: int = 120
     min_market_cap_cr: float = 300.0
+    min_market_cap_usd_bn: float = 0.0
+    min_market_cap_eur_bn: float = 0.0
     min_avg_daily_value_cr: float = 1.0
+    min_avg_daily_value_usd_mn: float = 0.0
+    min_avg_daily_value_eur_mn: float = 0.0
     min_post_5d_confirm_pct: Optional[float] = None
     require_volume_spike: bool = False
     min_volume_spike_ratio: float = 1.25
@@ -128,6 +134,8 @@ class PEADResult:
     pass_notes: list[str] = field(default_factory=list)
     links: dict = field(default_factory=dict)
     data_source: str = ""
+    currency: str = "INR"
+    avg_daily_value_native_mn: Optional[float] = None
 
 
 @dataclass
@@ -310,7 +318,8 @@ def post_announcement_metrics(
         "post_5d_return_pct": post_5d,
         "post_20d_return_pct": post_20d,
         "volume_spike_ratio": vol_spike,
-        "avg_daily_value_cr": avg_val,
+            "avg_daily_value_cr": avg_val if currency_inr else None,
+            "avg_daily_value_native_mn": avg_val if not currency_inr else None,
         "days_since_results": days_since,
     }
 
@@ -385,16 +394,38 @@ def _passes_filters(
     if days is not None:
         notes.append(f"~{days}d since est. result")
 
-    mcap = fund.get("market_cap_cr")
-    if mcap is None or mcap < flt.min_market_cap_cr:
+    currency = fund.get("currency")
+    if currency == "INR":
+        mcap = fund.get("market_cap_cr")
+        min_mcap = flt.min_market_cap_cr
+        adv = metrics.get("avg_daily_value_cr")
+        min_adv = flt.min_avg_daily_value_cr
+        mcap_note = f"Mcap ₹{mcap:.0f} Cr" if mcap else "Mcap OK"
+        adv_note = f"Avg daily ₹{adv:.1f} Cr traded" if adv is not None else ""
+    elif currency == "USD":
+        mcap = fund.get("market_cap_usd_bn")
+        min_mcap = flt.min_market_cap_usd_bn
+        adv = metrics.get("avg_daily_value_native_mn")
+        min_adv = flt.min_avg_daily_value_usd_mn
+        mcap_note = f"Mcap ${mcap:.2f} B" if mcap is not None else "Mcap OK"
+        adv_note = f"Avg daily ${adv:.1f} M traded" if adv is not None else ""
+    elif currency == "EUR":
+        mcap = fund.get("market_cap_eur_bn")
+        min_mcap = flt.min_market_cap_eur_bn
+        adv = metrics.get("avg_daily_value_native_mn")
+        min_adv = flt.min_avg_daily_value_eur_mn
+        mcap_note = f"Mcap €{mcap:.2f} B" if mcap is not None else "Mcap OK"
+        adv_note = f"Avg daily €{adv:.1f} M traded" if adv is not None else ""
+    else:
         return False, notes
-    notes.append(f"Mcap ₹{mcap:.0f} Cr" if mcap else "Mcap OK")
+    if mcap is None or mcap < min_mcap:
+        return False, notes
+    notes.append(mcap_note)
 
-    adv = metrics.get("avg_daily_value_cr")
-    if adv is not None and adv < flt.min_avg_daily_value_cr:
+    if adv is not None and adv < min_adv:
         return False, notes
-    if adv is not None:
-        notes.append(f"Avg daily ₹{adv:.1f} Cr traded")
+    if adv_note:
+        notes.append(adv_note)
 
     if flt.min_post_5d_confirm_pct is not None:
         p5 = metrics.get("post_5d_return_pct")
@@ -520,7 +551,9 @@ def scan_pead(
             if ann_date is None and q_end is not None:
                 ann_date = q_end + timedelta(days=45)
 
-            fund = extract_multibagger_fundamentals(info)
+            fund = extract_multibagger_fundamentals(
+                info, default_currency=currency_for_ticker(raw)
+            )
             if _is_indian_ticker(raw) and screener_html:
                 try:
                     from screener_in_data import enrich_fundamentals_from_screener, fetch_screener_value_profile
@@ -610,6 +643,12 @@ def scan_pead(
                     pass_notes=notes,
                     links=links,
                     data_source=data_source,
+                    currency=fund.get("currency") or currency_for_ticker(raw),
+                    avg_daily_value_native_mn=(
+                        metrics.get("avg_daily_value_cr")
+                        if fund.get("currency") in ("USD", "EUR")
+                        else None
+                    ),
                 )
             )
         except Exception:
@@ -742,7 +781,12 @@ def result_to_row(r: PEADResult, rank: int) -> dict:
         "Post 20d %": r.post_20d_return_pct,
         "Pre 5d %": r.pre_5d_return_pct,
         "Vol spike ×": r.volume_spike_ratio,
-        "Avg daily ₹Cr": r.avg_daily_value_cr,
+        "Avg traded value": (
+            r.avg_daily_value_cr
+            if r.currency == "INR"
+            else r.avg_daily_value_native_mn
+        ),
+        "Currency": r.currency,
         "Price": r.price,
         "P/E": r.pe,
         "Mcap": r.market_cap_display,

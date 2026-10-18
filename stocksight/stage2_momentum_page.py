@@ -49,7 +49,7 @@ def render_stage2_momentum_page() -> None:
                 "Stock universe",
                 list(UNIVERSES.keys()),
                 key=f"{key}_universe",
-                help="Broader lists find more Stage 2 names but take longer (2y history per symbol).",
+                help="NSE, US, and Europe lists use Yahoo daily history; broader universes take longer.",
             )
             st.caption("Uses **daily** Yahoo data (~2 years) for 50/150/200-day MAs.")
         with c2:

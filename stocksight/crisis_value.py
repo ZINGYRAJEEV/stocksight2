@@ -15,7 +15,11 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from multibagger import extract_multibagger_fundamentals, normalize_debt_equity
+from multibagger import (
+    currency_for_ticker,
+    extract_multibagger_fundamentals,
+    normalize_debt_equity,
+)
 from screener import (
     PE_DATA_CAP,
     UNIVERSES,
@@ -100,6 +104,7 @@ class CrisisValueResult:
     thesis: str
     market_cap_display: str
     links: dict = field(default_factory=dict)
+    currency: str = "INR"
 
 
 @dataclass
@@ -318,7 +323,9 @@ def analyze_ticker_crisis_value(raw: str, flt: CrisisValueFilters) -> Optional[C
     try:
         stk = yf.Ticker(raw)
         info = stk.info or {}
-        fund = extract_multibagger_fundamentals(info)
+        fund = extract_multibagger_fundamentals(
+            info, default_currency=currency_for_ticker(raw)
+        )
         hdip = extract_healthy_dip_fundamentals(info)
         sector, _ = get_sector_industry(stk)
 
@@ -411,6 +418,7 @@ def analyze_ticker_crisis_value(raw: str, flt: CrisisValueFilters) -> Optional[C
             thesis=thesis,
             market_cap_display=fund.get("market_cap_display", "—"),
             links=get_stock_links(raw),
+            currency=fund.get("currency") or currency_for_ticker(raw),
         )
     except Exception:
         return None

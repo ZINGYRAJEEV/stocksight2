@@ -13,6 +13,7 @@ from popular_screens import (
     registry_by_id,
     scan_popular_screen,
 )
+from multibagger import is_europe_source, is_us_source
 from scan_history_store import append_scan_record
 from ui_components import (
     ensure_session_choice,
@@ -123,10 +124,10 @@ def _render_run_panel(key: str, reg: dict) -> None:
                     "Name": r.ticker,
                     "Screen score": r.score,
                     "Price": r.price,
-                    "CMP Rs.": r.price,
+                    "Currency": r.currency,
                     "PE Ratio": r.pe,
                     "P/E": r.pe,
-                    "Mar Cap Rs.Cr.": r.market_cap_cr,
+                    "Market cap": r.market_cap_display or r.market_cap_cr,
                     "RSI": r.rsi,
                     "Vol×": r.vol_ratio,
                     "ROCE %": r.roce_pct,
@@ -148,9 +149,10 @@ def _render_run_panel(key: str, reg: dict) -> None:
             {
                 **stock_sight_column_config(),
                 "Screen score": st.column_config.NumberColumn("Screen score", format="%.1f"),
-                "CMP Rs.": st.column_config.NumberColumn(format="%.2f"),
+                "Price": st.column_config.NumberColumn(
+                    format=("€%.2f" if is_europe_source(universe) else "$%.2f" if is_us_source(universe) else "₹%.2f")
+                ),
                 "P/E": st.column_config.NumberColumn(format="%.1f"),
-                "Mar Cap Rs.Cr.": st.column_config.NumberColumn(format="%.1f"),
                 "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Yahoo ↗"),
                 "Google Finance": st.column_config.LinkColumn("Google Finance", display_text="Google ↗"),
                 "Moneycontrol": st.column_config.LinkColumn("Moneycontrol", display_text="MC ↗"),
@@ -161,13 +163,13 @@ def _render_run_panel(key: str, reg: dict) -> None:
 
         df = prepare_scan_results_df(
             df,
-            universe_name="NSE",
+            universe_name=universe,
             cache_key_prefix=f"{key}_{picked}",
         )
         render_clickable_scan_table(
             df,
             key_prefix=f"{key}_{picked}_results",
-            universe_name="NSE",
+            universe_name=universe,
             column_config=col_cfg,
             height=min(560, 48 + len(df) * 36),
         )

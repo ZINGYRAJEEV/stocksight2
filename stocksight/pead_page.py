@@ -12,7 +12,6 @@ from pead_screener import (
     META,
     PEADFilters,
     RANK_BY_OPTIONS,
-    SCAN_SOURCES,
     analyze_pead_criteria,
     best_pead_threshold,
     result_to_row,
@@ -22,7 +21,12 @@ from pead_screener import (
 )
 from quality_gate import quality_gate_column_config
 from scan_history_store import append_scan_record
-from theme_baskets import nse_scan_sources
+from multibagger import (
+    EQUITY_SCAN_SOURCES,
+    is_europe_source,
+    is_nse_source,
+    is_us_source,
+)
 from screener_session_ui import render_screener_session_panel
 from ui_components import (
     ensure_session_choice,
@@ -108,18 +112,20 @@ def render_pead_page() -> None:
         with c1:
             st.markdown("#### Universe")
             uni_key = f"{key}_universe"
-            nse_sources = nse_scan_sources(SCAN_SOURCES)
-            ensure_session_choice(uni_key, nse_sources, nse_sources[0])
+            sources = EQUITY_SCAN_SOURCES
+            ensure_session_choice(uni_key, sources, sources[0])
             universe = st.selectbox(
-                "Stock universe (NSE)",
-                nse_sources,
+                "Stock universe (NSE / US / Europe)",
+                sources,
                 key=uni_key,
-                help="Start with Curated or Nifty 50. Use **Find best SUE threshold** below to tune filters.",
+                help="Start with a curated NSE, US, or Europe universe. Use Find best SUE threshold to tune filters.",
             )
+            recent_feed_available = is_nse_source(universe)
             recent_only = st.checkbox(
                 "Recent reporters only (Screener.in /results/latest/)",
                 value=False,
-                key=f"{key}_recent",
+                key=f"{key}_recent_{'nse' if recent_feed_available else 'international'}",
+                disabled=not recent_feed_available,
                 help="Restricts to names on Screener's latest results feed (needs login).",
             )
         with c2:
@@ -154,15 +160,34 @@ def render_pead_page() -> None:
             )
         with c3:
             st.markdown("#### Liquidity & confirmation")
-            min_mcap = st.slider("Min market cap (₹ Cr)", 100.0, 5000.0, 300.0, 50.0, key=f"{key}_mcap")
-            min_adv = st.slider(
-                "Min avg daily traded (₹ Cr)",
-                0.0,
-                20.0,
-                1.0,
-                0.5,
-                key=f"{key}_adv",
-            )
+            us_market = is_us_source(universe)
+            europe_market = is_europe_source(universe)
+            if us_market or europe_market:
+                symbol = "€" if europe_market else "$"
+                currency_key = "eur" if europe_market else "usd"
+                min_mcap_foreign = st.slider(
+                    f"Min market cap ({symbol}B)", 0.0, 1000.0, 0.0, 0.5,
+                    key=f"{key}_mcap_{currency_key}",
+                )
+                min_adv_foreign = st.slider(
+                    f"Min avg daily traded ({symbol}M)", 0.0, 1000.0, 0.0, 1.0,
+                    key=f"{key}_adv_{currency_key}",
+                )
+                min_mcap = 0.0
+                min_adv = 0.0
+                min_mcap_usd_bn = min_mcap_foreign if us_market else 0.0
+                min_mcap_eur_bn = min_mcap_foreign if europe_market else 0.0
+                min_adv_usd_mn = min_adv_foreign if us_market else 0.0
+                min_adv_eur_mn = min_adv_foreign if europe_market else 0.0
+            else:
+                min_mcap = st.slider(
+                    "Min market cap (₹ Cr)", 100.0, 5000.0, 300.0, 50.0, key=f"{key}_mcap"
+                )
+                min_adv = st.slider(
+                    "Min avg daily traded (₹ Cr)", 0.0, 20.0, 1.0, 0.5, key=f"{key}_adv"
+                )
+                min_mcap_usd_bn = min_mcap_eur_bn = 0.0
+                min_adv_usd_mn = min_adv_eur_mn = 0.0
             vol_spike = st.checkbox("Require volume spike post-result", value=False, key=f"{key}_vol")
             confirm = st.checkbox("Require 5d drift confirms direction", value=False, key=f"{key}_conf")
             min_conf = st.slider("Min post-5d return %", -5.0, 15.0, 0.0, 0.5, key=f"{key}_p5") if confirm else 0.0
@@ -186,7 +211,11 @@ def render_pead_page() -> None:
         min_sue=min_sue,
         max_days_since_results=max_days,
         min_market_cap_cr=min_mcap,
+        min_market_cap_usd_bn=min_mcap_usd_bn,
+        min_market_cap_eur_bn=min_mcap_eur_bn,
         min_avg_daily_value_cr=min_adv,
+        min_avg_daily_value_usd_mn=min_adv_usd_mn,
+        min_avg_daily_value_eur_mn=min_adv_eur_mn,
         min_post_5d_confirm_pct=min_conf if confirm else None,
         require_volume_spike=vol_spike,
         recent_reporters_only=recent_only,
@@ -344,8 +373,10 @@ def render_pead_page() -> None:
             "Post 20d %": st.column_config.NumberColumn(format="%+.2f"),
             "Pre 5d %": st.column_config.NumberColumn(format="%+.2f"),
             "Vol spike ×": st.column_config.NumberColumn(format="%.2f"),
-            "Avg daily ₹Cr": st.column_config.NumberColumn(format="%.2f"),
-            "Price": st.column_config.NumberColumn(format="₹%.2f"),
+            "Avg traded value": st.column_config.NumberColumn(format="%.2f"),
+            "Price": st.column_config.NumberColumn(
+                format=("€%.2f" if is_europe_source(last_uni) else "$%.2f" if is_us_source(last_uni) else "₹%.2f")
+            ),
             "P/E": st.column_config.NumberColumn(format="%.2f"),
             "Verdict": st.column_config.TextColumn(width="medium"),
             "Raw": None,

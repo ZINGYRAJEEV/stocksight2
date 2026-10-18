@@ -22,8 +22,7 @@ from financially_free_screener import (
     scan_financially_free,
     sort_ff_results,
 )
-from multibagger import SCAN_SOURCES
-from theme_baskets import nse_scan_sources
+from multibagger import EQUITY_SCAN_SOURCES, is_europe_source, is_us_source
 from quality_gate import quality_gate_column_config
 from scan_history_store import append_scan_record
 from screener_session_ui import render_screener_session_panel
@@ -150,14 +149,16 @@ def render_financially_free_page() -> None:
     key = "ff"
     render_screener_session_panel(key_prefix=f"{key}_screener")
     session_key = f"{key}_results"
-    nse_sources = nse_scan_sources(SCAN_SOURCES)
+    equity_sources = EQUITY_SCAN_SOURCES
 
     with st.container(border=True):
         c1, c2, c3 = st.columns([1.0, 1.05, 1.2])
         with c1:
             st.markdown("#### Universe & mode")
-            ensure_session_choice(f"{key}_uni", nse_sources, nse_sources[0])
-            universe = st.selectbox("Stock universe", nse_sources, key=f"{key}_uni")
+            ensure_session_choice(f"{key}_uni", equity_sources, equity_sources[0])
+            universe = st.selectbox(
+                "Stock universe (NSE / US / Europe)", equity_sources, key=f"{key}_uni"
+            )
             mode_keys = list(SCAN_MODES.keys())
             ensure_session_choice(f"{key}_mode", mode_keys, "combined")
             scan_mode = st.selectbox(
@@ -285,7 +286,9 @@ def render_financially_free_page() -> None:
         df,
         {
             "FF score": st.column_config.NumberColumn(format="%.1f"),
-            "Price": st.column_config.NumberColumn(format="%.2f"),
+            "Price": st.column_config.NumberColumn(
+                format=("€%.2f" if is_europe_source(last_uni) else "$%.2f" if is_us_source(last_uni) else "₹%.2f")
+            ),
             "PE": st.column_config.NumberColumn(format="%.2f"),
             "EPS": st.column_config.NumberColumn(format="%.2f"),
             "EPS growth %": st.column_config.NumberColumn(format="%.1f"),
@@ -294,7 +297,7 @@ def render_financially_free_page() -> None:
             "% below 52w high": st.column_config.NumberColumn(format="%.1f"),
             "RSI (14)": st.column_config.NumberColumn(format="%.1f"),
             "Monthly RSI": st.column_config.NumberColumn(format="%.1f"),
-            "RS vs Nifty (pp)": st.column_config.NumberColumn(format="%+.2f"),
+            "RS vs benchmark (pp)": st.column_config.NumberColumn(format="%+.2f"),
             "VCP score": st.column_config.NumberColumn(format="%.1f"),
             "Trend passes": st.column_config.NumberColumn(format="%d"),
             "21-EMA": st.column_config.NumberColumn(format="%.2f"),

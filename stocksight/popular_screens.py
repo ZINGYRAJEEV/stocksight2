@@ -18,6 +18,8 @@ import yfinance as yf
 try:
     from .multibagger import (
         INR_PER_CRORE,
+        EQUITY_SCAN_SOURCES,
+        currency_for_ticker,
         extract_multibagger_fundamentals,
         market_cap_inr_to_cr,
         normalize_debt_equity,
@@ -25,7 +27,6 @@ try:
         normalize_return_pct,
         SCAN_SOURCES as _MB_SCAN_SOURCES,
     )
-    from .theme_baskets import nse_scan_sources
     from .screener import (
         UNIVERSES,
         compute_rsi,
@@ -40,6 +41,8 @@ try:
 except ImportError:
     from multibagger import (
         INR_PER_CRORE,
+        EQUITY_SCAN_SOURCES,
+        currency_for_ticker,
         extract_multibagger_fundamentals,
         market_cap_inr_to_cr,
         normalize_debt_equity,
@@ -47,7 +50,6 @@ except ImportError:
         normalize_return_pct,
         SCAN_SOURCES as _MB_SCAN_SOURCES,
     )
-    from theme_baskets import nse_scan_sources
     from screener import (
         UNIVERSES,
         compute_rsi,
@@ -60,8 +62,7 @@ except ImportError:
         ma_cross_recent,
     )
 
-NSE_UNIVERSES = [k for k in UNIVERSES if "NSE" in k or str(k).startswith("Theme ·")]
-SCAN_SOURCES = nse_scan_sources(_MB_SCAN_SOURCES)
+SCAN_SOURCES = EQUITY_SCAN_SOURCES
 
 
 @dataclass
@@ -82,6 +83,9 @@ class PopularScreenResult:
     price: float
     pe: Optional[float] = None
     market_cap_cr: Optional[float] = None
+    market_cap_native_bn: Optional[float] = None
+    market_cap_display: str = ""
+    currency: str = "INR"
     rsi: Optional[float] = None
     vol_ratio: Optional[float] = None
     roce_pct: Optional[float] = None
@@ -108,14 +112,18 @@ def _gf(info: dict, keys: tuple[str, ...]) -> Optional[float]:
     return None
 
 
-def _fundamentals(info: dict) -> dict[str, Optional[float]]:
-    f = extract_multibagger_fundamentals(info)
+def _fundamentals(info: dict, *, default_currency: str = "USD") -> dict[str, Any]:
+    f = extract_multibagger_fundamentals(info, default_currency=default_currency)
     roe = normalize_return_pct(_gf(info, ("returnOnEquity",)))
     opex = _gf(info, ("operatingMargins", "operatingMargin"))
     if opex is not None and abs(opex) <= 1.0:
         opex = round(opex * 100.0, 2)
     rev = _gf(info, ("totalRevenue",))
-    rev_cr = market_cap_inr_to_cr(rev) if rev and rev > 1e7 else None
+    rev_cr = (
+        market_cap_inr_to_cr(rev)
+        if f.get("currency") == "INR" and rev and rev > 1e7
+        else None
+    )
     div = _gf(info, ("dividendYield",))
     if div is not None and abs(div) <= 1.0:
         div = round(div * 100.0, 2)
@@ -124,6 +132,7 @@ def _fundamentals(info: dict) -> dict[str, Optional[float]]:
         "roe_pct": roe,
         "opm_pct": opex,
         "revenue_cr": rev_cr,
+        "revenue_native": rev,
         "div_yield_pct": div,
         "trailing_pe": _gf(info, ("trailingPE", "forwardPE")),
     }
@@ -154,7 +163,7 @@ def _result_from_ticker(
     wk_high = _gf(info, ("fiftyTwoWeekHigh",)) or (float(highs.max()) if not highs.empty else None)
     pct_hi = round((price / wk_high - 1.0) * 100.0, 2) if wk_high and wk_high > 0 else None
 
-    fund = _fundamentals(info)
+    fund = _fundamentals(info, default_currency=currency_for_ticker(raw))
     pe = get_pe(yf.Ticker(raw)) if info else fund.get("trailing_pe")
 
     disp = raw.replace(".NS", "").replace(".BO", "")
@@ -164,6 +173,9 @@ def _result_from_ticker(
         price=round(price, 2),
         pe=round(float(pe), 2) if pe is not None else None,
         market_cap_cr=fund.get("market_cap_cr"),
+        market_cap_native_bn=fund.get("market_cap_native_bn"),
+        market_cap_display=str(fund.get("market_cap_display") or ""),
+        currency=str(fund.get("currency") or currency_for_ticker(raw)),
         rsi=rsi_v if not np.isnan(rsi_v) else None,
         vol_ratio=vol_r if not np.isnan(vol_r) else None,
         roce_pct=fund.get("roce_pct"),
@@ -181,9 +193,12 @@ def _mk_result(raw: str, info: dict, hist: pd.DataFrame, **kw) -> Optional[Popul
     r = _result_from_ticker(raw, info, hist, **kw)
     if r is None:
         return None
-    fund = _fundamentals(info)
+    fund = _fundamentals(info, default_currency=currency_for_ticker(raw))
     r.div_yield_pct = fund.get("div_yield_pct")
     r.market_cap_cr = fund.get("market_cap_cr")
+    r.market_cap_native_bn = fund.get("market_cap_native_bn")
+    r.market_cap_display = str(fund.get("market_cap_display") or "")
+    r.currency = str(fund.get("currency") or currency_for_ticker(raw))
     r.roce_pct = fund.get("roce_pct")
     return r
 
@@ -203,7 +218,7 @@ def _evaluate_screen(
     price = float(closes.iloc[-1])
     highs = hist_series(hist, "High")
     lows = hist_series(hist, "Low")
-    fund = _fundamentals(info)
+    fund = _fundamentals(info, default_currency=currency_for_ticker(raw))
 
     if screen_id == "rsi_oversold":
         rsi_v = compute_rsi(closes)
@@ -308,17 +323,28 @@ def _evaluate_screen(
         return _mk_result(raw, info, hist, note=f"OPM {opm:.0f}% ROCE {roce:.0f}%", score=opm + roce)
 
     if screen_id == "bluest_chips":
-        mcap = fund.get("market_cap_cr")
+        currency = fund.get("currency")
+        if currency == "INR":
+            mcap = fund.get("market_cap_cr")
+            cap_ok = mcap is not None and mcap >= 3000
+            cap_note = f"Mcap ₹{mcap:,.0f} Cr" if mcap is not None else "Mcap —"
+            cap_score = float(mcap or 0) / 1000
+        else:
+            mcap = fund.get("market_cap_native_bn")
+            cap_ok = mcap is not None and mcap >= 1.0
+            symbol = {"USD": "$", "EUR": "€"}.get(str(currency), f"{currency} ")
+            cap_note = f"Mcap {symbol}{mcap:.2f} B" if mcap is not None else "Mcap —"
+            cap_score = float(mcap or 0) * 3
         roe = fund.get("roe_pct")
         rg = fund.get("qtr_sales_var_pct")
         pe = fund.get("trailing_pe")
-        if mcap is None or mcap < 3000 or roe is None or roe < 12:
+        if not cap_ok or roe is None or roe < 12:
             return None
         if rg is not None and rg < 5:
             return None
         if pe is not None and pe > 60:
             return None
-        return _mk_result(raw, info, hist, note=f"Mcap {mcap:.0f} cr ROE {roe:.0f}%", score=roe + mcap / 1000)
+        return _mk_result(raw, info, hist, note=f"{cap_note} ROE {roe:.0f}%", score=roe + cap_score)
 
     if screen_id == "bull_cartel":
         sg = fund.get("qtr_sales_var_pct")
@@ -356,12 +382,18 @@ def _evaluate_screen(
         return _mk_result(raw, info, hist, note="Multibagger gates (Yahoo)", score=fund.get("roce_pct") or 0)
 
     if screen_id == "benjamin_graham":
-        rev = _gf(info, ("totalRevenue",))
-        rev_cr = (rev or 0) / INR_PER_CRORE
+        rev = fund.get("revenue_native")
+        if fund.get("currency") == "INR":
+            revenue_ok = rev is not None and rev / INR_PER_CRORE >= 250
+            revenue_note = f"Sales ~{(rev or 0) / INR_PER_CRORE:.0f} cr"
+        else:
+            revenue_ok = rev is not None and rev >= 30_000_000
+            symbol = {"USD": "$", "EUR": "€"}.get(str(fund.get("currency")), "")
+            revenue_note = f"Sales ~{symbol}{(rev or 0) / 1_000_000:.0f} M"
         pe = fund.get("trailing_pe")
-        if rev_cr < 250 or pe is None or pe > 25 or pe <= 0:
+        if not revenue_ok or pe is None or pe > 25 or pe <= 0:
             return None
-        return _mk_result(raw, info, hist, note=f"Sales ~{rev_cr:.0f} cr PE {pe:.1f}", score=250 / pe)
+        return _mk_result(raw, info, hist, note=f"{revenue_note} PE {pe:.1f}", score=250 / pe)
 
     if screen_id == "coffee_can":
         roe = fund.get("roe_pct")
@@ -418,8 +450,10 @@ def _evaluate_screen(
         return _mk_result(raw, info, hist, note=f"Trailing PE {pe:.1f}", score=100 / pe)
 
     if screen_id == "top_100":
-        mcap = fund.get("market_cap_cr") or 0
-        return _mk_result(raw, info, hist, note=f"Mcap {mcap:.0f} cr", score=mcap)
+        mcap = fund.get("market_cap_cr") if fund.get("currency") == "INR" else fund.get("market_cap_native_bn")
+        symbol = "₹" if fund.get("currency") == "INR" else {"USD": "$", "EUR": "€"}.get(str(fund.get("currency")), "")
+        unit = " Cr" if fund.get("currency") == "INR" else " B"
+        return _mk_result(raw, info, hist, note=f"Mcap {symbol}{(mcap or 0):.0f}{unit}", score=float(mcap or 0))
 
     if screen_id == "fii_buying":
         return None
@@ -506,7 +540,10 @@ def scan_popular_screen(
             time.sleep(info_delay_sec)
 
     if screen_id == "top_100":
-        results.sort(key=lambda x: x.market_cap_cr or 0, reverse=True)
+        results.sort(
+            key=lambda x: x.market_cap_native_bn if x.currency != "INR" else (x.market_cap_cr or 0),
+            reverse=True,
+        )
         results = results[:100]
     else:
         results.sort(key=lambda x: x.score, reverse=True)

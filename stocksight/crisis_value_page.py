@@ -67,6 +67,7 @@ def _results_df(results: list) -> pd.DataFrame:
                 "Action": r.action,
                 "Sector": r.sector,
                 "Mar Cap": r.market_cap_display,
+                "Currency": r.currency,
                 "Thesis": r.thesis,
                 "Raw": r.raw_ticker,
                 **{k: v for k, v in r.links.items()},
